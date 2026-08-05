@@ -17,8 +17,6 @@ import type { AgentStorage } from "../agent-storage.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
 import { setupFinishNotification, startCreatedAgentInitialPrompt } from "../agent-prompt.js";
-// SLP-PATCH(wakeup-each)
-import type { FinishNotifyMode } from "../agent-prompt.js";
 import { resolveCreateAgentTitles } from "../create-agent-title.js";
 import { buildAgentPrompt } from "../prompt-attachments.js";
 import { normalizeClientMessageId, resolveClientMessageId } from "../../client-message-id.js";
@@ -94,8 +92,6 @@ export interface CreateAgentFromMcpInput {
   promptFailure?: CreateAgentPromptFailureMode;
   background: boolean;
   notifyOnFinish: boolean;
-  // SLP-PATCH(wakeup-each)
-  notifyMode?: FinishNotifyMode;
   internal?: boolean;
   detached?: boolean;
   owner?: AgentOwner;
@@ -213,8 +209,6 @@ export async function createAgentCommand(
       childAgentId: snapshot.id,
       callerAgentId: input.callerAgentId,
       requireParentOwnership: true,
-      // SLP-PATCH(wakeup-each)
-      ...(input.notifyMode ? { notifyMode: input.notifyMode } : {}),
       logger: dependencies.logger,
     });
   }

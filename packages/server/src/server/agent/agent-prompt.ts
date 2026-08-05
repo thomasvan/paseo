@@ -246,16 +246,14 @@ export interface SetupFinishNotificationParams {
   childAgentId: string;
   callerAgentId: string;
   requireParentOwnership?: boolean;
-  // SLP-PATCH(wakeup-each): "once" (default, upstream behavior) fires a single
-  // notification then disarms. "each" re-arms after every finish so an
-  // orchestrator hears about every turn of a long-lived child; it disarms only
-  // when the child closes or the caller is archived.
-  notifyMode?: FinishNotifyMode;
   logger: Logger;
 }
 
-// SLP-PATCH(wakeup-each)
-export type FinishNotifyMode = "once" | "each";
+// SLP-PATCH(wakeup-each): upstream disarms the watcher after the first
+// notification. Here it stays armed and re-notifies on every finish of the
+// child, disarming only when the child closes or the caller is archived.
+// Watchers only exist for agent callers, so this is exactly "an orchestrator
+// hears about every turn of a long-lived child" — no param needed.
 
 // SLP-PATCH(closed-wakeup): "was closed" added so a killed child notifies its caller.
 type FinishNotificationReason = "finished" | "errored" | "needs permission" | "was closed";
@@ -291,7 +289,6 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     childAgentId,
     callerAgentId,
     requireParentOwnership = false,
-    notifyMode = "once",
     logger,
   } = params;
   let hasSeenRunning = false;
@@ -302,7 +299,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     if (fired) {
       return;
     }
-    if (notifyMode === "once" || reason === "was closed") {
+    if (reason === "was closed") {
       fired = true;
       unsubscribe?.();
     } else if (reason !== "needs permission") {
@@ -314,13 +311,10 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     }
 
     const callerRecord = await agentStorage.get(callerAgentId);
-    if (notifyMode === "each" && callerRecord?.archivedAt) {
+    if (callerRecord?.archivedAt) {
       // SLP-PATCH(wakeup-each): archived caller can never hear us — disarm.
       fired = true;
       unsubscribe?.();
-      return;
-    }
-    if (callerRecord?.archivedAt) {
       return;
     }
 
