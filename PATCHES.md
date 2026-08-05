@@ -22,7 +22,7 @@ here and are candidates for upstream PRs.
   a watched child agent is killed/closed before finishing. Upstream set `fired = true`
   and unsubscribed silently, so the calling agent (Supervisor/Lead) never woke up and
   waited forever on a dead delegation.
-- **Upstream status:** not submitted yet.
+- **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped).
 
 ### response-cap
 
@@ -31,7 +31,7 @@ here and are candidates for upstream PRs.
   truncated at `FINISH_NOTIFICATION_MESSAGE_LIMIT` (4000 chars) with a pointer to
   `get_agent_activity` for the full text. Prevents one verbose Peer from blowing out the
   caller's context window.
-- **Upstream status:** not submitted yet.
+- **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped).
 
 ## Sync procedure
 
