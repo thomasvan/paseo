@@ -1,9 +1,9 @@
 # PATCHES
 
-Local patches carried on top of upstream `pasetoventures/paseo` (fork: `thomasvan/paseo`, branch `slp/patches`).
+Local patches carried on top of upstream `getpaseo/paseo` (fork: `thomasvan/paseo`, branch `slp/patches`).
 
 Every patch site in code is marked `SLP-PATCH(<name>)`. `rg "SLP-PATCH\("` lists all sites.
-When syncing with upstream, rebase this branch onto the new upstream HEAD; if a hunk
+When syncing with upstream, merge `upstream/main` into this branch; if a hunk
 conflicts, the marker plus this file is enough to re-apply the intent by hand.
 
 ## Why these patches exist
@@ -37,11 +37,15 @@ here and are candidates for upstream PRs.
 
 ```bash
 git fetch upstream
-git rebase upstream/main slp/patches
-rg "SLP-PATCH\("        # verify every marker survived the rebase
+git merge upstream/main       # merge, not rebase: pushed history stays stable, no force-push
+rg "SLP-PATCH\("              # verify every marker survived the merge
 npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
-git push -f origin slp/patches
+git push origin slp/patches
 ```
+
+Before merging, check whether upstream touched the patched files since the last sync:
+`git diff --name-only $(git merge-base HEAD upstream/main) upstream/main -- packages/server/src/server/agent/`.
+Empty output means a conflict-free merge for the patches.
 
 Update this file in the same commit as any new patch. One section per patch; delete the
 section when a patch lands upstream.
