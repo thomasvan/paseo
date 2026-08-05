@@ -33,6 +33,19 @@ here and are candidates for upstream PRs.
   caller's context window.
 - **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped).
 
+### wakeup-each
+
+- **Files:** `packages/server/src/server/agent/agent-prompt.ts`,
+  `packages/server/src/server/agent/agent-prompt.test.ts`,
+  `packages/server/src/server/agent/create-agent/create.ts`,
+  `packages/server/src/server/agent/tools/paseo-tools.ts`
+- **What:** `create_agent` and `send_agent_prompt` accept `notifyMode: "once" | "each"`
+  (default `"once"`, agent-scoped MCP only). With `"each"` the finish watcher re-arms
+  after every wakeup instead of unsubscribing after the first, so a caller keeps waking
+  for every finish of a long-lived child across multiple prompts. The watcher still
+  ends permanently on `"was closed"` and stops re-arming once the caller is archived.
+- **Upstream status:** local only, not yet submitted.
+
 ## Sync procedure
 
 ```bash
