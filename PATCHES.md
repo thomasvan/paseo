@@ -16,6 +16,11 @@ The SLP orchestration model (Supervisor > Lead > Peers, see `SLP-docs/`) runs lo
 Codex agents as Paseo subagents. Upstream's finish-notification behavior broke that model
 in three ways; all three are fixed here.
 
+All three are in flight upstream as a single PR — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879).
+If it merges, the next `upstream/main` sync brings them in: drop the `SLP-PATCH(` markers,
+delete the sections below, and keep `agent-prompt.slp.test.ts` only for whatever upstream
+did not take.
+
 ## Patches
 
 ### closed-wakeup
@@ -43,8 +48,8 @@ in three ways; all three are fixed here.
   `callerAgentId`), so this is derived — no `notifyMode` parameter, no schema or
   plumbing changes in `create.ts` / `paseo-tools.ts`. An earlier revision threaded an
   opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
-  right artifact if this is ever submitted upstream as an opt-in feature.
-- **Upstream status:** local only, not yet submitted.
+  right artifact if upstream asks for this to be opt-in.
+- **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped). This one changes default behavior for existing upstream callers, so it is the likeliest of the three to be pushed back on.
 
 ## Sync procedure
 
