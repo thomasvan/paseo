@@ -1,449 +1,651 @@
-# Provider-Neutral Agent Roles
+# Provider-Neutral Agent Roles — Hybrid Bridge
 
-**Status:** Approved design
+**Status:** Draft for review — Hybrid direction approved
 
 **Date:** 2026-08-08
 
 ## Summary
 
-Paseo will own three provider-neutral agent roles: `lead`, `peer`, and `supervisor`.
-Every new role-managed agent must choose one role. Codex and Claude receive the
-same immutable role instructions, while their adapters translate the shared
-launch contract into provider-specific prompt and permission settings.
+Paseo will enforce three closed foundation roles: `supervisor`, `lead`, and
+`peer`. Phase 1 keeps the existing `codex-room` runtime and adds a matching
+`claude-room` runtime. Six role-mapped provider profiles select the provider and
+foundation role together while the bridge is active.
 
-The daemon persists the resolved role instructions and capability policy before
-starting an agent. Resume uses that snapshot rather than resolving the current
-role definition again. A role definition update therefore affects new agents
-only.
+The boundary is deliberate:
 
-Role enforcement happens in two places: the daemon filters the tool catalog
-before launch and authorizes every invocation at runtime. Provider-native tools
-receive equivalent restrictions in the Codex and Claude adapters. Prompt text is
-behavioral guidance, not an authorization boundary.
+- Room wrappers own provider launch configuration and deliver one shared role
+  prompt to Codex or Claude.
+- Paseo owns role identity, immutable policy snapshots, staffing authorization,
+  limits, lifecycle, audit events, and caller-scoped Paseo tool enforcement.
+- Provider/model/mode/thinking selection remains Paseo's normalized runtime
+  vocabulary and is validated by the selected provider adapter.
+
+The bridge avoids a new native role selector and provider-adapter prompt changes
+in Phase 1. It does not weaken enforcement. A wrapper-only implementation is out
+of scope because prompts and provider settings cannot enforce staffing topology,
+limits, archive behavior, or direct daemon calls.
+
+Phase 2 may move prompt delivery into native provider adapters and add separate
+role selectors across every creation surface. The role domain and enforcement
+modules from Phase 1 remain authoritative.
 
 ## Goals
 
-- Give Codex and Claude the same `lead`, `peer`, and `supervisor` roles.
-- Use one canonical instruction body and capability policy per role.
-- Require an explicit role selection for every new agent when role enforcement
-  is enabled.
-- Preserve the exact resolved role contract across restart and resume.
-- Prevent provider configuration or custom options from bypassing role policy.
-- Keep old clients and persisted legacy agents parseable.
-- Show role and provider as separate concepts in the UI.
+- Give Codex and Claude the same `supervisor`, `lead`, and `peer` role prose.
+- Keep `codex-room` and add `claude-room` as the Phase 1 provider bridge.
+- Require every role-managed provider profile to resolve one foundation role.
+- Preserve exact role prompt and capability bytes across restart and resume.
+- Enforce `Human > Supervisor > Lead > Peer` for agent-initiated staffing.
+- Allow Human creation and explicit override at every tier.
+- Enforce one unarchived Lead per project workspace and four unarchived Peers per
+  Lead for agent-initiated staffing.
+- Keep Supervisor-to-Lead staffing durable and Lead-to-Peer delegation
+  cascading.
+- Prevent provider configuration, prompt text, stale catalogs, or direct daemon
+  calls from bypassing the role policy.
+- Preserve backward-compatible wire schemas and legacy agent resume.
 
 ## Non-goals
 
-- Do not add `claude-profile` or `codex-room` wrapper scripts.
-- Do not create provider entries such as `claude-lead` or `codex-peer` for new
-  agents.
-- Do not mutate the role of an existing conversation.
-- Do not update old conversations to the newest role definition on resume.
+- Do not add a fourth foundation role. Challenger, owner, reviewer, and similar
+  names are assignments.
+- Do not add a native role picker or `roleId` to every creation request in Phase
+  1. The selected provider profile supplies the role.
+- Do not remove `codex-room` or the new `claude-room` until native Phase 2 reaches
+  parity.
+- Do not infer a role from an arbitrary provider id, label, prompt, title, or
+  model name.
+- Do not mutate an existing conversation's foundation role or prompt snapshot.
+- Do not silently substitute a retired model, mode, or thinking option.
 - Do not add user-defined roles in v1.
-- Do not make `WORKSPACE_PROTOCOL.md` discovery or editing part of this feature.
-  A caller-supplied workspace protocol may be included in the persisted prompt
-  snapshot, but its lifecycle remains owned by the existing workspace workflow.
-- Do not add temporary capability escalation for Supervisor in v1.
+- Do not make `WORKSPACE_PROTOCOL.md` ownership part of the role feature.
+- Do not restart the production daemon on port `6767` during development or
+  verification without explicit permission.
 
 ## Terminology
 
+### Foundation role
+
+The authority and capability class for an agent:
+
+```ts
+type FoundationRole = "supervisor" | "lead" | "peer";
+```
+
+The set is closed. A task-specific disposition such as `Design challenger A` or
+`Implementation owner` never creates a fourth role.
+
+### Assignment
+
+The work an agent was created to perform. Paseo already stores this through the
+agent title, initial prompt, and conversation timeline. Phase 1 adds no mutable
+`assignment` field to the role contract.
+
+- A Peer is minted for one bounded assignment. Material reassignment creates a
+  new Peer.
+- A durable Lead may receive follow-up directives inside the same project.
+  Moving it to a different project creates a new Lead.
+- The display title may be renamed. A rename does not change authority.
+
+The UI calls the task-specific column **Assignment**, not **Role**.
+
 ### Role definition
 
-The built-in, versioned source for one role's label, instructions, and
-capability policy. Definitions are provider-neutral and live in one daemon-owned
-registry.
+The built-in label, capability policy, and policy version for one foundation
+role. The Paseo daemon owns these definitions. The Phase 1 role prompt source is
+the corresponding shared room file:
+
+```text
+SLP-docs/runtime/roles/<role>.role.md
+```
+
+Both wrappers receive the same prompt snapshot. Phase 2 may move the prompt
+source into the daemon registry without changing stored contracts.
 
 ### Role binding
 
-The immutable role snapshot resolved for one conversation. It contains the
-canonical role bytes that both providers receive.
+The immutable role and policy snapshot for one conversation:
 
 ```ts
-type RoleId = "lead" | "peer" | "supervisor";
-
 interface RoleBinding {
-  roleId: RoleId;
-  label: "Lead" | "Peer" | "Supervisor";
-  roleVersion: number;
+  roleId: FoundationRole;
+  label: "Supervisor" | "Lead" | "Peer";
+  policyVersion: number;
   instructions: string;
   capabilityPolicy: CapabilityPolicy;
-  workspaceProtocolDigest?: string;
+  instructionsDigest: string;
   digest: string;
 }
 ```
 
-`digest` covers the role id, role version, exact instruction bytes, capability
-policy, and optional workspace protocol digest using stable serialization.
+`digest` covers the role id, label, policy version, exact instruction bytes,
+capability policy, and digest algorithm version using stable serialization.
 
-### Launch contract
+### Runtime selection
 
-The immutable launch snapshot that combines a `RoleBinding` with provider,
-model, and prompt delivery information.
+The staffer explicitly selects the provider profile, model, mode, and supported
+thinking option when creating an agent. Paseo already persists these values in
+the agent record and maps `modeId` and `thinkingOptionId` through the selected
+provider manifest. Phase 1 reuses those fields; it does not add a duplicate
+`RuntimeBinding`, a runtime revision log, or a Codex/Claude tagged union.
 
-```ts
-interface LaunchContract {
-  contractVersion: 1;
-  provider: AgentProvider;
-  model?: string;
-  roleBinding: RoleBinding;
-  effectivePrompt: string;
-  effectivePromptDigest: string;
-}
-```
+Existing Human controls may revise a running agent's model, mode, or thinking
+option when the provider supports it. Agents cannot change their own or another
+agent's runtime. The latest accepted persisted values are authoritative on
+resume.
 
-The persisted contract is authoritative on resume. Provider discovery and the
-current role registry must not change it.
+### Stored role contract
 
-## Role semantics
+The persisted agent record carries the immutable `RoleBinding` next to Paseo's
+existing provider and session configuration. Assignment and staffing
+relationships are not part of the role contract.
 
-The initial definitions preserve the current Codex room model:
+The storage write completes before the provider starts. Existing records keep
+both objects optional so legacy agents continue to parse.
 
-- **Lead** owns project coordination, delegation, integration, and acceptance.
-  It may inspect and change the workspace and use Paseo lifecycle tools.
-- **Peer** owns independent judgment and implementation inside a bounded task.
-  It may inspect and change the workspace but may not orchestrate agents.
-- **Supervisor** observes workflow and reasoning, communicates evidence-backed
-  concerns, and relays owner decisions. It may not change the workspace or own
-  project acceptance.
+## Human authority and staffing graph
 
-All three roles have provider-native subagents disabled. Paseo remains the only
-agent lifecycle control plane.
-
-## Capability policy
-
-Capabilities use semantic action groups rather than provider tool names. Each
-adapter compiles these groups into provider-specific restrictions.
-
-| Capability                                     |  Lead |  Peer |                Supervisor |
-| ---------------------------------------------- | ----: | ----: | ------------------------: |
-| Read workspace and timeline                    | Allow | Allow |                     Allow |
-| Mutate workspace                               | Allow | Allow |                      Deny |
-| Use Paseo lifecycle create/stop/archive/delete | Allow |  Deny |                      Deny |
-| Send prompts or follow-ups to another agent    | Allow |  Deny | Allow within daemon scope |
-| Wait for or inspect another agent              | Allow |  Deny |                     Allow |
-| Change another agent's launch contract         |  Deny |  Deny |                      Deny |
-| Use provider-native subagents                  |  Deny |  Deny |                      Deny |
-
-Supervisor cannot create a replacement Lead in v1. A future human-authorized
-recovery grant must be a separate, auditable capability rather than an
-instructional exception.
-
-"Within daemon scope" uses the daemon's existing caller visibility and ownership
-checks. V1 does not introduce a second role-specific workspace or agent
-ownership model.
-
-## Architecture
-
-### Foundation role registry
-
-Add a daemon-owned registry such as
-`packages/server/src/server/agent/roles/foundation-role-definitions.ts`. It is the
-only source for the three labels, instruction bodies, versions, and capability
-policies.
-
-Role instructions must not mention Codex or Claude. Updating any instruction or
-capability increments that role's version. Tests pin the exact definition bytes
-and digest algorithm.
-
-### Role resolution
-
-A small role-binding module validates `roleId`, loads the definition, combines
-any caller-supplied workspace protocol snapshot, and returns an immutable
-`RoleBinding`. It does not know which provider will run the agent.
-
-Role resolution runs only for a new conversation or when a persisted schedule
-is explicitly updated. Resume and restart never call the registry.
-
-### Launch contract assembly
-
-The agent manager assembles the launch contract after provider/model validation
-and before creating the provider process. Prompt assembly uses a fixed order:
-
-1. Existing daemon/global system instructions.
-2. Existing caller-supplied system instructions.
-3. The exact persisted role instructions.
-4. A caller-supplied workspace protocol snapshot, when present.
-
-The role instruction segment remains byte-identical for Codex and Claude. Their
-built-in provider prompts may differ.
-
-The storage write must complete before the provider starts. If persistence
-fails, launch fails without starting an unbound agent.
-
-### Persistence
-
-Add an optional `launchContract` object to the persisted agent record schema.
-Paseo's file-backed storage has no migration phase, so existing records remain
-valid and new records write the additional object atomically.
-
-Persist the resolved bytes, not a pointer to the role registry. A role id alone
-is insufficient because a later definition change would alter resume behavior.
-
-Secrets and provider credentials remain outside the launch contract. The
-contract stores only provider identity, model identity, prompts, and policy.
-
-### Prompt delivery
-
-The provider adapter applies role-owned options after all user/provider custom
-options so custom configuration cannot overwrite the role prompt or policy.
-
-#### Codex
-
-- Deliver `effectivePrompt` through developer instructions.
-- Force native Codex agents off for all three roles.
-- Force a read-only sandbox for Supervisor.
-- Reject any role-policy override from provider extras.
-
-#### Claude
-
-- Keep the Claude Code preset system prompt.
-- Set `systemPrompt` to `{ type: "preset", preset: "claude_code", append:
-effectivePrompt }` after merging custom Claude options.
-- Remove or replace custom `agents` configuration so native Claude subagents
-  cannot be enabled.
-- Compile the capability policy into the existing `canUseTool` authorization
-  callback.
-- Deny mutation-capable native tools for Supervisor. In v1 this includes shell
-  execution as well as direct write/edit tools; an allowlisted read-only shell
-  grammar is out of scope.
-- Deny native Agent, Task, team, and provider-to-provider messaging tools for all
-  roles, including names introduced by supported Claude SDK versions.
-
-### Tool authorization
-
-Authorization is fail-closed and has two gates:
-
-1. Build a caller-scoped Paseo tool catalog that omits unauthorized actions.
-2. Authorize every invocation again against the persisted `RoleBinding`.
-
-The second gate protects resumed sessions, stale provider catalogs, and direct
-calls from older clients. A denied call emits a structured audit event with
-agent id, role id, semantic capability, tool name, and denial reason. It must not
-record secret tool arguments.
-
-Provider-native tools use the same semantic policy through adapter-specific
-mappers. Unknown provider tools that could mutate state or create agents are
-denied until explicitly classified.
-
-## Lifecycle
-
-### New conversation
+The graph constrains agent-initiated staffing only:
 
 ```text
-create(roleId, provider, model)
-  -> validate role and provider
-  -> resolve RoleBinding
-  -> compile capability policy
-  -> build LaunchContract
-  -> persist agent record atomically
-  -> construct filtered tool catalog
-  -> launch provider adapter
+Human      -> Supervisor | Lead | Peer
+Supervisor -> Lead
+Lead       -> Peer
+Peer       -> none
 ```
 
-The daemon never starts an agent if role validation, policy compilation, digest
-generation, or persistence fails.
+Human may create, resume, replace, archive, or explicitly revise the runtime of
+an agent at any tier. Human override does not mutate the role or prompt contract
+of an existing conversation. A different role or role prompt requires a new
+agent.
 
-### Resume and daemon restart
+Agent-initiated creation must state a complete runtime selection. Nothing is
+inherited from the staffer, including same-provider creation. Fields unsupported
+by the chosen model are absent by definition rather than guessed.
+
+## Staffing limits
+
+Limits are live operational policy, not immutable role capabilities:
+
+- A project workspace has at most one unarchived Lead.
+- A Lead has at most four unarchived Peer children.
+- `initializing`, `idle`, `running`, `error`, and `closed` unarchived agents all
+  occupy a slot.
+- Archive releases the slot. Finishing a turn or closing a provider process does
+  not.
+- Human can explicitly override a limit. The override is audited with the Human
+  actor, target role, workspace, current count, and configured limit.
+
+The limits are daemon configuration so operators can change them without
+rewriting stored role contracts. An agent cannot override them.
+
+## Role capabilities
+
+Capabilities are semantic action groups. The daemon authorizes Paseo actions;
+the room wrapper and provider adapter apply the corresponding provider-native
+restrictions.
+
+| Capability                                |    Supervisor |                Lead |                  Peer |
+| ----------------------------------------- | ------------: | ------------------: | --------------------: |
+| Read agent/workspace status and timelines |         Allow |    Allow in project |              Own task |
+| Mutate project workspace                  |          Deny |               Allow | Allow in bounded task |
+| Create Paseo agents                       |     Lead only |           Peer only |                  Deny |
+| Prompt or inspect another agent           | Staffed Leads |           Own Peers |                  Deny |
+| Archive managed agents/workspaces         | Staffed Leads | Own Peers/worktrees |                  Deny |
+| Respond to another agent's permissions    | Staffed Leads |           Own Peers |                  Deny |
+| Change role or another agent's runtime    |          Deny |                Deny |                  Deny |
+| Use provider-native subagents/teams       |          Deny |                Deny |                  Deny |
+
+`Peer cannot create agents` means managed Paseo agents. Provider-native Task,
+Agent, team, or equivalent tools are a separate capability and are denied for
+all three roles in Phase 1.
+
+Unknown provider-native tools that can mutate state, create agents, or message
+teams fail closed until classified.
+
+## Provider profiles
+
+Phase 1 exposes six role-mapped profiles:
+
+| Profile id          | Base provider | Foundation role | Label                 |
+| ------------------- | ------------- | --------------- | --------------------- |
+| `codex-supervisor`  | Codex         | Supervisor      | `Supervisor · Codex`  |
+| `claude-supervisor` | Claude        | Supervisor      | `Supervisor · Claude` |
+| `codex-lead`        | Codex         | Lead            | `Lead · Codex`        |
+| `claude-lead`       | Claude        | Lead            | `Lead · Claude`       |
+| `codex-peer`        | Codex         | Peer            | `Peer · Codex`        |
+| `claude-peer`       | Claude        | Peer            | `Peer · Claude`       |
+
+Custom provider configuration gains an optional `foundationRole`. It remains
+optional for general custom providers. A daemon with required role enforcement
+rejects creation through a profile that does not supply it.
+
+Daemon configuration supplies exactly one canonical prompt source for each
+foundation role, independent of provider profiles:
+
+```ts
+interface FoundationRoleSourceConfig {
+  promptFile: string;
+}
+
+type FoundationRoleSources = Record<FoundationRole, FoundationRoleSourceConfig>;
+```
+
+Required-role startup fails when a role source is missing, empty, or unreadable.
+Codex and Claude profiles mapped to the same role can therefore never select
+different prompt sources.
+
+The profile id or label is never parsed to infer a role. Provider configuration
+resolves the role only for a new agent. Resume uses the stored binding even if
+the profile's label or `foundationRole` mapping later changes; configuration
+drift never rewrites an existing role.
+
+The target deployment disables or hides the unmapped built-in Codex and Claude
+profiles while required enforcement is active. Human role selection therefore
+happens by choosing one of the six mapped profiles during the bridge.
+
+## Role resolution and prompt materialization
+
+For a new role-managed agent, the daemon:
+
+1. Loads the selected profile's explicit `foundationRole`.
+2. Validates the full provider/model/mode/thinking selection.
+3. Loads the role's canonical prompt source once and rejects missing or empty
+   content.
+4. Resolves the built-in capability policy.
+5. Builds and digests the immutable `RoleBinding`.
+6. Persists the role binding atomically with Paseo's existing agent
+   configuration.
+7. Materializes the persisted instruction bytes to a per-agent read-only prompt
+   file.
+8. Passes its path as `PASEO_ROLE_PROMPT_FILE` and the stored role as
+   `PASEO_FOUNDATION_ROLE` in the provider launch environment.
+9. Starts the provider wrapper.
+
+The materialized file is an adapter bridge, not the source of truth. Resume
+re-materializes it from the persisted binding and never re-reads the current
+role source.
+
+If storage or materialization fails, launch fails before the provider starts. A
+missing or corrupt persisted binding is never repaired from the current prompt
+file.
+
+Secrets, provider credentials, assignment content, and workspace files stay out
+of the role binding.
+
+## Minimum Paseo core delta
+
+Phase 1 limits core changes to enforcement Paseo cannot delegate safely to a
+wrapper:
+
+1. Optional role-source and provider-profile configuration.
+2. Optional persisted `RoleBinding` and `staffedByAgentId` fields.
+3. Caller-scoped tool authorization, staffing graph, one-Lead/four-Peer limits,
+   and role-derived archive behavior.
+4. Optional role/staffing snapshot fields, one feature gate, and the minimum UI
+   surfaces needed to distinguish Staffed Leads from Peer subagents.
+
+Phase 1 does not change Codex or Claude adapter prompt composition, add a native
+role picker, add provider-specific runtime schema, add assignment storage, or
+replace Paseo's existing provider/model/mode/thinking persistence. These
+omissions are the scope reduction enabled by `codex-room` and `claude-room`.
+
+## Room wrapper architecture
+
+### Shared room source
+
+`SLP-docs/runtime/roomlib.py` will own shared role loading, seat specifications,
+seat table generation, catalog validation, and wrapper snapshot helpers.
+
+Role prose moves from provider overlays into
+`SLP-docs/runtime/roles/<role>.role.md`. Both providers use the daemon-materialized
+`PASEO_ROLE_PROMPT_FILE` when launched by Paseo. A direct terminal launch without
+`PASEO_AGENT_ID` may use the current shared role source but must warn that it has
+no persisted Paseo role contract.
+
+Seat tables contain the complete runtime selection for every staffable seat.
+Supervisor gets Lead rows, Lead gets Peer rows, and Peer gets none. Mixed rooms
+are normal.
+
+### Codex room
+
+Keep `codex-room` and `codex-room-sync`:
+
+- Continue isolated `CODEX_HOME` generation and native multi-agent catalog
+  stripping.
+- Read the shared role prompt rather than embedded duplicate prose.
+- When Paseo supplies `PASEO_ROLE_PROMPT_FILE`, inject those exact bytes into
+  Codex developer instructions.
+- Retain positional role input for direct terminal compatibility. The persisted
+  Paseo role wins when both are present, and a mismatch fails launch.
+- Keep role-scoped caller MCP wiring for Supervisor and Lead; Peer gets no Paseo
+  server. The daemon still filters and authorizes every call.
+
+### Claude room
+
+Add `claude-room` and `claude-room-sync`:
+
+- `claude-room` forwards every argument received from the Claude Agent SDK and
+  appends `--append-system-prompt-file "$PASEO_ROLE_PROMPT_FILE"`.
+- Use append, not replacement, so Claude Code keeps its default identity, tool
+  guidance, safety instructions, and coding conventions.
+- Load the generated role settings with `--settings`; do not require a separate
+  `CLAUDE_CONFIG_DIR` for Paseo launches. This preserves normal Claude auth and
+  user configuration.
+- Apply an explicit per-role tool allowlist and permission settings. Supervisor
+  is read-only; Lead and Peer may mutate their bounded workspace; native agent
+  and team tools are absent for all roles.
+- Model, mode, and thinking stay Paseo runtime selections. The wrapper does not
+  invent or silently replace them.
+
+The Claude adapter currently accepts a custom executable but discards additional
+configured command arguments before assigning `pathToClaudeCodeExecutable`.
+Claude profiles must therefore set a single wrapper executable. The daemon
+passes the stored role through `PASEO_FOUNDATION_ROLE`; profiles must not depend
+on `command: ["claude-room", "lead"]`.
+
+Direct terminal use may accept `claude-room <role>` when the Paseo role
+environment is absent.
+
+### Claude prompt precedence gate
+
+Claude's Agent SDK also supplies the `claude_code` preset with an append string.
+Implementation must verify the combined path rather than assume CLI precedence:
+
+- Capture wrapper argv without invoking a model.
+- Verify the installed Claude CLI accepts the append-file and settings flags
+  before and after SDK arguments.
+- Verify the wrapper's settings remain effective when the SDK also supplies
+  settings-related arguments.
+- Run create and resume smokes through Paseo.
+- Assert one unique role marker appears exactly once in effective behavior.
+- Assert the Claude Code default prompt remains active.
+- Assert one denied native subagent tool and one role-specific filesystem denial
+  are enforced.
+
+If SDK arguments override the role prompt or settings, implementation stops and
+the adapter boundary must be redesigned before continuing. `CLAUDE.md` is not a
+fallback because it is conversation context rather than the system prompt and
+cannot provide the required authorization boundary.
+
+## Tool authorization
+
+Authorization is fail-closed and has two daemon gates:
+
+1. Build a caller-scoped Paseo tool catalog that omits unauthorized semantic
+   actions for the persisted role.
+2. Authorize every invocation again against the persisted role binding,
+   staffing relationship, target role, workspace, and live staffing limits.
+
+The second gate protects resumed sessions, stale catalogs, handcrafted HTTP
+calls, and provider configurations that expose too many tools.
+
+A denied call emits an audit event containing agent id, role id, target id,
+semantic capability, tool name, and denial reason. It must not record secret tool
+arguments.
+
+## Staffing lifecycle
+
+Relationship and lifecycle enums are not persisted. Behavior derives from the
+role pair.
+
+### Supervisor to Lead
+
+A Supervisor-created Lead is a durable staffed agent:
+
+- Persist `staffedByAgentId`; do not stamp `paseo.parent-agent-id`.
+- Show it in a **Staffed Leads** section, not the subagents track.
+- Subscribe the Supervisor to Lead finish, error, closed, and permission events
+  using staffing ownership rather than parent ownership.
+- Archiving the Supervisor stops the active subscription but does not archive or
+  close the Lead.
+- The archived Supervisor reference remains valid provenance because archive is
+  a soft delete. An active Lead whose staffer is archived displays **Needs
+  Supervisor**.
+- Human may explicitly assign the Lead to a replacement Supervisor. Reassignment
+  updates `staffedByAgentId`, rebinds notifications, and writes an audit event.
+
+One Supervisor may staff Leads in multiple projects, subject to one unarchived
+Lead per project workspace.
+
+### Lead to Peer
+
+A Lead-created Peer uses Paseo's existing managed subagent relationship:
+
+- Stamp `paseo.parent-agent-id` with the Lead id.
+- Show it in the Lead's subagents track.
+- Cascade archive when the Lead is explicitly archived.
+- Do not cascade on idle, provider process exit, `closed`, daemon restart, or a
+  completed turn.
+- Do not auto-archive at the first terminal turn. The Lead reviews, accepts,
+  merges, archives the Peer and worktree workspace, then deletes the merged
+  branch.
+
+Writing Peers use isolated worktrees through the existing
+`create_workspace -> create_agent(workspaceId)` flow. Read-only Peers use the
+project checkout and no worktree.
+
+## Runtime validation and resume
+
+Every Human or agent creation states the complete runtime selection. UI defaults
+may preselect values, but the request carries the resolved provider profile,
+model, mode, and supported thinking option explicitly.
+
+Resume performs this sequence:
 
 ```text
 load agent record
-  -> load persisted LaunchContract
-  -> verify role and prompt digests
-  -> compile policy from persisted snapshot
-  -> launch provider adapter with persisted prompt
-  -> resume provider session
+  -> verify RoleBinding digest
+  -> load existing persisted provider/model/mode/thinking values
+  -> validate runtime against the live provider catalog
+  -> materialize persisted role prompt bytes
+  -> compile persisted capability policy
+  -> launch wrapper and resume provider session
 ```
 
-Digest mismatch is treated as corrupted state. Paseo does not repair it by
-loading the current role definition because that would silently change the
-conversation's authority and behavior.
+If the model, mode, or thinking option is unavailable, return
+`RUNTIME_UNAVAILABLE`. Paseo never substitutes another value. Human recovery is
+an explicit change through Paseo's existing runtime controls when the provider
+can resume with it, or a replacement agent when it cannot.
 
-### Fork
-
-A fork creates a conversation and therefore requires a role. The UI preselects
-the source conversation's role but requires the user to confirm it. The new
-conversation resolves the current role version; it does not copy the old role
-snapshot unless a future explicit "clone launch contract" operation is added.
-
-### Schedules and loops
-
-A schedule must choose a role when it is created. The schedule persists its
-resolved role binding so later runs remain stable until the schedule is edited.
-Editing the schedule's role or explicitly refreshing its role creates a new
-binding for future runs and does not mutate existing conversations.
-
-A loop reuses the conversation's persisted contract. Heartbeats and follow-ups
-do not resolve or change roles.
+Provider-side downgrades that can be observed must surface as
+`RUNTIME_DEGRADED`; they never rewrite persisted values silently. A downgrade
+that would weaken role enforcement fails closed.
 
 ## Protocol and compatibility
 
-Wire schemas must remain backward-compatible. New request fields are therefore
-structurally optional even though the feature requires them at runtime.
+Phase 1 minimizes new wire surface but keeps normal Paseo compatibility rules:
 
-- Add `roleId?: RoleId` to every agent-creation request shape.
-- Advertise a server feature such as `agentRolesV1` in `server_info.features`.
-- New clients gate the role UI once and always send `roleId` to capable daemons.
-- A daemon configured with required roles rejects roleless creation with the
-  existing RPC error envelope and a stable `ROLE_REQUIRED` code.
-- Old clients continue to parse all messages. On a required-role daemon, their
-  roleless creation request fails with an actionable update-client message.
-- New clients connecting to an old daemon do not show the role workflow and
-  explain that the host must be updated.
+- New provider-profile, persisted-agent, and agent-snapshot fields are optional.
+- Advertise `server_info.features.agentRolesV1` once.
+- Gate role-specific UI once on that feature.
+- Old clients continue to parse provider and agent snapshots.
+- New clients connected to an old daemon do not show role enforcement state.
+- A required-role daemon rejects unmapped provider creation with a stable error
+  and update/configuration guidance.
+- Every compatibility shim carries a dated `COMPAT(agentRolesV1)` tag.
+- Do not simulate the feature through legacy RPC fallbacks.
 
-Every compatibility shim must carry a dated `COMPAT(agentRolesV1)` tag in code.
-
-Role enforcement is enabled through daemon configuration during rollout. The
-target deployment sets it to required. Product-wide default enforcement can be
-enabled only after the supported clients expose role selection.
-
-## Creation surfaces
-
-Every path that creates a conversation must provide or persist a role:
-
-- app composer/new-agent flow;
-- CLI agent run/create commands;
-- `@getpaseo/client` APIs;
-- MCP/Paseo `create_agent` and related host tools;
-- schedules;
-- forks;
-- any automation that creates a fresh agent.
-
-Resume, follow-up, heartbeat, and loop turns inherit the stored contract and do
-not ask for a role again.
+Phase 2 may add an optional `roleId` creation field and a separate role picker.
+That later field must remain structurally optional on the wire.
 
 ## UI
 
-Provider and role are separate required selectors.
+Phase 1 uses role-first custom provider labels:
 
-- Provider labels remain `Codex` and `Claude`.
-- Role labels are `Lead`, `Peer`, and `Supervisor`.
-- Do not show `Codex Lead`, `Codex Peer`, `Codex Supervisor`, or equivalent
-  Claude-prefixed role labels.
-- Conversation summaries use `Lead · Claude`, `Peer · Codex`, and the same
-  pattern for other combinations.
-- Role selection appears only after the connected daemon advertises
-  `agentRolesV1`.
-- Role errors remain visible in the creation surface and preserve the user's
-  other selections.
+- `Supervisor · Codex`, `Supervisor · Claude`
+- `Lead · Codex`, `Lead · Claude`
+- `Peer · Codex`, `Peer · Claude`
 
-The provider picker chooses a runtime. The role picker chooses authority and
-behavior.
+Do not use `Codex Supervisor`, `Codex Lead`, `Codex Peer`, or Claude-prefixed
+equivalents.
 
-## Legacy migration
+Agent and staffing views display these concepts separately where data is
+available:
 
-### Persisted conversations
+- **Foundation role:** Supervisor, Lead, or Peer.
+- **Assignment:** current agent title.
+- **Runtime:** provider, model, mode, and thinking/effort.
+- **State:** lifecycle status.
 
-Legacy conversations without `launchContract` continue through the existing
-resume path and receive no inferred role. The UI identifies them as `Legacy`
-rather than guessing from provider or prompt text.
+Supervisor panes show durable Leads under **Staffed Leads**. Lead panes keep
+Peers under the existing subagents track.
 
-Legacy conversations cannot be converted in place. Users start a new
-conversation with an explicit role.
+## Legacy agents and bridge retirement
 
-### Existing custom providers
+Legacy agents without a role binding continue through the existing resume path
+and receive no inferred role. They display as `Legacy` when role-aware UI is
+available.
 
-Deployments using `codex-root`, `codex-peer`, and `codex-supervisor` may map them
-to migration suggestions:
+Legacy conversations cannot be converted in place. Human starts a new mapped
+profile when enforcement is required.
 
-| Legacy provider/profile | Suggested provider | Role       |
-| ----------------------- | ------------------ | ---------- |
-| `codex-root`            | Codex              | Lead       |
-| `codex-peer`            | Codex              | Peer       |
-| `codex-supervisor`      | Codex              | Supervisor |
+The wrapper profiles remain until Phase 2 proves parity for:
 
-The daemon does not silently rewrite config. After native roles are verified,
-operators remove the wrapper providers explicitly. Visible labels lose the
-`Codex` prefix immediately in the native role UI; legacy custom provider labels
-remain unchanged until their config is removed.
+- prompt identity and resume;
+- native tool restrictions;
+- role-scoped Paseo tools;
+- mixed-provider staffing;
+- durable Lead lifecycle;
+- limits and denial paths.
+
+After parity, operators remove the six wrapper profiles explicitly. The daemon
+never silently rewrites provider configuration.
 
 ## Errors
 
-| Code                           | Meaning                              | Result                         |
-| ------------------------------ | ------------------------------------ | ------------------------------ |
-| `ROLE_REQUIRED`                | New conversation has no role         | Reject before launch           |
-| `UNKNOWN_ROLE`                 | Role id is not built in              | Reject before launch           |
-| `ROLE_PROVIDER_UNSUPPORTED`    | Provider cannot enforce the role     | Reject before launch           |
-| `ROLE_POLICY_COMPILE_FAILED`   | Adapter cannot map the policy safely | Reject before launch           |
-| `ROLE_CONTRACT_PERSIST_FAILED` | Atomic storage write failed          | Reject before launch           |
-| `ROLE_CONTRACT_CORRUPT`        | Persisted digest does not match      | Refuse resume; preserve record |
-| `CAPABILITY_DENIED`            | Tool invocation violates role policy | Deny call and audit            |
+| Code                           | Meaning                                        | Result                          |
+| ------------------------------ | ---------------------------------------------- | ------------------------------- |
+| `ROLE_REQUIRED`                | Selected provider profile has no role          | Reject before launch            |
+| `UNKNOWN_ROLE`                 | Profile names an unsupported role              | Reject before launch            |
+| `ROLE_PROVIDER_UNSUPPORTED`    | Provider cannot enforce the role               | Reject before launch            |
+| `ROLE_POLICY_COMPILE_FAILED`   | Policy cannot map safely                       | Reject before launch            |
+| `ROLE_CONTRACT_PERSIST_FAILED` | Atomic storage failed                          | Reject before provider start    |
+| `ROLE_SNAPSHOT_MISSING`        | Persisted prompt bytes are unavailable         | Refuse resume; preserve record  |
+| `ROLE_CONTRACT_CORRUPT`        | Stored digest does not match                   | Refuse resume; preserve record  |
+| `STAFFING_DENIED`              | Agent role pair is not allowed                 | Deny and audit                  |
+| `STAFFING_LIMIT_REACHED`       | Project or Lead reached its live limit         | Deny and report counts          |
+| `RUNTIME_UNAVAILABLE`          | Persisted runtime no longer exists             | Refuse launch/resume            |
+| `RUNTIME_DEGRADED`             | Provider reports a different effective runtime | Surface; fail if policy weakens |
+| `CAPABILITY_DENIED`            | Invocation violates role policy                | Deny and audit                  |
 
-Errors use the existing RPC error envelope. The app renders creation failures in
-place with retry or update-host/client guidance.
+Errors use the existing RPC error envelope. New error metadata remains optional
+for old clients.
 
 ## Testing strategy
 
-Work in vertical TDD slices and run only targeted files locally.
+Work in vertical TDD slices and run only targeted test files locally.
 
-### Unit contracts
+### Role and storage contracts
 
-- Role definitions produce deterministic snapshots and digests.
-- Codex and Claude receive the same exact role instruction segment.
-- Custom provider options cannot overwrite role prompt or capability policy.
-- Each role compiles to the expected semantic capability matrix.
-- Unknown native tools fail closed.
-- A persisted contract round-trips without byte changes.
-- Changing a role definition does not change a loaded old contract.
-- Corrupted role or prompt digests reject resume.
-- Legacy records still parse and enter the legacy resume path.
+- Provider profiles resolve only explicit `foundationRole` metadata.
+- Role prompt bytes are read once for new creation and persisted exactly.
+- Resume never re-reads the current prompt source.
+- Capability and instruction digests are deterministic.
+- Legacy records parse without inferred roles.
+- Missing or corrupt snapshots reject resume.
 
-### Server integration
+### Runtime contracts
 
-- Creation persists the contract before the provider starts.
-- Missing and unknown roles return stable errors.
-- Filtered catalogs omit unauthorized Paseo tools.
-- Direct invocation of an omitted tool is also denied.
-- Peer cannot orchestrate agents.
-- Supervisor cannot mutate the workspace.
-- Lead can use Paseo lifecycle tools.
-- Native subagents are disabled for all roles.
-- Schedule runs and loop/resume paths reuse their stored bindings.
+- Every creation path sends a full runtime selection.
+- Same-provider and cross-provider spawns never inherit staffer settings.
+- Retired selections return `RUNTIME_UNAVAILABLE` with no substitution.
+- Existing Human runtime changes persist and resume with their latest accepted
+  values.
 
-### App and CLI behavior
+### Authorization and limits
 
-- New-agent UI requires a role and preserves selections after failure.
-- UI labels are `Lead`, `Peer`, and `Supervisor` without provider prefixes.
-- Conversation summaries combine role and provider as separate labels.
-- Old-daemon and old-client capability gates produce actionable feedback.
-- CLI and client APIs reject missing roles locally when the daemon advertises
-  required roles.
+- Human can create every role.
+- Supervisor can create Lead only.
+- Lead can create Peer only.
+- Peer cannot create managed Paseo agents.
+- One project rejects a second unarchived Lead unless Human explicitly
+  overrides.
+- A Lead rejects its fifth unarchived Peer unless Human explicitly overrides.
+- Archive releases a slot; idle, error, and closed do not.
+- Explicit Human overrides succeed and audit.
+- Filtered catalogs omit unauthorized tools and direct invocation is denied.
+- Provider-native subagent and team tools are unavailable for all roles.
+
+### Lifecycle
+
+- Supervisor-created Lead has staffing ownership and no parent label.
+- Supervisor archive leaves the Lead unarchived and marks it as needing a
+  Supervisor.
+- Human reassignment rebinds notifications.
+- Lead archive cascades to Peer.
+- Lead idle, closed, process exit, and daemon restart do not cascade.
+- Peer completion does not auto-archive before acceptance.
+
+### Wrapper contracts
+
+- Codex and Claude consume byte-identical role prompt files.
+- `codex-room` retains native multi-agent stripping.
+- `claude-room` forwards SDK argv and appends the prompt/settings flags.
+- Claude custom provider role comes from environment, not a discarded positional
+  command argument.
+- Prompt marker appears exactly once on create and resume.
+- Claude Code's default preset remains active.
+- Direct terminal launches warn when no persisted Paseo contract exists.
+
+### Protocol and UI
+
+- New fields remain optional and wire-compat fixtures pass both directions.
+- Role behavior is gated once on `agentRolesV1`.
+- Every shim is tagged `COMPAT(agentRolesV1)`.
+- Labels are role-first and the task column is **Assignment**.
+- Supervisor and Lead use separate Staffed Leads and subagent surfaces.
 
 ### Real-provider smoke
 
-Add focused real-provider coverage for the six combinations of three roles and
-two providers. The smoke test verifies prompt identity, one representative
-allowed action, one denied action, and resume using the stored contract. These
-tests belong in `*.real.e2e.test.ts` and do not run in the default unit suite.
+Verify all six provider/role combinations. Each smoke checks:
+
+- exact role prompt identity;
+- requested model/mode/thinking;
+- one representative allowed action;
+- one representative denied action;
+- caller-scoped Paseo tools;
+- create, close/restart, and resume;
+- no provider-native subagent creation.
+
+Add mixed-room smokes for Codex Supervisor to Claude Lead and Claude Lead to
+Codex Peer. These tests do not run in the default unit suite.
 
 ## Rollout
 
-1. Add persisted role types, registry, digesting, and legacy parsing with the
-   feature disabled.
-2. Add daemon authorization and provider adapters with targeted unit tests.
-3. Add role selection to client, CLI, MCP, schedules, and fork flows behind
-   `agentRolesV1`.
-4. Enable required roles on an isolated development daemon.
-5. Verify all six Codex/Claude role combinations, denial paths, and resume.
-6. Enable required roles on the target workstation.
-7. Remove `codex-room` custom providers only after native-role conversations
-   pass end-to-end verification.
-8. Consider a product-wide default only after supported clients have shipped.
-
-The production daemon on port `6767` must not be restarted as part of
-development or verification without explicit permission.
+1. Add optional role/profile/storage types, persisted RoleBinding, prompt
+   materialization, and legacy parsing with enforcement off; reuse existing
+   runtime persistence.
+2. Extract shared role prose and room helpers; update `codex-room`; implement
+   `claude-room` and `claude-room-sync`.
+3. Add caller-scoped authorization, spawn graph, operational limits, and stable
+   errors.
+4. Add durable Supervisor-to-Lead staffing, notification ownership, Human
+   reassignment, and UI presentation.
+5. Add role-first profile labels, Assignment terminology, and compatibility
+   gates.
+6. Enable required roles on an isolated development daemon and verify all six
+   provider/role combinations plus mixed rooms.
+7. Enable required roles on the target workstation only after independent
+   verification. Do not integrate into `slp/patches` or restart production as
+   part of development.
+8. Plan Phase 2 native role selection and provider-adapter delivery upstream.
+9. Remove wrappers only after Phase 2 proves parity.
 
 ## Acceptance criteria
 
-- Every new agent on the target deployment has an explicit `lead`, `peer`, or
-  `supervisor` role.
-- Codex and Claude receive byte-identical role instructions for the same role
-  version.
-- Resume uses the persisted role and prompt bytes even after definitions change.
-- Unauthorized Paseo and provider-native actions are denied at runtime.
-- Supervisor cannot mutate the workspace; Peer cannot orchestrate; Lead can
-  orchestrate through Paseo.
+- Every new role-managed target agent resolves exactly one of three foundation
+  roles.
+- Codex and Claude receive byte-identical role instruction segments.
+- Resume uses persisted prompt and policy bytes after role sources change.
+- Human can staff any tier; agents follow Supervisor-to-Lead-to-Peer only.
+- Agent staffing enforces one Lead per project and four Peers per Lead.
+- Supervisor cannot mutate project files; Peer cannot orchestrate agents.
 - Native provider subagents are disabled for all roles.
+- Supervisor archive does not archive Lead; Lead archive cascades to Peer.
+- Runtime catalog drift fails explicitly without fallback.
+- Unauthorized catalog entries and direct invocations are denied at runtime.
+- Role labels are role-first and assignments are not treated as authority roles.
 - Existing roleless conversations still resume without inferred roles.
-- UI role labels contain no `Codex` or `Claude` prefix.
-- The target workstation no longer depends on role-specific wrapper providers
-  after native roles are verified.
+- Production stays untouched until the isolated six-combination and mixed-room
+  verification passes.
