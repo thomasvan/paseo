@@ -43,8 +43,8 @@ that residual honestly.
 
 ## Non-goals
 
-- Phase 1 does not add role schemas, persisted role snapshots, protocol fields,
-  feature gates, error codes, or role-specific UI.
+- Phase 1 does not add role schemas, daemon-persisted role snapshots, protocol
+  fields, feature gates, error codes, or role-specific UI.
 - Phase 1 does not claim mechanical enforcement of the staffing graph or limits.
 - A challenger, reviewer, implementer, or owner is never a fourth foundation
   role.
@@ -193,10 +193,13 @@ instead of duplicating a second credential plan here.
 The custom provider id is the Phase 1 role-routing identity. Paseo already
 persists it with provider/model/mode/thinking settings.
 
-The wrapper re-reads the current shared profile on every launch, including
-resume. Editing `runtime/` therefore updates resumed seats. Git records the
-change, but resume is not byte-stable. Phase 2 adds byte-stable identity only if
-that property is still required after bridge operation.
+For Paseo-managed Claude seats, the launcher pins the profile bytes per seat on
+first launch and resumes from the pin (build plan §4.1), so editing `runtime/`
+affects new seats and direct terminal launches only. The pin is same-user
+wrapper state — tamper-evident, not a trusted record. Codex seats share the
+per-role materialized config, so a re-sync still updates their instructions on
+next launch. Module B remains the trusted, daemon-persisted form of this
+property and extends it to every provider.
 
 ### Phase 1 acceptance
 
@@ -211,8 +214,10 @@ Phase 1 is complete when the implementation plan verifies:
 - Supervisor archive leaves the detached Lead active;
 - Lead archive cascades to its Peers;
 - Peer has no configured Paseo MCP server;
-- the open-endpoint, password-token, limit, and resume-drift residuals are
-  documented rather than represented as enforced.
+- a Paseo-managed Claude seat resumes with its pinned instruction bytes after a
+  profile edit, and a corrupt pin refuses to launch;
+- the open-endpoint, password-token, limit, Codex resume-drift, and
+  untrusted-pin residuals are documented rather than represented as enforced.
 
 Phase 1 changes no wire schema. Its tests and rollout live only in the build
 plan.
@@ -245,9 +250,9 @@ are redacted from logs and persisted records.
 
 ### Module B: byte-stable role binding
 
-**Observed Phase 1 gap:** editing a profile changes the role instructions used by
-an existing seat on its next resume, and provider id alone is not an immutable
-authority record.
+**Observed Phase 1 gap:** the Claude launcher pin is same-user wrapper state
+outside daemon persistence, Codex seats still take re-synced instructions on
+their next launch, and provider id alone is not an immutable authority record.
 
 **Deliverable:** an optional immutable `RoleBinding` stores one of the three
 foundation roles, exact instruction bytes, binding-format version, and digest
