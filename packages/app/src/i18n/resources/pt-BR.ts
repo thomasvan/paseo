@@ -81,9 +81,11 @@ export const ptBR: TranslationResources = {
       desktop: "Envie uma mensagem ao agente, marque @files ou use /commands e /skills",
       mobile: "Mensagem, @files, /commands",
       fallback: "Mensagem...",
+      terminal: "Prompt",
     },
     input: {
       accessibilityLabel: "Enviar mensagem ao agente...",
+      terminalAccessibilityLabel: "Terminal prompt",
       focusHint: "{{shortcut}} para focar",
       addAttachment: "Adicionar anexo",
       interruptAgent: "Interromper agente",
@@ -232,8 +234,13 @@ export const ptBR: TranslationResources = {
   sessions: {
     title: "Histórico de agentes",
     empty: "Nenhuma sessão ainda",
+    noMatches: "Nenhuma sessão corresponde",
+    tooManyMatches: "Muitos resultados — refine a busca",
+    hostLoadFailed: "{{host}}: Não foi possível carregar o histórico",
+    searchPlaceholder: "Buscar no histórico",
     actions: {
       loadMore: "Carregar mais",
+      clearSearch: "Limpar busca",
     },
   },
   agentList: {
@@ -969,7 +976,7 @@ export const ptBR: TranslationResources = {
       discord: "Discord",
       github: "Criar issue no GitHub",
       whatsNew: "Novidades",
-      version: "Paseo {{version}}",
+      appName: "Paseo",
     },
     sections: {
       sessions: "Histórico",
@@ -1074,14 +1081,29 @@ export const ptBR: TranslationResources = {
       composerStateRequired: "O estado do composer é obrigatório",
       selectModel: "Selecione um modelo",
     },
+    tooltips: {
+      project: "Choose the project",
+      host: "Choose the host",
+      isolation: "Choose the isolation level",
+      startingRef: "Escolha de onde começar",
+      launch: "Choose what to launch",
+    },
     refPicker: {
       startingRef: "Ref inicial",
-      chooseStart: "Escolha de onde começar",
       intoBase: "em {{baseRef}}",
       searching: "Buscando...",
       noMatchingRefs: "Nenhuma ref correspondente.",
       searchPlaceholder: "Buscar branches e PRs",
       title: "Começar de",
+    },
+    launch: {
+      title: "What to launch",
+      chat: "Chat",
+      terminal: "Terminal",
+      manageProfiles: "Manage profiles",
+      submit: "Launch",
+      promptPlaceholder: "Prompt {{name}}",
+      commandPlaceholder: "Run a command, or leave empty for a blank terminal",
     },
   },
   desktop: {

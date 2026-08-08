@@ -81,9 +81,11 @@ export const zhCN: TranslationResources = {
       desktop: "给 Agent 发消息，标记 @files，或使用 /commands 和 /skills",
       mobile: "发消息，@files，/commands",
       fallback: "输入消息...",
+      terminal: "Prompt",
     },
     input: {
       accessibilityLabel: "给 Agent 发消息...",
+      terminalAccessibilityLabel: "Terminal prompt",
       focusHint: "{{shortcut}} 聚焦",
       addAttachment: "添加附件",
       interruptAgent: "中断 Agent",
@@ -229,8 +231,13 @@ export const zhCN: TranslationResources = {
   sessions: {
     title: "历史",
     empty: "还没有会话",
+    noMatches: "没有匹配的会话",
+    tooManyMatches: "匹配过多 — 请缩小搜索范围",
+    hostLoadFailed: "{{host}}：无法加载历史",
+    searchPlaceholder: "搜索历史",
     actions: {
       loadMore: "加载更多",
+      clearSearch: "清除搜索",
     },
   },
   agentList: {
@@ -939,7 +946,7 @@ export const zhCN: TranslationResources = {
       discord: "Discord",
       github: "创建 GitHub Issue",
       whatsNew: "新功能",
-      version: "Paseo {{version}}",
+      appName: "Paseo",
     },
     sections: {
       sessions: "历史",
@@ -1041,14 +1048,29 @@ export const zhCN: TranslationResources = {
       composerStateRequired: "Composer 状态必填",
       selectModel: "请选择模型",
     },
+    tooltips: {
+      project: "Choose the project",
+      host: "Choose the host",
+      isolation: "Choose the isolation level",
+      startingRef: "选择起始位置",
+      launch: "Choose what to launch",
+    },
     refPicker: {
       startingRef: "起始 ref",
-      chooseStart: "选择起始位置",
       intoBase: "进入 {{baseRef}}",
       searching: "正在搜索...",
       noMatchingRefs: "没有匹配的 refs。",
       searchPlaceholder: "搜索分支和 PR",
       title: "起始位置",
+    },
+    launch: {
+      title: "What to launch",
+      chat: "Chat",
+      terminal: "Terminal",
+      manageProfiles: "Manage profiles",
+      submit: "Launch",
+      promptPlaceholder: "Prompt {{name}}",
+      commandPlaceholder: "Run a command, or leave empty for a blank terminal",
     },
   },
   desktop: {
