@@ -17,12 +17,16 @@ The SLP orchestration model (Supervisor > Lead > Peers, see `SLP-docs/`) runs lo
 agents as Paseo subagents. Upstream's finish-notification behavior broke that model in
 four ways; all four are fixed here.
 
-Three of them — `closed-wakeup`, `response-cap`, `wakeup-each` — are in flight upstream as
-a single PR, [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879).
-`detached-wakeup` was found later, by an end-to-end room run, and is not in it. When a
-patch lands upstream, the next `upstream/main` sync brings it in: drop its `SLP-PATCH(`
-markers, delete its section below, and keep the `.slp.test.ts` files only for whatever
-upstream did not take.
+All four are in flight upstream, as two independent PRs:
+
+| PR                                                   | Patches                                        | Touches           |
+| ---------------------------------------------------- | ---------------------------------------------- | ----------------- |
+| [#2879](https://github.com/getpaseo/paseo/pull/2879) | `closed-wakeup`, `response-cap`, `wakeup-each` | `agent-prompt.ts` |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                              | `create.ts`       |
+
+They share no files and can land in either order. When a patch lands upstream, the next
+`upstream/main` sync brings it in: drop its `SLP-PATCH(` markers, delete its section below,
+and keep the `.slp.test.ts` files only for whatever upstream did not take.
 
 ## Patches
 
@@ -78,8 +82,12 @@ upstream did not take.
   and why upstream's guard semantics are left exactly as upstream tests them.
 - **Scope:** `create.ts` is the only caller that passed `requireParentOwnership: true`.
   `paseo-tools.ts` omits it (defaults false), where the guard never ran.
-- **Upstream status:** not submitted. Worth a follow-up PR once #2879 resolves; it changes
-  one argument and no upstream test, so it should be an easier sell than `wakeup-each`.
+- **Upstream status:** submitted — [getpaseo/paseo#3094](https://github.com/getpaseo/paseo/pull/3094)
+  (branch `fix/detached-child-finish-notification`, off `upstream/main`, marker and SLP
+  wording stripped). Independent of #2879, which is entirely in `agent-prompt.ts`; the two
+  can land in either order. The upstream branch puts its tests in `create.test.ts` rather
+  than a `.slp.` file, so if it merges, delete `create.slp.test.ts` here rather than trying
+  to reconcile the two.
 
 ## Sync procedure
 
