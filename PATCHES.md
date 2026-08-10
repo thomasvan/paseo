@@ -13,9 +13,9 @@ does not own. Merge conflicts with upstream are only possible in those two sourc
 
 ## Why these patches exist
 
-The SLP orchestration model (Supervisor > Lead > Peers, see `SLP-docs/`) runs long-lived
-agents as Paseo subagents. Upstream's finish-notification behavior broke that model in
-four ways; all four are fixed here.
+The SLP room-workflow repository uses this checkout as its editable `paseo/` submodule.
+Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
+finish-notification behavior broke that model in four ways; all four are fixed here.
 
 All four are in flight upstream, as two independent PRs:
 
@@ -69,8 +69,8 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
 - **Why it matters here:** SLP Leads are spawned detached by design, so no Supervisor in
   the room ever got a Lead-finish wakeup. Measured in an end-to-end run: the Lead finished
   at 13:43:39Z and the Supervisor did not stir until 14:07:25.581Z — 23m46s of silence,
-  ended by an unrelated heartbeat sweep rather than by the notification
-  (`SLP-docs/docs/research-notes.md` §10).
+  ended by an unrelated heartbeat sweep rather than by the notification (the room-workflow
+  repository's `docs/research-notes.md` §10).
 - **Why not fix it in `agent-prompt.ts` like the others:** the first attempt narrowed the
   guard inside `setupFinishNotification` by snapshotting ownership when the watcher armed.
   It fails upstream's own test — `agent-prompt.test.ts`, "detaching a child ends its
