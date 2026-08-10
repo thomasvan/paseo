@@ -1015,6 +1015,20 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .describe(
         "Get notified when the created agent finishes, errors, or needs permission. Set false only for truly fire-and-forget agents.",
       ),
+    // SLP-PATCH(detached-arg): the canonical schema hardcoded `detached: false`,
+    // so a detached child could only be requested through the COMPAT nested
+    // `relationship` shape — which the schema does not advertise. A client that
+    // trusts the advertised schema therefore cannot express the request at all;
+    // it serializes the unknown key as a string and the daemon rejects it.
+    // No `.default()`: a default makes the tool schema inject the key into every
+    // parsed call, and the COMPAT legacy schema is `.strict()`, so legacy
+    // placements would start failing on an unrecognized `detached`.
+    detached: z
+      .boolean()
+      .optional()
+      .describe(
+        "Create a root agent instead of a child on your subagent track. A detached agent does not appear in your subagent track and is not archived when you are.",
+      ),
   };
   const canonicalTopLevelInputSchema = {
     ...canonicalCreateAgentFields,
@@ -1565,7 +1579,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return {
         kind: "agent-scoped",
         parsedArgs: parsed,
-        detached: false,
+        // SLP-PATCH(detached-arg): honour the advertised flag.
+        detached: parsed.detached ?? false,
         cwd,
         workspaceId,
         worktree: undefined,

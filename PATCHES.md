@@ -6,23 +6,28 @@ Every patch site in code is marked `SLP-PATCH(<name>)`. `rg "SLP-PATCH\("` lists
 When syncing with upstream, merge `upstream/main` into this branch; if a hunk
 conflicts, the marker plus this file is enough to re-apply the intent by hand.
 
-Patches live in **two source files** — `packages/server/src/server/agent/agent-prompt.ts`
-and one argument in `packages/server/src/server/agent/create-agent/create.ts` — with their
-tests in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream
-does not own. Merge conflicts with upstream are only possible in those two source files.
+Patches live in **three source files** — `packages/server/src/server/agent/agent-prompt.ts`,
+one argument in `packages/server/src/server/agent/create-agent/create.ts`, and one schema
+field in `packages/server/src/server/agent/tools/paseo-tools.ts`. Tests for the first two
+are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
+not own. `detached-arg` is the exception: its behaviour only shows through a live MCP tool
+call, so its two tests sit in upstream's `mcp-parity.e2e.test.ts` next to the legacy-shape
+test they mirror. They carry no marker, so if upstream takes them the files converge instead
+of conflicting.
 
 ## Why these patches exist
 
 The SLP room-workflow repository uses this checkout as its editable `paseo/` submodule.
 Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
-finish-notification behavior broke that model in four ways; all four are fixed here.
+finish-notification behavior broke that model in five ways; all five are fixed here.
 
-All four are in flight upstream, as two independent PRs:
+All five are in flight upstream, as three independent PRs:
 
 | PR                                                   | Patches                                        | Touches           |
 | ---------------------------------------------------- | ---------------------------------------------- | ----------------- |
 | [#2879](https://github.com/getpaseo/paseo/pull/2879) | `closed-wakeup`, `response-cap`, `wakeup-each` | `agent-prompt.ts` |
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                              | `create.ts`       |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                 | `paseo-tools.ts`  |
 
 They share no files and can land in either order. When a patch lands upstream, the next
 `upstream/main` sync brings it in: drop its `SLP-PATCH(` markers, delete its section below,
@@ -89,6 +94,28 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   than a `.slp.` file, so if it merges, delete `create.slp.test.ts` here rather than trying
   to reconcile the two.
 
+### detached-arg
+
+- **What:** the agent-scoped `create_agent` schema gains an optional `detached` boolean, and
+  the canonical branch returns `parsed.detached ?? false` instead of a hardcoded `false`.
+  Upstream can only be asked for a detached child through the COMPAT nested `relationship`
+  shape, which the advertised schema does not mention — so the canonical schema had no way
+  to express the request at all.
+- **Why it matters here:** a client that trusts the advertised schema serializes the unknown
+  `relationship` key as a _string_, and the daemon rejects it with
+  `expected object, received string`. Measured on 2026-08-10 with daemon 0.3.1: the same
+  prompt from a Codex seat sent `"relationship":{"kind":"detached"}` and succeeded, from a
+  Claude seat sent `"relationship":"{\"kind\": \"detached\"}"` and failed. So a Claude
+  Supervisor could not open a detached Lead — the core SLP staffing move.
+- **No `.default(false)`:** a default makes the tool schema inject `detached` into _every_
+  parsed call, and the legacy schema is `.strict()`, so legacy placements start failing on
+  the unrecognized key. This was caught by three upstream tests in `mcp-parity.e2e.test.ts`
+  going red; keep the field `.optional()` and coalesce at the read site.
+- **Relation to `detached-wakeup`:** that patch makes a detached child _notify_ its caller;
+  this one makes a detached child _requestable_ from the canonical shape. Independent fixes,
+  different files.
+- **Upstream status:** submitted — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, off `upstream/main`, marker and SLP wording stripped).
+
 ## Sync procedure
 
 ```bash
@@ -99,6 +126,7 @@ npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=
 npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.test.ts --bail=1
+npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts
 git push origin slp/patches
 ```
 
