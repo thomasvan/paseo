@@ -21,13 +21,19 @@ The SLP room-workflow repository uses this checkout as its editable `paseo/` sub
 Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
 finish-notification behavior broke that model in five ways; all five are fixed here.
 
-All five are in flight upstream, as three independent PRs:
+Two have landed upstream. Three are still in flight:
 
-| PR                                                   | Patches                                        | Touches           |
-| ---------------------------------------------------- | ---------------------------------------------- | ----------------- |
-| [#2879](https://github.com/getpaseo/paseo/pull/2879) | `closed-wakeup`, `response-cap`, `wakeup-each` | `agent-prompt.ts` |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                              | `create.ts`       |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                 | `paseo-tools.ts`  |
+| PR                                                   | Patches                         | Touches           | Status             |
+| ---------------------------------------------------- | ------------------------------- | ----------------- | ------------------ |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | `closed-wakeup`, `response-cap` | `agent-prompt.ts` | landed `cdb116314` |
+| [#2879](https://github.com/getpaseo/paseo/pull/2879) | `wakeup-each`                   | `agent-prompt.ts` | in flight          |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`               | `create.ts`       | in flight          |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                  | `paseo-tools.ts`  | in flight          |
+
+#2879 carried three patches and upstream took two of them, as #3192. `wakeup-each` was left
+behind — it is the one that changes default behavior for existing upstream callers. Delete
+the two landed sections in the merge commit that brings #3192 in, not before: until that
+merge, this branch still carries its own copies and they still need markers.
 
 They share no files and can land in either order. When a patch lands upstream, the next
 `upstream/main` sync brings it in: drop its `SLP-PATCH(` markers, delete its section below,
@@ -41,7 +47,7 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   a watched child agent is killed/closed before finishing. Upstream set `fired = true`
   and unsubscribed silently, so the calling agent (Supervisor/Lead) never woke up and
   waited forever on a dead delegation.
-- **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped).
+- **Upstream status:** landed — [getpaseo/paseo#3192](https://github.com/getpaseo/paseo/pull/3192), commit `cdb116314`. Upstream's `notifySafely("was closed")` is this patch. Delete this section and the local markers when the merge lands.
 
 ### response-cap
 
@@ -49,7 +55,7 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   truncated at `FINISH_NOTIFICATION_MESSAGE_LIMIT` (4000 chars) with a pointer to
   `get_agent_activity` for the full text. Prevents one verbose Peer from blowing out the
   caller's context window.
-- **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped).
+- **Upstream status:** landed — [getpaseo/paseo#3192](https://github.com/getpaseo/paseo/pull/3192), commit `cdb116314`. Upstream uses the same 4000-char limit and the same `get_agent_activity` pointer. Delete this section and the local markers when the merge lands.
 
 ### wakeup-each
 
@@ -61,7 +67,8 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   plumbing changes in `create.ts` / `paseo-tools.ts`. An earlier revision threaded an
   opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
   right artifact if upstream asks for this to be opt-in.
-- **Upstream status:** submitted — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped). This one changes default behavior for existing upstream callers, so it is the likeliest of the three to be pushed back on.
+- **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
+- **Upstream status:** in flight — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped). Upstream took the other two patches from this PR as #3192 and left this one, which changes default behavior for existing upstream callers.
 
 ### detached-wakeup
 
@@ -118,8 +125,24 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
 
 ## Sync procedure
 
+First, check whether upstream touched the patched files since the last sync:
+
 ```bash
 git fetch upstream
+git diff --name-only $(git merge-base HEAD upstream/main) upstream/main -- \
+  packages/server/src/server/agent/agent-prompt.ts \
+  packages/server/src/server/agent/create-agent/create.ts \
+  packages/server/src/server/agent/tools/paseo-tools.ts
+```
+
+Empty output means a conflict-free merge for the patches. Non-empty output is the normal
+case once patches start landing, and it means read the upstream commits before merging —
+a patch of yours may have landed, been redesigned, or had its insertion point rewritten.
+`git log $(git merge-base HEAD upstream/main)..upstream/main -- <file>` names them.
+
+Then merge:
+
+```bash
 git merge upstream/main       # merge, not rebase: pushed history stays stable, no force-push
 rg "SLP-PATCH\("              # verify every marker survived the merge
 npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=1
@@ -134,15 +157,26 @@ Run the two upstream-owned files (`agent-prompt.test.ts`, `create.test.ts`) too,
 the `.slp.` ones: they are the tripwire for a patch that contradicts upstream intent, which
 is how `detached-wakeup` got redesigned before landing.
 
-Before merging, check whether upstream touched the patched files since the last sync:
-
-```bash
-git diff --name-only $(git merge-base HEAD upstream/main) upstream/main -- \
-  packages/server/src/server/agent/agent-prompt.ts \
-  packages/server/src/server/agent/create-agent/create.ts
-```
-
-Empty output means a conflict-free merge for the patches.
-
 Update this file in the same commit as any new patch. One section per patch; delete the
 section when a patch lands upstream.
+
+### After the push
+
+Four more steps have to run after the push before a sync reaches a seat. Each is owned by
+the parent SLP repository, so this list links out rather than restating them:
+
+1. **Rebuild, then restart.** `npm run build:server && npm run build:daemon-web-ui`, then
+   restart the daemon. Global `paseo` is an npm link into `packages/cli`, so the daemon
+   serves whatever `packages/server/dist` holds at start time — restarting without
+   rebuilding serves the old dist and nothing explains why. See the parent repo's
+   `INSTALL.md`. Never restart the daemon on port 6767 without explicit human permission;
+   it kills every running agent, often including the one asking.
+2. **Bump the parent gitlink.** The superproject pins this checkout by commit. Commit the
+   moved gitlink from the parent repo root and open a PR to `master`. See `AGENTS.md`.
+3. **Publish to the deployment worktree.** Once CI is green and the PR is merged,
+   fast-forward `~/.config/airoom` and update its submodule pointer. The fast-forward is
+   the publish step — until it runs, no seat sees the merge. See `AGENTS.md`.
+4. **Refresh vendored skills if they moved.** `skills/paseo` and `skills/paseo-handoff` are
+   copied into the parent repo, not symlinked, and pinned by commit in the parent's
+   `skills/VENDORED.md`. If this sync changed `skills/` here, re-copy and read the diff.
+   Check with `git diff --name-only <old-gitlink>..HEAD -- skills/`.
