@@ -1,12 +1,16 @@
-// SLP-PATCH coverage (closed-wakeup, response-cap, wakeup-each).
+// SLP-PATCH coverage (wakeup-each).
 // Lives in its own file so agent-prompt.test.ts stays byte-identical with
 // upstream and can never conflict on merge — see PATCHES.md.
+//
+// closed-wakeup and response-cap used to be covered here. They landed upstream
+// as #3192; upstream's own "closing a watched child notifies the caller" and
+// "finish notifications truncate oversized child responses" own them now.
 import { expect, test } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
-import { formatSystemNotificationPrompt, setupFinishNotification } from "./agent-prompt.js";
+import { setupFinishNotification } from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 
 interface SlpScenarioOptions {
@@ -17,7 +21,6 @@ interface SlpScenarioOptions {
 interface SlpScenario {
   startWatchingChild(): void;
   finishChild(): void;
-  closeChild(): void;
   flush(): Promise<void>;
   parentPrompts: string[];
   isSubscribed(): boolean;
@@ -31,6 +34,10 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
   Reflect.set(childAgent, "id", "child-agent");
   Reflect.set(childAgent, "lifecycle", "idle");
   Reflect.set(childAgent, "config", { title: "Child Agent" });
+  // Upstream's permission gate reads pendingPermissions on every "running"
+  // event. Reflect.set builds this stub past the type checker, so a missing
+  // field surfaces as a runtime TypeError, not a compile error.
+  Reflect.set(childAgent, "pendingPermissions", new Map());
 
   // The caller must resolve as a live agent: notify() delivers through
   // sendPromptToAgent → ensureAgentLoaded, which throws if the caller is
@@ -103,10 +110,6 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
       emitLifecycle("running");
       emitLifecycle("idle");
     },
-    closeChild() {
-      emitLifecycle("running");
-      emitLifecycle("closed");
-    },
     async flush() {
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
@@ -116,37 +119,6 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
     },
   };
 }
-
-// SLP-PATCH(closed-wakeup)
-test("closing a watched child notifies the caller it was closed", async () => {
-  const scenario = createSlpScenario({ childLastAssistantMessage: null });
-
-  scenario.startWatchingChild();
-  scenario.closeChild();
-  await scenario.flush();
-
-  expect(scenario.parentPrompts).toEqual([
-    formatSystemNotificationPrompt("Agent child-agent (Child Agent) was closed."),
-  ]);
-  expect(scenario.isSubscribed()).toBe(false);
-});
-
-// SLP-PATCH(response-cap)
-test("finish notifications truncate oversized child responses", async () => {
-  const head = "x".repeat(4000);
-  const tail = "TAIL-MARKER".repeat(50);
-  const scenario = createSlpScenario({ childLastAssistantMessage: head + tail });
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush();
-
-  expect(scenario.parentPrompts).toHaveLength(1);
-  expect(scenario.parentPrompts[0]).toContain(
-    `[truncated ${tail.length} chars — use get_agent_activity for the full response]`,
-  );
-  expect(scenario.parentPrompts[0]).not.toContain("TAIL-MARKER");
-});
 
 // SLP-PATCH(wakeup-each)
 test("the watcher re-arms: every finish of the child notifies the caller", async () => {
