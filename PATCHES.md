@@ -17,7 +17,7 @@ of conflicting.
 
 ## Why these patches exist
 
-The SLP room-workflow repository uses this checkout as its editable `paseo/` submodule.
+The SLP room repository — named `room-workflow` until 2026-08-10, now `airoom` — uses this checkout as its editable `paseo/` submodule.
 Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
 finish-notification behavior broke that model in five ways; all five are fixed here.
 
