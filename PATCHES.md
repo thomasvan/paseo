@@ -19,43 +19,47 @@ of conflicting.
 
 The SLP room repository — named `room-workflow` until 2026-08-10, now `airoom` — uses this checkout as its editable `paseo/` submodule.
 Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
-finish-notification behavior broke that model in five ways; all five are fixed here.
+finish-notification behavior broke that model in five ways — two are now fixed upstream and
+three are still carried here — and its native host-tool channel broke the omp family in a
+sixth, unrelated way.
 
-Two have landed upstream. Three are still in flight:
+Two have landed upstream and their sections are gone. Four patches remain here:
 
-| PR                                                   | Patches                         | Touches           | Status             |
-| ---------------------------------------------------- | ------------------------------- | ----------------- | ------------------ |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | `closed-wakeup`, `response-cap` | `agent-prompt.ts` | landed `cdb116314` |
-| [#2879](https://github.com/getpaseo/paseo/pull/2879) | `wakeup-each`                   | `agent-prompt.ts` | in flight          |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`               | `create.ts`       | in flight          |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                  | `paseo-tools.ts`  | in flight          |
+| PR                                                   | Patches           | Touches                  | Status                     |
+| ---------------------------------------------------- | ----------------- | ------------------------ | -------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                 | `agent-prompt.ts`        | landed `cdb116314`, synced |
+| —                                                    | `wakeup-each`     | `agent-prompt.ts`        | **no open PR**             |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup` | `create-agent/create.ts` | open                       |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`    | `paseo-tools.ts`         | open                       |
+| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin` | omp provider, config  | open                       |
 
-#2879 carried three patches and upstream took two of them, as #3192. `wakeup-each` was left
-behind — it is the one that changes default behavior for existing upstream callers. Delete
-the two landed sections in the merge commit that brings #3192 in, not before: until that
-merge, this branch still carries its own copies and they still need markers.
+`closed-wakeup` and `response-cap` are upstream's code now. #2879 carried all three and the
+maintainer closed it on 2026-08-11 as superseded by #3192 — *"which carries the closed-child
+wakeup and response truncation onto current main with your authorship preserved"* — taking
+two and leaving `wakeup-each`, the one that changes default behavior for existing upstream
+callers. That sync has since happened: `cdb116314` and `334bf6237` are both ancestors of this
+branch, the two markers are gone, and `wakeup-each` was re-applied onto the new shape as
+`notifySafely("finished", { terminal: false })` rather than as a restored diff.
 
-They share no files and can land in either order. When a patch lands upstream, the next
-`upstream/main` sync brings it in: drop its `SLP-PATCH(` markers, delete its section below,
-and keep the `.slp.test.ts` files only for whatever upstream did not take.
+**`wakeup-each` therefore has no upstream home.** It is a live fork-only patch with a closed
+PR behind it. Re-submitting it needs the opt-in shape the closure implies — the
+`notifyMode: "once" | "each"` parameter described under its entry — not another attempt at
+changing the default. Until then it stays here and is re-applied on every sync.
+
+**Re-verified against `upstream/main` `8c4e54eac` on 2026-08-16.** Upstream has fixed none
+of the four: `notifySafely("finished")` still takes no `terminal` option, `create-agent/create.ts`
+still hardcodes `requireParentOwnership: true`, the canonical `create_agent` branch still returns
+`detached: false` with no `detached` field on the advertised schema, and the omp provider still
+has no `paseoTools`. All three open PR branches still merge into current `upstream/main` without
+conflict and their fixes survive the merge, so none needs rebasing to stay applicable —
+`#3094` and `#3147` are 94 and 89 commits behind and still clean because upstream has not
+touched the lines they change.
+
+The remaining patches share no files and can land in any order. When one lands upstream, the
+next `upstream/main` sync brings it in: drop its `SLP-PATCH(` markers, delete its section
+below, and keep the `.slp.test.ts` files only for whatever upstream did not take.
 
 ## Patches
-
-### closed-wakeup
-
-- **What:** `setupFinishNotification` now fires a `"was closed"` finish notification when
-  a watched child agent is killed/closed before finishing. Upstream set `fired = true`
-  and unsubscribed silently, so the calling agent (Supervisor/Lead) never woke up and
-  waited forever on a dead delegation.
-- **Upstream status:** landed — [getpaseo/paseo#3192](https://github.com/getpaseo/paseo/pull/3192), commit `cdb116314`. Upstream's `notifySafely("was closed")` is this patch. Delete this section and the local markers when the merge lands.
-
-### response-cap
-
-- **What:** the child's last assistant message embedded in a finish notification is
-  truncated at `FINISH_NOTIFICATION_MESSAGE_LIMIT` (4000 chars) with a pointer to
-  `get_agent_activity` for the full text. Prevents one verbose Peer from blowing out the
-  caller's context window.
-- **Upstream status:** landed — [getpaseo/paseo#3192](https://github.com/getpaseo/paseo/pull/3192), commit `cdb116314`. Upstream uses the same 4000-char limit and the same `get_agent_activity` pointer. Delete this section and the local markers when the merge lands.
 
 ### wakeup-each
 
@@ -68,11 +72,11 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
   right artifact if upstream asks for this to be opt-in.
 - **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
-- **Upstream status:** in flight — [getpaseo/paseo#2879](https://github.com/getpaseo/paseo/pull/2879) (branch `fix/finish-notification-closed-wakeup`, markers stripped). Upstream took the other two patches from this PR as #3192 and left this one, which changes default behavior for existing upstream callers.
+- **Upstream status:** **no open PR.** [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one. Verified against `upstream/main` on 2026-08-16: `notifySafely("finished")` is still called without `{ terminal: false }`, so upstream still unsubscribes after the first finish and the patch is still needed. A resubmission should offer the opt-in `notifyMode: "once" | "each"` shape rather than changing the default again, which is the objection that closed it.
 
 ### detached-wakeup
 
-- **What:** `create.ts` passes `requireParentOwnership: !input.detached` instead of a
+- **What:** `create-agent/create.ts` passes `requireParentOwnership: !input.detached` instead of a
   hardcoded `true`. The guard asks the watcher to check, at fire time, whether the child
   is still labelled as the caller's. For a child created detached, `resolveCreateAgentIntent`
   strips that label on purpose (`intent.ts`, `legacyDetached` branch), so the guard can
@@ -92,12 +96,12 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   can tell them apart. The distinguishing fact — that the caller explicitly asked for a
   detached child — exists only at the create call site, which is why the patch lives there
   and why upstream's guard semantics are left exactly as upstream tests them.
-- **Scope:** `create.ts` is the only caller that passed `requireParentOwnership: true`.
+- **Scope:** `create-agent/create.ts` is the only caller that passed `requireParentOwnership: true`.
   `paseo-tools.ts` omits it (defaults false), where the guard never ran.
 - **Upstream status:** submitted — [getpaseo/paseo#3094](https://github.com/getpaseo/paseo/pull/3094)
   (branch `fix/detached-child-finish-notification`, off `upstream/main`, marker and SLP
-  wording stripped). Independent of #2879, which is entirely in `agent-prompt.ts`; the two
-  can land in either order. The upstream branch puts its tests in `create.test.ts` rather
+  wording stripped). Independent of `wakeup-each`, which is entirely in `agent-prompt.ts`;
+  the two can land in either order. The upstream branch puts its tests in `create.test.ts` rather
   than a `.slp.` file, so if it merges, delete `create.slp.test.ts` here rather than trying
   to reconcile the two.
 
