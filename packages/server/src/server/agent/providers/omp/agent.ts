@@ -458,11 +458,15 @@ function readNativeMessageId(
   return typeof message.entryId === "string" ? message.entryId : undefined;
 }
 
-function withOmpCapabilities(): AgentCapabilityFlags {
+// SLP-PATCH(native-tools-optin): the native-tools capability was a constant, so
+// every omp provider advertised it and the only control was the daemon-wide
+// flag. A room needs its Peer seats to hold no orchestration tools while its
+// Lead and Supervisor do, which is a per-provider decision.
+function withOmpCapabilities(paseoTools = true): AgentCapabilityFlags {
   return {
     ...OMP_CORE_CAPABILITIES,
     supportsMcpServers: false,
-    supportsNativePaseoTools: true,
+    supportsNativePaseoTools: paseoTools,
   };
 }
 
@@ -2179,7 +2183,9 @@ export class OmpAgentSession implements AgentSession {
 
 export class OmpAgentClient implements AgentClient {
   readonly provider: AgentProvider = OMP_PROVIDER;
-  readonly capabilities: AgentCapabilityFlags = withOmpCapabilities();
+  // SLP-PATCH(native-tools-optin): assigned in the constructor, because it now
+  // depends on this provider's own params.
+  readonly capabilities: AgentCapabilityFlags;
 
   private readonly logger: Logger;
   private readonly runtimeSettings?: ProviderRuntimeSettings;
@@ -2195,6 +2201,8 @@ export class OmpAgentClient implements AgentClient {
     const { runtimeProviderParams, modelRoleParams } = resolveOmpProviderParams(
       options.providerParams,
     );
+    // SLP-PATCH(native-tools-optin)
+    this.capabilities = withOmpCapabilities(runtimeProviderParams.paseoTools);
     const runtimeSettings = mergeOmpRuntimeSettings(
       {
         command: {

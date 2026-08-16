@@ -123,6 +123,30 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   different files.
 - **Upstream status:** submitted — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, off `upstream/main`, marker and SLP wording stripped).
 
+### native-tools-optin
+
+- **What:** Paseo's native host-tool channel (the one that carries `create_agent`
+  and friends to an omp seat) is no longer governed by `daemon.mcp.injectIntoAgents`,
+  and the per-provider `paseoTools` param decides whether a given omp provider's
+  seats receive it. Two changes, one cause. Upstream gated a non-MCP mechanism on
+  an MCP-injection flag, so a room that turns daemon-wide MCP injection off — as
+  this one does, because its launchers generate caller-scoped servers per seat and
+  an inherited one would be scoped to another agent — silently loses native tools
+  as collateral. And `supportsNativePaseoTools` was a constant `true`, so every omp
+  provider advertised the channel when the room needs its Peer seats to hold no
+  orchestration tools at all while its Lead and Supervisor do.
+  `daemon.mcp.nativeAgentTools` (default `true`) is the global switch; per-provider
+  `params.paseoTools` (default `true`) is the seat-level one.
+- **Why here:** measured in the omp pilot of 2026-08-16. An omp Lead attempting
+  `create_agent` returned `Unknown tool from js runtime`, while a codex Lead and a
+  claude Lead on the same daemon both created an omp Peer that ran and replied. The
+  difference was not the room's configuration: the caller-scoped endpoint answered
+  `initialize` with HTTP 200, and omp reaches its stdio MCP servers normally. It is
+  that omp's tools arrive over the native channel, and that channel was switched
+  off by a flag about something else.
+- **Upstream status:** not yet submitted. Coverage lives in
+  `packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts`.
+
 ## Sync procedure
 
 First, check whether upstream touched the patched files since the last sync:
