@@ -525,7 +525,12 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
 
   const initialConfig: MutableDaemonConfig = {
     relay: { enabled: config.relayEnabled ?? true },
-    mcp: { injectIntoAgents: config.mcpInjectIntoAgents ?? true },
+    // SLP-PATCH(native-tools-optin): seeded so a live toggle has a prior
+    // value to change from, and so the store can persist it.
+    mcp: {
+      injectIntoAgents: config.mcpInjectIntoAgents ?? true,
+      nativeAgentTools: config.mcpNativeAgentTools !== false,
+    },
     browserTools: { enabled: config.browserToolsEnabled ?? false },
     providers,
     metadataGeneration: {

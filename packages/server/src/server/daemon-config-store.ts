@@ -348,6 +348,11 @@ function mergeMutableConfigIntoPersistedConfig(params: {
       mcp: {
         ...persisted.daemon?.mcp,
         injectIntoAgents: mutable.mcp.injectIntoAgents,
+        // SLP-PATCH(native-tools-optin): without this a live opt-out is
+        // silently undone by the next restart.
+        ...(mutable.mcp.nativeAgentTools !== undefined
+          ? { nativeAgentTools: mutable.mcp.nativeAgentTools }
+          : {}),
       },
       browserTools: {
         ...persisted.daemon?.browserTools,

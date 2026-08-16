@@ -180,6 +180,9 @@ export const MutableDaemonConfigSchema = z
     mcp: z
       .object({
         injectIntoAgents: z.boolean(),
+        // SLP-PATCH(native-tools-optin): optional so a daemon that predates
+        // the field parses unchanged; absent reads as enabled everywhere.
+        nativeAgentTools: z.boolean().optional(),
       })
       .passthrough(),
     browserTools: MutableBrowserToolsConfigSchema.default({ enabled: false }),

@@ -6,11 +6,16 @@
 // orchestration tools while its Lead and Supervisor do, which is a per-provider
 // decision, and turning MCP injection off must not remove native tools as a
 // side effect.
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { DaemonConfigStore } from "../../../daemon-config-store.js";
+import { loadPersistedConfig } from "../../../persisted-config.js";
 import { OmpAgentClient } from "./agent.js";
 import { resolveOmpProviderParams } from "./provider-config.js";
 
@@ -71,5 +76,118 @@ describe("the live path matches the startup path", () => {
 
   it("rebinds native tools when their own field is toggled", () => {
     expect(handlerBody("mcp.nativeAgentTools")).toContain("setPaseoToolsEnabled");
+  });
+
+  // Also static: the store is constructed once, inside bootstrap. Without the
+  // seed the field is absent from the config the daemon reports, so a client
+  // reading it sees nothing while native tools are in fact on — the same
+  // two-surfaces-disagreeing shape this patch exists to remove.
+  it("seeds the field from the resolved config, so the reported value is true", () => {
+    const initial = bootstrap.slice(
+      bootstrap.indexOf("const initialConfig: MutableDaemonConfig"),
+      bootstrap.indexOf("browserTools:", bootstrap.indexOf("const initialConfig")),
+    );
+    expect(initial).toContain("nativeAgentTools: config.mcpNativeAgentTools !== false");
+  });
+});
+
+// The mutable schema is `.passthrough()`, so an undeclared key survives a parse
+// and the field would appear to work while being invisible to every consumer of
+// the schema — clients, the generated validators, and anyone reading it to learn
+// what a daemon can be told. Declared, not merely tolerated.
+describe("the mutable schema declares the field", () => {
+  it("accepts it and keeps the value", () => {
+    const parsed = MutableDaemonConfigSchema.parse({
+      mcp: { injectIntoAgents: false, nativeAgentTools: false },
+      providers: {},
+    });
+    expect(parsed.mcp.nativeAgentTools).toBe(false);
+  });
+
+  it("declares it optional, so a daemon predating the field still parses", () => {
+    const parsed = MutableDaemonConfigSchema.parse({
+      mcp: { injectIntoAgents: false },
+      providers: {},
+    });
+    expect(parsed.mcp.nativeAgentTools).toBeUndefined();
+  });
+
+  it("rejects a non-boolean rather than passing it through", () => {
+    expect(() =>
+      MutableDaemonConfigSchema.parse({
+        mcp: { injectIntoAgents: false, nativeAgentTools: "yes" },
+        providers: {},
+      }),
+    ).toThrow();
+  });
+});
+
+// A handler is only half a switch. `mcp.nativeAgentTools` also has to exist on
+// the mutable surface, be seeded from the resolved config, and survive a
+// restart — otherwise the field is unreachable, the handler never fires, and an
+// explicit live opt-out is silently undone the next time the daemon starts.
+describe("the native-tools field is a real, durable setting", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function storeWith(nativeAgentTools: boolean): {
+    store: DaemonConfigStore;
+    paseoHome: string;
+  } {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-native-tools-optin-"));
+    tempDirs.push(paseoHome);
+    return {
+      paseoHome,
+      store: new DaemonConfigStore(paseoHome, {
+        relay: { enabled: false },
+        mcp: { injectIntoAgents: false, nativeAgentTools },
+        browserTools: { enabled: false },
+        providers: {},
+        metadataGeneration: { providers: [] },
+        autoArchiveAfterMerge: false,
+        enableTerminalAgentHooks: false,
+        appendSystemPrompt: "",
+      }),
+    };
+  }
+
+  it("carries the seeded value, so the handler has a prior value to change from", () => {
+    const { store } = storeWith(true);
+    expect(store.get().mcp.nativeAgentTools).toBe(true);
+  });
+
+  it("fires its field change when patched live", () => {
+    const { store } = storeWith(true);
+    const changes: unknown[] = [];
+    store.onFieldChange("mcp.nativeAgentTools", (value) => changes.push(value));
+
+    store.patch({ mcp: { nativeAgentTools: false } });
+
+    expect(changes).toEqual([false]);
+  });
+
+  it("persists a live opt-out, so a restart does not undo it", () => {
+    const { store, paseoHome } = storeWith(true);
+
+    store.patch({ mcp: { nativeAgentTools: false } });
+
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp?.nativeAgentTools).toBe(false);
+  });
+
+  it("leaves native tools alone when only MCP injection is patched", () => {
+    const { store, paseoHome } = storeWith(true);
+    const changes: unknown[] = [];
+    store.onFieldChange("mcp.nativeAgentTools", (value) => changes.push(value));
+
+    store.patch({ mcp: { injectIntoAgents: true } });
+
+    expect(changes).toEqual([]);
+    expect(store.get().mcp.nativeAgentTools).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp?.nativeAgentTools).toBe(true);
   });
 });
