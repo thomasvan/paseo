@@ -28,7 +28,7 @@ Two have landed upstream and their sections are gone. Four patches remain here:
 | PR                                                   | Patches           | Touches                  | Status                     |
 | ---------------------------------------------------- | ----------------- | ------------------------ | -------------------------- |
 | [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                 | `agent-prompt.ts`        | landed `cdb116314`, synced |
-| —                                                    | `wakeup-each`     | `agent-prompt.ts`        | **no open PR**             |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`     | `agent-prompt.ts`        | open — **opt-in shape**    |
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup` | `create-agent/create.ts` | open                       |
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`    | `paseo-tools.ts`         | open                       |
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin` | omp provider, config  | open                       |
@@ -41,10 +41,18 @@ callers. That sync has since happened: `cdb116314` and `334bf6237` are both ance
 branch, the two markers are gone, and `wakeup-each` was re-applied onto the new shape as
 `notifySafely("finished", { terminal: false })` rather than as a restored diff.
 
-**`wakeup-each` therefore has no upstream home.** It is a live fork-only patch with a closed
-PR behind it. Re-submitting it needs the opt-in shape the closure implies — the
-`notifyMode: "once" | "each"` parameter described under its entry — not another attempt at
-changing the default. Until then it stays here and is re-applied on every sync.
+**`wakeup-each` was resubmitted as [#3455](https://github.com/getpaseo/paseo/pull/3455) in the
+opt-in shape**, which is the objection that closed #2879 answered rather than argued with:
+`notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, `"once"` the
+default and byte-identical to current upstream behaviour, `"each"` the re-arming one.
+
+**The fork and the PR deliberately differ.** This branch keeps the *derived* form — always
+re-arm, no parameter — because every child in this room is a long-lived seat driven across
+many turns, so an opt-in the room would pass on every single call is a parameter that only
+exists to be forgotten once. Upstream does not have that guarantee about its callers, which
+is exactly why the default-changing version was refused. If #3455 lands, this branch drops
+its local patch and the room starts passing `notifyMode: "each"` — a seat-facing change to
+the staffing prose, not just a submodule sync, so it does not ride an ordinary upgrade.
 
 **Re-verified against `upstream/main` `8c4e54eac` on 2026-08-16.** Upstream has fixed none
 of the four: `notifySafely("finished")` still takes no `terminal` option, `create-agent/create.ts`
@@ -72,7 +80,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
   right artifact if upstream asks for this to be opt-in.
 - **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
-- **Upstream status:** **no open PR.** [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one. Verified against `upstream/main` on 2026-08-16: `notifySafely("finished")` is still called without `{ terminal: false }`, so upstream still unsubscribes after the first finish and the patch is still needed. A resubmission should offer the opt-in `notifyMode: "once" | "each"` shape rather than changing the default again, which is the objection that closed it.
+- **Upstream status:** open — [getpaseo/paseo#3455](https://github.com/getpaseo/paseo/pull/3455), branch `fix/finish-watcher-notify-mode` off `upstream/main`, **in the opt-in shape**. [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 answers that: `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, `"once"` the default and byte-identical to current upstream, `"each"` the re-arming mode, the archived-caller disarm scoped to `"each"` so the existing path is untouched, and the field `.optional()` with no `.default()` for the `.strict()` reason recorded under `detached-arg`. Four tests, each mutation-checked. **This branch keeps the derived form instead** — see the note above the patch list for why, and for what changes here if #3455 lands.
 
 ### detached-wakeup
 
