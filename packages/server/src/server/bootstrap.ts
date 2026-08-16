@@ -1466,6 +1466,11 @@ export async function createPaseoDaemon(
             agentManager.setPaseoToolsEnabled(config.mcpNativeAgentTools !== false);
             daemonConfigStore.onFieldChange("mcp.injectIntoAgents", (value) => {
               agentManager.setMcpBaseUrl(value ? mcpBaseUrl : null);
+            });
+            // SLP-PATCH(native-tools-optin): the live path has to match the
+            // startup path, or toggling injectIntoAgents would still flip native
+            // tools and toggling nativeAgentTools would do nothing until restart.
+            daemonConfigStore.onFieldChange("mcp.nativeAgentTools", (value) => {
               agentManager.setPaseoToolsEnabled(value !== false);
             });
             daemonConfigStore.onFieldChange("appendSystemPrompt", (value) => {
