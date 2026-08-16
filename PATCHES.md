@@ -144,7 +144,9 @@ and keep the `.slp.test.ts` files only for whatever upstream did not take.
   `initialize` with HTTP 200, and omp reaches its stdio MCP servers normally. It is
   that omp's tools arrive over the native channel, and that channel was switched
   off by a flag about something else.
-- **Upstream status:** not yet submitted. Coverage lives in
+- **Upstream status:** submitted — [getpaseo/paseo#3449](https://github.com/getpaseo/paseo/pull/3449),
+  branch `feat/omp-native-tools-optin` off `upstream/main`. Delete this section and
+  the local markers if it lands. Coverage lives in
   `packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts`.
 
 ## Sync procedure
