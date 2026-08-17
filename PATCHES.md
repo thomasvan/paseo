@@ -25,14 +25,14 @@ sixth, unrelated way.
 
 Two have landed upstream and their sections are gone. Five patches remain here:
 
-| PR                                                   | Patches                    | Touches                       | Status                     |
-| ---------------------------------------------------- | -------------------------- | ----------------------------- | -------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`             | landed `cdb116314`, synced |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`             | open — **opt-in shape**    |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`      | open                       |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`              | open                       |
-| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config          | open                       |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | `agent-manager.ts` + own file | open                       |
+| PR                                                   | Patches                    | Touches                        | Status                     |
+| ---------------------------------------------------- | -------------------------- | ------------------------------ | -------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`              | landed `cdb116314`, synced |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`              | open — **opt-in shape**    |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`       | open                       |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`               | open                       |
+| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config           | open                       |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | `agent-manager.ts` + own files | open                       |
 
 ## `question-answer-required`
 
@@ -41,11 +41,11 @@ Two have landed upstream and their sections are gone. Five patches remain here:
 it lands the files converge instead of conflicting, and this section goes.
 
 **Sites:** one condition in `packages/server/src/server/agent/agent-manager.ts`
-(`respondToPermission`), plus `question-permission.slp.ts` and
-`question-permission.slp.test.ts`, which upstream does not own. The upstream PR
-carries the same two files under `question-permission.ts` /
-`question-permission.test.ts`; on a sync that takes #3495, delete the `.slp`
-pair and the marker rather than merging them. The rule lives in
+(`respondToPermission`), plus `question-permission.slp.ts`,
+`question-permission.slp.test.ts` and `question-permission.slp.parity.test.ts`,
+which upstream does not own. The upstream PR carries the same three files without
+the `.slp` infix; on a sync that takes #3495, delete the `.slp` trio and the
+marker rather than merging them. The rule lives in
 the fork-owned file so the upstream-owned call site is a single `if`.
 
 **What it fixes.** A Claude `question` permission answered in any shape but
@@ -62,8 +62,8 @@ request`. The check runs **before** `session.respondToPermission`, so both maps
 stay intact and the request is still answerable.
 
 **The rule is provider-specific, so the check is too.** It fires only on
-`provider === "claude"`, and only when the discard is provable from the request's
-own `input.questions`:
+`provider === "claude"`, and it mirrors Claude's mapping rather than approximating
+it:
 
 | provider | mapping                                                                                                                                                  | unmapped answer                                             |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -75,8 +75,23 @@ So `{"answers":{"wrongKey":"x"}}`, `{"answers":{"Colour":""}}` and
 `{"answers":{"Colour":1}}` are rejected for Claude — each one is well-formed
 enough to pass a shape-only check and is then discarded — while a Codex question
 answered with `selectedActionId` is left alone, because rejecting it would break
-a caller that upstream deliberately supports. A request whose questions cannot be
-read is left to its provider rather than blocked on a rule this file cannot prove.
+a caller that upstream deliberately supports.
+
+**Two details of the mirror are load-bearing, and both were wrong first.**
+`readNonEmptyString` tests `value.trim()` for emptiness but returns the
+**original** string, so a question whose text carries surrounding whitespace is
+keyed _by that whitespace_: trimming the key here would accept
+`{"Which colour?": …}` against a question named `" Which colour? "` — which
+Claude cannot map — and reject `{" Which colour? ": …}`, which it can. And the
+question list is taken from `updatedInput.questions` when the response supplies
+one **at all**, including an empty array, which `Array.isArray` accepts and which
+therefore maps nothing; only a response _and_ a request that both carry no list
+is unreadable, and only that case is passed to the provider unchecked.
+
+`question-permission.slp.parity.test.ts` runs the guard and the real
+`normalizeClaudeAskUserQuestionUpdatedInput` against the same fifteen inputs and
+requires them to agree. Unit tests state the rule as understood, which is the
+thing that was wrong twice; this one compares against the code being mirrored.
 
 The Codex and OpenCode rows are read from their providers' source, not measured:
 neither `codex-lead` nor `codex-peer` will emit a question here — codex answers
@@ -92,6 +107,10 @@ Permission request '…' is a Claude question: allow requires updatedInput.answe
 keyed by a question's full text or its header, with a non-empty string value …
 Accepted keys: … The request is still pending; answer it again with that shape.
 ```
+
+The keys it lists are the _effective_ ones — the echoed list when the response
+carries one, the stored list otherwise — so the message never advertises a key
+that validation would not have accepted.
 
 and the request survives; answering again with `{"answers":{"Colour":"Cobalt"}}`
 reaches the agent.

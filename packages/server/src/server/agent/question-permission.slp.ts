@@ -9,17 +9,23 @@
 // the field most natural to reach for is the one that cannot work.
 //
 // The rule is provider-specific, so this check is too. Claude's
-// `normalizeClaudeAskUserQuestionUpdatedInput`
-// (`providers/claude/agent.ts`) keeps an answer only when its key is a
-// question's full text or its header **and** its value is a non-empty string;
-// when nothing matches it returns the merged input with the caller's answers
-// map intact but unnormalized, and Claude's own AskUserQuestion tool then reads
-// no answer. Codex is deliberately different: `mapCodexQuestionResponseByHeader`
-// reads headers only, and an unmapped response **falls back to the first option**
-// of each question (`providers/codex-app-server-agent.ts`), which is a
-// supported path this check must not reject. OpenCode reads headers only as
-// well. So only Claude question requests are guarded here, and only when the
-// discard can be proven from the request's own questions.
+// `normalizeClaudeAskUserQuestionUpdatedInput` (`providers/claude/agent.ts`)
+// keeps an answer only when its key is a question's full text or its header
+// **and** its value is a non-empty string; when nothing matches it returns the
+// merged input with the caller's answers map intact but unnormalized, and
+// Claude's own AskUserQuestion tool then reads no answer. Codex is deliberately
+// different: `mapCodexQuestionResponseByHeader` reads headers only, and an
+// unmapped response **falls back to the first option** of each question
+// (`providers/codex-app-server-agent.ts`), which is a supported path this check
+// must not reject. OpenCode reads headers only as well. So only Claude question
+// requests are guarded here.
+//
+// This mirrors Claude's rule down to the bytes, which is load-bearing twice
+// over: `readNonEmptyString` tests `value.trim()` for emptiness but returns the
+// **original** string, so a question whose text carries surrounding whitespace
+// is keyed by that whitespace; and the question list is taken from the response
+// when it supplies one at all — including an empty array, which Claude prefers
+// over the stored list and which therefore maps nothing.
 //
 // Keeping the rule here rather than inline keeps the upstream-owned call site
 // to one line and makes the logic testable without an AgentManager.
@@ -29,16 +35,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Claude's `readNonEmptyString`, byte for byte: emptiness is tested on the
+ * trimmed value, but the **original** string is what it returns and therefore
+ * what it keys by. Trimming here would both accept keys Claude cannot map and
+ * reject keys Claude accepts.
+ */
 function nonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-/** Every key Claude would accept for this request, in the order it asks them. */
-function acceptedAnswerKeys(request: AgentPermissionRequest): string[] {
-  const questions = request.input?.questions;
-  if (!Array.isArray(questions)) return [];
+/**
+ * The question list Claude will normalize against, or null when neither side
+ * supplies one.
+ *
+ * `normalizeClaudeAskUserQuestionUpdatedInput` reads `updatedInput.questions`
+ * first and falls back to the stored request input, and it tests each for
+ * `Array.isArray`. An empty array is therefore a list, not an absence: it wins
+ * over the stored questions and maps nothing.
+ */
+function effectiveQuestions(
+  request: AgentPermissionRequest,
+  response: Extract<AgentPermissionResponse, { behavior: "allow" }>,
+): unknown[] | null {
+  const echoed = response.updatedInput?.questions;
+  if (Array.isArray(echoed)) return echoed;
+  const stored = request.input?.questions;
+  if (Array.isArray(stored)) return stored;
+  return null;
+}
+
+/** Every key Claude would accept for these questions, in the order it asks them. */
+function acceptedAnswerKeys(questions: readonly unknown[]): string[] {
   const keys: string[] = [];
   for (const item of questions) {
     if (!isRecord(item)) continue;
@@ -52,13 +80,14 @@ function acceptedAnswerKeys(request: AgentPermissionRequest): string[] {
 }
 
 /** The message a caller sees instead of a silently discarded answer. */
-export function questionAnswerRequiredMessage(request: AgentPermissionRequest): string {
-  const keys = acceptedAnswerKeys(request);
-  const example = keys[0] ?? "<question text or header>";
+function requiredShapeMessage(requestId: string, acceptedKeys: readonly string[]): string {
+  const example = acceptedKeys[0] ?? "<question text or header>";
   const accepted =
-    keys.length > 0 ? ` Accepted keys: ${keys.map((key) => JSON.stringify(key)).join(", ")}.` : "";
+    acceptedKeys.length > 0
+      ? ` Accepted keys: ${acceptedKeys.map((key) => JSON.stringify(key)).join(", ")}.`
+      : "";
   return (
-    `Permission request '${request.id}' is a Claude question: allow requires ` +
+    `Permission request '${requestId}' is a Claude question: allow requires ` +
     `updatedInput.answers keyed by a question's full text or its header, with a ` +
     `non-empty string value, e.g. {"answers":{${JSON.stringify(example)}:"<answer>"}}.` +
     `${accepted} ` +
@@ -68,37 +97,41 @@ export function questionAnswerRequiredMessage(request: AgentPermissionRequest): 
 }
 
 /**
- * True when this response would be accepted and then deliver nothing.
+ * The caller-facing rejection for a response that would be accepted and then
+ * deliver nothing, or null when the response is fine to pass on.
  *
  * Scoped to `allow` on a Claude `question` request. `deny` needs no answers;
  * `tool` / `plan` / `mode` requests carry their decision elsewhere; and other
  * providers apply their own mapping, including Codex's deliberate first-option
  * fallback, which is not a discard.
  *
- * Conservative by construction: it reports true only when the discard is
- * provable — no usable answers map, or a questions list none of whose keys the
- * map answers. A request whose questions cannot be read is left to the provider.
+ * Conservative at exactly one point: when neither the response nor the request
+ * carries a question list there is nothing to key against, so the response goes
+ * to the provider rather than being blocked on a rule this module cannot prove.
+ * A list that is present but yields no usable key — empty, or entries Claude
+ * would skip — is a provable discard and is rejected.
  */
-export function isUndeliverableQuestionAnswer(
+export function undeliverableQuestionAnswerMessage(
   request: AgentPermissionRequest | undefined,
   response: AgentPermissionResponse,
-): boolean {
-  if (request?.kind !== "question") return false;
-  if (request.provider !== "claude") return false;
-  if (response.behavior !== "allow") return false;
+): string | null {
+  if (request?.kind !== "question") return null;
+  if (request.provider !== "claude") return null;
+  if (response.behavior !== "allow") return null;
 
+  const questions = effectiveQuestions(request, response);
+  if (questions === null) {
+    // Unreadable: only the original defect's shape is provable here.
+    const answers = response.updatedInput?.answers;
+    return isRecord(answers) && Object.keys(answers).length > 0
+      ? null
+      : requiredShapeMessage(request.id, []);
+  }
+
+  const keys = acceptedAnswerKeys(questions);
   const answers = response.updatedInput?.answers;
-  if (!isRecord(answers) || Object.keys(answers).length === 0) return true;
-
-  // `normalizeClaudeAskUserQuestionUpdatedInput` prefers the questions the
-  // caller echoed back and falls back to the ones the request carries.
-  const echoed = response.updatedInput?.questions;
-  const keys = acceptedAnswerKeys(
-    Array.isArray(echoed)
-      ? { ...request, input: { ...request.input, questions: echoed } }
-      : request,
-  );
-  if (keys.length === 0) return false; // unreadable: not provably a discard
-
-  return !keys.some((key) => nonEmptyString(answers[key]) !== null);
+  if (isRecord(answers) && keys.some((key) => nonEmptyString(answers[key]) !== null)) {
+    return null;
+  }
+  return requiredShapeMessage(request.id, keys);
 }
