@@ -32,16 +32,20 @@ Two have landed upstream and their sections are gone. Five patches remain here:
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup` | `create-agent/create.ts` | open                       |
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`    | `paseo-tools.ts`         | open                       |
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin` | omp provider, config  | open                       |
-| [#3480](https://github.com/getpaseo/paseo/issues/3480) | `question-answer-required` | `agent-manager.ts` + own file | issue filed, patch local |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | `agent-manager.ts` + own file | open                       |
 
 ## `question-answer-required`
 
-**Issue:** [#3480](https://github.com/getpaseo/paseo/issues/3480) — filed with a
-reproduction; no upstream PR yet, so this is carried locally.
+**PR:** [#3495](https://github.com/getpaseo/paseo/pull/3495), cut from
+`upstream/main` so it carries no `SLP-PATCH` marker and no `.slp` filename — if
+it lands the files converge instead of conflicting, and this section goes.
 
 **Sites:** one condition in `packages/server/src/server/agent/agent-manager.ts`
 (`respondToPermission`), plus `question-permission.slp.ts` and
-`question-permission.slp.test.ts`, which upstream does not own. The rule lives in
+`question-permission.slp.test.ts`, which upstream does not own. The upstream PR
+carries the same two files under `question-permission.ts` /
+`question-permission.test.ts`; on a sync that takes #3495, delete the `.slp`
+pair and the marker rather than merging them. The rule lives in
 the fork-owned file so the upstream-owned call site is a single `if`.
 
 **What it fixes.** A `question` permission answered in any shape but
