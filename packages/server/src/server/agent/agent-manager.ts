@@ -47,6 +47,11 @@ import {
   type ListImportableSessionsOptions,
 } from "./agent-sdk-types.js";
 import { buildArchivedAgentRecord, type ArchivedStoredAgentRecord } from "./agent-archive.js";
+// SLP-PATCH(question-answer-required)
+import {
+  isUndeliverableQuestionAnswer,
+  questionAnswerRequiredMessage,
+} from "./question-permission.slp.js";
 import type { StoredAgentRecord, AgentStorage } from "./agent-storage.js";
 import type { AgentOwner } from "./agent-owner.js";
 import {
@@ -2459,6 +2464,17 @@ export class AgentManager {
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResult | void> {
     const agent = this.requireAgent(agentId);
+
+    // SLP-PATCH(question-answer-required): reject before the session sees it.
+    // The session deletes the request on entry, so a malformed answer that
+    // reaches it consumes the request and the retry fails with "No pending
+    // permission request". Throwing here leaves it pending and answerable.
+    if (
+      isUndeliverableQuestionAnswer(agent.pendingPermissions.get(requestId), response)
+    ) {
+      throw new Error(questionAnswerRequiredMessage(requestId));
+    }
+
     agent.inFlightPermissionResponses.add(requestId);
 
     try {

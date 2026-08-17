@@ -6,7 +6,7 @@ Every patch site in code is marked `SLP-PATCH(<name>)`. `rg "SLP-PATCH\("` lists
 When syncing with upstream, merge `upstream/main` into this branch; if a hunk
 conflicts, the marker plus this file is enough to re-apply the intent by hand.
 
-Patches live in **three source files** — `packages/server/src/server/agent/agent-prompt.ts`,
+Patches live in **four source files** — `packages/server/src/server/agent/agent-prompt.ts`,
 one argument in `packages/server/src/server/agent/create-agent/create.ts`, and one schema
 field in `packages/server/src/server/agent/tools/paseo-tools.ts`. Tests for the first two
 are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
@@ -23,7 +23,7 @@ finish-notification behavior broke that model in five ways — two are now fixed
 three are still carried here — and its native host-tool channel broke the omp family in a
 sixth, unrelated way.
 
-Two have landed upstream and their sections are gone. Four patches remain here:
+Two have landed upstream and their sections are gone. Five patches remain here:
 
 | PR                                                   | Patches           | Touches                  | Status                     |
 | ---------------------------------------------------- | ----------------- | ------------------------ | -------------------------- |
@@ -32,6 +32,51 @@ Two have landed upstream and their sections are gone. Four patches remain here:
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup` | `create-agent/create.ts` | open                       |
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`    | `paseo-tools.ts`         | open                       |
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin` | omp provider, config  | open                       |
+| [#3480](https://github.com/getpaseo/paseo/issues/3480) | `question-answer-required` | `agent-manager.ts` + own file | issue filed, patch local |
+
+## `question-answer-required`
+
+**Issue:** [#3480](https://github.com/getpaseo/paseo/issues/3480) — filed with a
+reproduction; no upstream PR yet, so this is carried locally.
+
+**Sites:** one condition in `packages/server/src/server/agent/agent-manager.ts`
+(`respondToPermission`), plus `question-permission.slp.ts` and
+`question-permission.slp.test.ts`, which upstream does not own. The rule lives in
+the fork-owned file so the upstream-owned call site is a single `if`.
+
+**What it fixes.** A `question` permission answered in any shape but
+`updatedInput.answers` resolved as `allow` and delivered nothing. The waiting
+agent was told `The user did not answer the questions.` — an affirmative
+falsehood rather than silence, so neither side could see the failure. The
+natural field to reach for, `selectedActionId`, is `z.string().optional()` with
+no membership check and is read only for `plan` kinds, while a question
+advertises `actions: undefined`.
+
+Worse, it was unrecoverable: the session deletes the request on entry, so the
+malformed answer consumed it and the retry failed with `No pending permission
+request`. The check runs **before** `session.respondToPermission`, so both maps
+stay intact and the request is still answerable.
+
+**Measured after the patch**, on the room's own MCP path — a Lead calling
+`respond_to_permission` with `selectedActionId` receives:
+
+```
+Permission request '…' is a question: allow requires updatedInput.answers keyed
+by each question's text or header … The request is still pending; answer it
+again with that shape.
+```
+
+and the request survives; answering again with `{"answers":{"Colour":"Cobalt"}}`
+reaches the agent.
+
+**Known limit.** The WebSocket path (`session.ts handleAgentPermissionResponse`)
+catches the throw and emits an `activity_log` error rather than failing the
+caller's call, because upstream treats a permission response as a notification
+rather than a request. So `paseo permit allow` still prints `allowed` and exits
+0 for a rejected shape. The destructive half is closed on every path — the
+request survives and the agent is never told a falsehood — but CLI callers do
+not see the error. Fixing that needs a protocol change and is upstream's to
+make.
 
 `closed-wakeup` and `response-cap` are upstream's code now. #2879 carried all three and the
 maintainer closed it on 2026-08-11 as superseded by #3192 — *"which carries the closed-child
