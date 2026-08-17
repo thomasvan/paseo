@@ -25,13 +25,13 @@ sixth, unrelated way.
 
 Two have landed upstream and their sections are gone. Five patches remain here:
 
-| PR                                                   | Patches           | Touches                  | Status                     |
-| ---------------------------------------------------- | ----------------- | ------------------------ | -------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                 | `agent-prompt.ts`        | landed `cdb116314`, synced |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`     | `agent-prompt.ts`        | open — **opt-in shape**    |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup` | `create-agent/create.ts` | open                       |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`    | `paseo-tools.ts`         | open                       |
-| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin` | omp provider, config  | open                       |
+| PR                                                   | Patches                    | Touches                       | Status                     |
+| ---------------------------------------------------- | -------------------------- | ----------------------------- | -------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`             | landed `cdb116314`, synced |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`             | open — **opt-in shape**    |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`      | open                       |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`              | open                       |
+| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config          | open                       |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | `agent-manager.ts` + own file | open                       |
 
 ## `question-answer-required`
@@ -48,12 +48,12 @@ carries the same two files under `question-permission.ts` /
 pair and the marker rather than merging them. The rule lives in
 the fork-owned file so the upstream-owned call site is a single `if`.
 
-**What it fixes.** A `question` permission answered in any shape but
-`updatedInput.answers` resolved as `allow` and delivered nothing. The waiting
-agent was told `The user did not answer the questions.` — an affirmative
-falsehood rather than silence, so neither side could see the failure. The
-natural field to reach for, `selectedActionId`, is `z.string().optional()` with
-no membership check and is read only for `plan` kinds, while a question
+**What it fixes.** A Claude `question` permission answered in any shape but
+`updatedInput.answers` keyed by a question resolved as `allow` and delivered
+nothing. The waiting agent was told `The user did not answer the questions.` — an
+affirmative falsehood rather than silence, so neither side could see the failure.
+The natural field to reach for, `selectedActionId`, is `z.string().optional()`
+with no membership check and is read only for `plan` kinds, while a question
 advertises `actions: undefined`.
 
 Worse, it was unrecoverable: the session deletes the request on entry, so the
@@ -61,13 +61,36 @@ malformed answer consumed it and the retry failed with `No pending permission
 request`. The check runs **before** `session.respondToPermission`, so both maps
 stay intact and the request is still answerable.
 
+**The rule is provider-specific, so the check is too.** It fires only on
+`provider === "claude"`, and only when the discard is provable from the request's
+own `input.questions`:
+
+| provider | mapping                                                                                                                                                  | unmapped answer                                             |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| claude   | `normalizeClaudeAskUserQuestionUpdatedInput` keeps an answer whose key is a question's full text **or** its header and whose value is a non-empty string | nothing is delivered — the defect                           |
+| codex    | `mapCodexQuestionResponseByHeader`, headers only                                                                                                         | **selects each question's first option** — a supported path |
+| opencode | headers only                                                                                                                                             | an empty answer list per question                           |
+
+So `{"answers":{"wrongKey":"x"}}`, `{"answers":{"Colour":""}}` and
+`{"answers":{"Colour":1}}` are rejected for Claude — each one is well-formed
+enough to pass a shape-only check and is then discarded — while a Codex question
+answered with `selectedActionId` is left alone, because rejecting it would break
+a caller that upstream deliberately supports. A request whose questions cannot be
+read is left to its provider rather than blocked on a rule this file cannot prove.
+
+The Codex and OpenCode rows are read from their providers' source, not measured:
+neither `codex-lead` nor `codex-peer` will emit a question here — codex answers
+`request_user_input is unavailable in Default mode` in both seat modes (`auto`,
+`full-access`). What is covered by test is the part that matters, that the guard
+does not fire for a non-Claude provider.
+
 **Measured after the patch**, on the room's own MCP path — a Lead calling
 `respond_to_permission` with `selectedActionId` receives:
 
 ```
-Permission request '…' is a question: allow requires updatedInput.answers keyed
-by each question's text or header … The request is still pending; answer it
-again with that shape.
+Permission request '…' is a Claude question: allow requires updatedInput.answers
+keyed by a question's full text or its header, with a non-empty string value …
+Accepted keys: … The request is still pending; answer it again with that shape.
 ```
 
 and the request survives; answering again with `{"answers":{"Colour":"Cobalt"}}`
@@ -83,8 +106,8 @@ not see the error. Fixing that needs a protocol change and is upstream's to
 make.
 
 `closed-wakeup` and `response-cap` are upstream's code now. #2879 carried all three and the
-maintainer closed it on 2026-08-11 as superseded by #3192 — *"which carries the closed-child
-wakeup and response truncation onto current main with your authorship preserved"* — taking
+maintainer closed it on 2026-08-11 as superseded by #3192 — _"which carries the closed-child
+wakeup and response truncation onto current main with your authorship preserved"_ — taking
 two and leaving `wakeup-each`, the one that changes default behavior for existing upstream
 callers. That sync has since happened: `cdb116314` and `334bf6237` are both ancestors of this
 branch, the two markers are gone, and `wakeup-each` was re-applied onto the new shape as
@@ -95,7 +118,7 @@ opt-in shape**, which is the objection that closed #2879 answered rather than ar
 `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, `"once"` the
 default and byte-identical to current upstream behaviour, `"each"` the re-arming one.
 
-**The fork and the PR deliberately differ.** This branch keeps the *derived* form — always
+**The fork and the PR deliberately differ.** This branch keeps the _derived_ form — always
 re-arm, no parameter — because every child in this room is a long-lived seat driven across
 many turns, so an opt-in the room would pass on every single call is a parameter that only
 exists to be forgotten once. Upstream does not have that guarantee about its callers, which

@@ -2469,10 +2469,9 @@ export class AgentManager {
     // The session deletes the request on entry, so a malformed answer that
     // reaches it consumes the request and the retry fails with "No pending
     // permission request". Throwing here leaves it pending and answerable.
-    if (
-      isUndeliverableQuestionAnswer(agent.pendingPermissions.get(requestId), response)
-    ) {
-      throw new Error(questionAnswerRequiredMessage(requestId));
+    const pendingQuestion = agent.pendingPermissions.get(requestId);
+    if (pendingQuestion && isUndeliverableQuestionAnswer(pendingQuestion, response)) {
+      throw new Error(questionAnswerRequiredMessage(pendingQuestion));
     }
 
     agent.inFlightPermissionResponses.add(requestId);
