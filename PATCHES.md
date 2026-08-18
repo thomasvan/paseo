@@ -7,13 +7,16 @@ When syncing with upstream, merge `upstream/main` into this branch; if a hunk
 conflicts, the marker plus this file is enough to re-apply the intent by hand.
 
 Patches live in **four source files** — `packages/server/src/server/agent/agent-prompt.ts`,
-one argument in `packages/server/src/server/agent/create-agent/create.ts`, and one schema
-field in `packages/server/src/server/agent/tools/paseo-tools.ts`. Tests for the first two
+one argument in `packages/server/src/server/agent/create-agent/create.ts`, one schema
+field in `packages/server/src/server/agent/tools/paseo-tools.ts`, and one guard in
+`packages/server/src/server/agent/providers/claude/agent.ts`. Tests for the first two
 are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
-not own. `detached-arg` is the exception: its behaviour only shows through a live MCP tool
-call, so its two tests sit in upstream's `mcp-parity.e2e.test.ts` next to the legacy-shape
-test they mirror. They carry no marker, so if upstream takes them the files converge instead
-of conflicting.
+not own. Two patches put their tests in upstream-owned files instead, for the same reason in
+both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
+shows through a live MCP tool call, so its two tests sit in `mcp-parity.e2e.test.ts` beside
+the legacy-shape test they mirror; `question-answer-required` guards a rule defined in the
+Claude provider, so its tests sit in `providers/claude/agent.test.ts` beside that rule. They
+carry no marker, so if upstream takes them the files converge instead of conflicting.
 
 ## Why these patches exist
 
@@ -25,95 +28,69 @@ sixth, unrelated way.
 
 Two have landed upstream and their sections are gone. Five patches remain here:
 
-| PR                                                   | Patches                    | Touches                        | Status                     |
-| ---------------------------------------------------- | -------------------------- | ------------------------------ | -------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`              | landed `cdb116314`, synced |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`              | open — **opt-in shape**    |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`       | open                       |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`               | open                       |
-| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config           | open                       |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | `agent-manager.ts` + own files | open                       |
+| PR                                                   | Patches                    | Touches                  | Status                     |
+| ---------------------------------------------------- | -------------------------- | ------------------------ | -------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`        | landed `cdb116314`, synced |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`        | open — **opt-in shape**    |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts` | open                       |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`         | open                       |
+| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config     | open                       |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider          | open                       |
 
 ## `question-answer-required`
 
 **PR:** [#3495](https://github.com/getpaseo/paseo/pull/3495), cut from
-`upstream/main` so it carries no `SLP-PATCH` marker and no `.slp` filename — if
-it lands the files converge instead of conflicting, and this section goes.
+`upstream/main` so it carries no `SLP-PATCH` marker — if it lands the file
+converges instead of conflicting, and this section goes.
 
-**Sites:** one condition in `packages/server/src/server/agent/agent-manager.ts`
-(`respondToPermission`), plus `question-permission.slp.ts`,
-`question-permission.slp.test.ts` and `question-permission.slp.parity.test.ts`,
-which upstream does not own. The upstream PR carries the same three files without
-the `.slp` infix; on a sync that takes #3495, delete the `.slp` trio and the
-marker rather than merging them. The rule lives in
-the fork-owned file so the upstream-owned call site is a single `if`.
+**Sites:** `packages/server/src/server/agent/providers/claude/agent.ts` — one
+extracted helper, one guard beside the normalizer, one call at the top of
+`respondToPermission` — with its tests in upstream's own
+`providers/claude/agent.test.ts`. Two markers, both in that one file.
 
-**What it fixes.** A Claude `question` permission answered in any shape but
-`updatedInput.answers` keyed by a question resolved as `allow` and delivered
-nothing. The waiting agent was told `The user did not answer the questions.` — an
-affirmative falsehood rather than silence, so neither side could see the failure.
-The natural field to reach for, `selectedActionId`, is `z.string().optional()`
-with no membership check and is read only for `plan` kinds, while a question
-advertises `actions: undefined`.
+**What it fixes.** A `question` permission answered in any shape but
+`updatedInput.answers` keyed by one of its questions resolved as `allow` and
+delivered nothing. The waiting agent was told `The user did not answer the
+questions.` — an affirmative falsehood rather than silence, so neither side
+could see the failure. The natural field to reach for, `selectedActionId`, is
+`z.string().optional()` with no membership check and is read only for `plan`
+kinds, while a question advertises `actions: undefined`.
 
-Worse, it was unrecoverable: the session deletes the request on entry, so the
-malformed answer consumed it and the retry failed with `No pending permission
-request`. The check runs **before** `session.respondToPermission`, so both maps
-stay intact and the request is still answerable.
+Worse, it was unrecoverable: `respondToPermission` deletes the request from
+`pendingPermissions` on entry, so the malformed answer consumed it and the retry
+failed with `No pending permission request`. The guard runs **before** that
+delete, and `AgentManager` drops its own copy only once the call resolves, so
+both maps survive the throw and the request stays answerable.
 
-**The rule is provider-specific, so the check is too.** It fires only on
-`provider === "claude"`, and it mirrors Claude's mapping rather than approximating
-it:
+**Why it lives in the Claude provider.** The answer contract is per provider,
+not shared. Claude keeps an answer only when its key is a question's full text
+or its header and its value is a non-empty string. Codex's
+`mapCodexQuestionResponseByHeader` reads headers only, and an unmapped response
+**selects each question's first option** — a supported path a shared guard would
+have broken. OpenCode reads headers only as well. A first version of this patch
+sat in `AgentManager.respondToPermission`, which is the join point for all three,
+and so had to restate Claude's rule and scope itself with `provider === "claude"`.
+That restatement drifted twice before it was correct — it trimmed keys the
+normalizer does not trim, and read an empty `updatedInput.questions` array as an
+absent one.
 
-| provider | mapping                                                                                                                                                  | unmapped answer                                             |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| claude   | `normalizeClaudeAskUserQuestionUpdatedInput` keeps an answer whose key is a question's full text **or** its header and whose value is a non-empty string | nothing is delivered — the defect                           |
-| codex    | `mapCodexQuestionResponseByHeader`, headers only                                                                                                         | **selects each question's first option** — a supported path |
-| opencode | headers only                                                                                                                                             | an empty answer list per question                           |
+Both bugs are structurally impossible now. The check calls
+`resolveClaudeAskUserQuestionAnswers`, the same function the normalizer uses to
+produce the answers it delivers, so "would this deliver anything" is answered by
+the code that does the delivering rather than by a copy of it. The provider
+scoping is likewise structural: the guard is in the Claude provider, so no other
+provider can reach it.
 
-So `{"answers":{"wrongKey":"x"}}`, `{"answers":{"Colour":""}}` and
-`{"answers":{"Colour":1}}` are rejected for Claude — each one is well-formed
-enough to pass a shape-only check and is then discarded — while a Codex question
-answered with `selectedActionId` is left alone, because rejecting it would break
-a caller that upstream deliberately supports.
+**Measured after the patch**, on the room's own MCP path, against a seat whose
+question text is literally `" Which colour? "`:
 
-**Two details of the mirror are load-bearing, and both were wrong first.**
-`readNonEmptyString` tests `value.trim()` for emptiness but returns the
-**original** string, so a question whose text carries surrounding whitespace is
-keyed _by that whitespace_: trimming the key here would accept
-`{"Which colour?": …}` against a question named `" Which colour? "` — which
-Claude cannot map — and reject `{" Which colour? ": …}`, which it can. And the
-question list is taken from `updatedInput.questions` when the response supplies
-one **at all**, including an empty array, which `Array.isArray` accepts and which
-therefore maps nothing; only a response _and_ a request that both carry no list
-is unreadable, and only that case is passed to the provider unchecked.
-
-`question-permission.slp.parity.test.ts` runs the guard and the real
-`normalizeClaudeAskUserQuestionUpdatedInput` against the same fifteen inputs and
-requires them to agree. Unit tests state the rule as understood, which is the
-thing that was wrong twice; this one compares against the code being mirrored.
-
-The Codex and OpenCode rows are read from their providers' source, not measured:
-neither `codex-lead` nor `codex-peer` will emit a question here — codex answers
-`request_user_input is unavailable in Default mode` in both seat modes (`auto`,
-`full-access`). What is covered by test is the part that matters, that the guard
-does not fire for a non-Claude provider.
-
-**Measured after the patch**, on the room's own MCP path — a Lead calling
-`respond_to_permission` with `selectedActionId` receives:
-
-```
-Permission request '…' is a Claude question: allow requires updatedInput.answers
-keyed by a question's full text or its header, with a non-empty string value …
-Accepted keys: … The request is still pending; answer it again with that shape.
-```
-
-The keys it lists are the _effective_ ones — the echoed list when the response
-carries one, the stored list otherwise — so the message never advertises a key
-that validation would not have accepted.
-
-and the request survives; answering again with `{"answers":{"Colour":"Cobalt"}}`
-reaches the agent.
+| response                                             | result                                |
+| ---------------------------------------------------- | ------------------------------------- |
+| `{"behavior":"allow","selectedActionId":"Viridian"}` | rejected, still pending               |
+| `{"answers":{"Which colour?":"Viridian"}}`           | rejected, still pending               |
+| `{"questions":[],"answers":{"Colour":"Viridian"}}`   | rejected, still pending               |
+| `{"answers":{"Colour":1}}`                           | rejected, still pending               |
+| `{"answers":{" Which colour? ":"Ochre"}}`            | `success: true`, seat replied `Ochre` |
 
 **Known limit.** The WebSocket path (`session.ts handleAgentPermissionResponse`)
 catches the throw and emits an `activity_log` error rather than failing the
