@@ -258,8 +258,20 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
-    ...(patch.mcp?.injectIntoAgents !== undefined
-      ? { mcp: { injectIntoAgents: patch.mcp.injectIntoAgents } }
+    ...(patch.mcp?.injectIntoAgents !== undefined || patch.mcp?.nativeAgentTools !== undefined
+      ? {
+          mcp: {
+            ...(patch.mcp?.injectIntoAgents !== undefined
+              ? { injectIntoAgents: patch.mcp.injectIntoAgents }
+              : {}),
+            // SLP-PATCH(native-tools-optin): the picker is the gate every
+            // mutable patch passes through; dropping the field here silently
+            // discards a live opt-out.
+            ...(patch.mcp?.nativeAgentTools !== undefined
+              ? { nativeAgentTools: patch.mcp.nativeAgentTools }
+              : {}),
+          },
+        }
       : {}),
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
@@ -556,6 +568,15 @@ export class DaemonConfigStore {
     patch: Omit<SupportedMutableConfigPatch, "removeProviders">,
     removeProviders: readonly string[],
   ): { previous: PersistedConfig; knownNext: PersistedConfig } {
+    // SLP-PATCH(native-tools-optin): any mcp write materializes the current
+    // native-tools value, so a seeded-but-never-patched setting reaches disk
+    // and a restart cannot silently revert what the daemon is running.
+    if (patch.mcp !== undefined && patch.mcp.nativeAgentTools === undefined) {
+      patch = {
+        ...patch,
+        mcp: { ...patch.mcp, nativeAgentTools: this.current.mcp.nativeAgentTools },
+      };
+    }
     const persisted = loadPersistedConfig(this.paseoHome, this.logger);
     const merge = (source: PersistedConfig) =>
       mergeMutablePatchIntoPersistedConfig({

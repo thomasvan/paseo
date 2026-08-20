@@ -26,7 +26,18 @@ finish-notification behavior broke that model in five ways — two are now fixed
 three are still carried here — and its native host-tool channel broke the omp family in a
 sixth, unrelated way.
 
-Two have landed upstream and their sections are gone. Five patches remain here:
+Two have landed upstream and their sections are gone. Five patches remain here.
+Last upstream sync: **2026-08-20**, `upstream/main` at `bed5d2b1b` (0.5.0-beta.2);
+all five upstream PRs were still open, so all five patches carry. The sync moved
+two of them: `native-tools-optin` re-woven through the rewritten daemon-config
+store (the field now rides `SupportedMutableConfigPatch`, the
+`pickSupportedPatchFields` gate, `mergeMutableDaemonPatch`, the reloadable-path
+maps, and a `persistConfig` step that materializes the current value on any mcp
+write so a restart cannot revert a seeded setting), and `wakeup-each`'s harness
+now stubs `steerOrReplaceActiveTurn` because upstream notify() dispatches with
+`activeTurnBehavior: "steer"`. Upstream's own Suite E (worktree tools) in
+`mcp-parity.e2e.test.ts` fails in this environment before and after the sync —
+not patch-related. Five patches remain here:
 
 | PR                                                   | Patches                    | Touches                  | Status                     |
 | ---------------------------------------------------- | -------------------------- | ------------------------ | -------------------------- |
