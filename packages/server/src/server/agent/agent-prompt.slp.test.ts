@@ -67,6 +67,10 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
     return options?.childLastAssistantMessage ?? null;
   });
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
+  // Upstream's notify path now dispatches with activeTurnBehavior: "steer";
+  // an idle caller reports no active turn, so dispatch falls through to
+  // streamAgent below exactly as before steering existed.
+  Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => ({ status: "inactive" }));
   Reflect.set(agentManager, "hasInFlightRun", () => false);
   Reflect.set(agentManager, "streamAgent", (_agentId: string, prompt: string) => {
     parentPrompts.push(prompt);
