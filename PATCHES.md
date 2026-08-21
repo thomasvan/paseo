@@ -37,16 +37,17 @@ write so a restart cannot revert a seeded setting), and `wakeup-each`'s harness
 now stubs `steerOrReplaceActiveTurn` because upstream notify() dispatches with
 `activeTurnBehavior: "steer"`. Upstream's own Suite E (worktree tools) in
 `mcp-parity.e2e.test.ts` fails in this environment before and after the sync —
-not patch-related. Five patches remain here:
+not patch-related. Six patches remain here:
 
-| PR                                                   | Patches                    | Touches                  | Status                     |
-| ---------------------------------------------------- | -------------------------- | ------------------------ | -------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`        | landed `cdb116314`, synced |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`        | open — **opt-in shape**    |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts` | open                       |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`         | open                       |
-| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config     | open                       |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider          | open                       |
+| PR                                                   | Patches                    | Touches                                                               | Status                     |
+| ---------------------------------------------------- | -------------------------- | --------------------------------------------------------------------- | -------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`                                                     | landed `cdb116314`, synced |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`                                                     | open — **opt-in shape**    |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`                                              | open                       |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`                                                      | open                       |
+| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config                                                  | open                       |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`         | `codex-app-server-agent.ts` | open                       |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
 
 ## `question-answer-required`
 
