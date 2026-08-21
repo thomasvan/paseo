@@ -4583,7 +4583,24 @@ export class CodexAppServerAgentSession implements AgentSession {
       turnId = await pendingIdentification.promise;
     }
     if (!turnId || (foregroundTurnId && this.activeForegroundTurnId !== foregroundTurnId)) {
-      throw new Error("Cannot interrupt Codex before turn/started identifies the active turn");
+      // SLP-PATCH(dead-run-settles): resolve as a no-op — claude and acp both
+      // return when there is nothing to interrupt, and codex was the one
+      // provider that threw. The throw made the manager read a cancel as
+      // unacknowledged and refuse forever when the session had lost its turn
+      // while a run was still tracked (measured twice in production, 2h+
+      // each, repaired only by daemon restarts). Resolving lets
+      // cancelAgentRun's existing acknowledged-timeout force-cancel settle
+      // the orphaned run.
+      this.logger.warn(
+        {
+          agentId: this.agentId,
+          provider: CODEX_PROVIDER,
+          sessionId: this.currentThreadId,
+          turnId: this.activeForegroundTurnId ?? this.currentTurnId ?? undefined,
+        },
+        "provider.codex.interrupt.no_identified_turn_noop",
+      );
+      return;
     }
     await this.client.request(
       "turn/interrupt",
