@@ -11,7 +11,7 @@ one argument in `packages/server/src/server/agent/create-agent/create.ts`, one s
 field in `packages/server/src/server/agent/tools/paseo-tools.ts`, one guard in
 `packages/server/src/server/agent/providers/claude/agent.ts`, and two provider-local
 repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts`
-(`dead-run-settles`, `replace-awaits-teardown`). Tests for the first two
+(`dead-run-settles`, `replace-awaits-teardown`, `dispose-releases-foreground`). Tests for the first two
 are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
 not own. Two patches put their tests in upstream-owned files instead, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -28,7 +28,7 @@ finish-notification behavior broke that model in five ways — two are now fixed
 three are still carried here — and its native host-tool channel broke the omp family in a
 sixth, unrelated way.
 
-Two have landed upstream and their sections are gone. Seven patches remain here.
+Two have landed upstream and their sections are gone. Eight patches remain here.
 Last upstream sync: **2026-08-22**, `upstream/main` at `8905ad416` (0.5.0-beta.4);
 all six upstream PRs were still open, so all six carried patches survive — the
 merge was conflict-free, but it brought an upstream test pinning the
@@ -61,6 +61,7 @@ breakage and is not. The patch table:
 | [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`         | `codex-app-server-agent.ts` | open                       |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | `replace-awaits-teardown`  | `codex-app-server-agent.ts`                                           | open                       |
+| (upstream PR pending)                                | `dispose-releases-foreground` | `codex-app-server-agent.ts`                                        | new 2026-08-22             |
 
 ## `replace-awaits-teardown`
 
@@ -89,6 +90,32 @@ waiters — and refuses only a turn that genuinely will not end. A timed-out
 waiter removes itself, so a stuck turn plus retrying prompts retains no dead
 closures. Zero manager changes; the refusal semantics for a truly stuck turn
 are unchanged.
+
+## `dispose-releases-foreground`
+
+**Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
+`disposeClient()`, with its test beside the others in the provider's own suite.
+
+**Why.** `disposeClient()` cleared `currentTurnId` but not
+`activeForegroundTurnId`. `close()` clears the slot itself before disposing, so
+the asymmetry only shows on the other caller: a **failed reconnect**. The seat
+is then permanently wedged, and the state is invisible from outside — the
+manager reports `activeTurn: null` while the provider still holds the slot:
+`interrupt()` finds no turn and no-ops (`dead-run-settles`), the manager
+force-cancels its own run record and believes the agent free, and every later
+`startTurn` refuses with "A foreground turn is already active". With
+`replace-awaits-teardown` carried, each refusal now takes the full 10s wait
+first. **The heartbeat cannot rescue this**: the daemon refuses a scheduled
+run against an agent with an in-flight run, so every beat fails too. Measured
+in production 2026-08-22 on the Supervisor seat — fifteen minutes of refused
+prompts and failed beats, `paseo stop` reporting `stoppedCount 0`, `send`
+answering `failed to start`, recovered only by a daemon restart.
+
+**Fix.** A disposed client cannot own a live turn, so `disposeClient()`
+releases the slot with it: emit `turn_failed` so the manager's run settles,
+clear the foreground and client-message ids, flush the teardown waiters, and
+resolve any pending turn identification. Idempotent on the `close()` path,
+which already cleared the slot.
 
 ## `question-answer-required`
 
