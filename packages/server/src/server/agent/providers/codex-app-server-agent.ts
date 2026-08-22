@@ -4696,6 +4696,24 @@ export class CodexAppServerAgentSession implements AgentSession {
         },
         "provider.codex.interrupt.no_identified_turn_noop",
       );
+      // SLP-PATCH(interrupt-releases-foreground): the no-op above lets the
+      // manager settle its own run record, but nothing releases this session's
+      // foreground slot. Codex never identified the turn, so no turn-end event
+      // will ever arrive to clear it, and the slot then refuses every later
+      // startTurn with "A foreground turn is already active" — a wedge that
+      // survives stop() and agent reload and clears only by killing the
+      // app-server process. Measured 9 times in one 8h production window
+      // (2026-08-22); while a parent is wedged this way, the child-finish
+      // notifications addressed to it are dropped with no retry. Release only
+      // the slot this call sampled: if identification raced a newer turn into
+      // it, that turn is live and owns it.
+      if (!turnId && foregroundTurnId && this.activeForegroundTurnId === foregroundTurnId) {
+        this.activeForegroundTurnId = null;
+        this.activeClientMessageId = null;
+        this.flushForegroundTurnClearWaiters();
+        this.pendingForegroundTurnIdentification?.resolve(null);
+        this.pendingForegroundTurnIdentification = null;
+      }
       return;
     }
     await this.client.request(

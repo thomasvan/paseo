@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -688,6 +688,86 @@ describe("Codex foreground teardown wait (replace path)", () => {
     expect(internals.activeForegroundTurnId).toBe("test-turn");
     await internals.disposeClient();
     expect(internals.activeForegroundTurnId).toBeNull();
+  });
+
+  it("releases an orphaned foreground slot when the turn was never identified", async () => {
+    // Codex accepted turn/start but never published a native turn id, so
+    // interrupt() no-ops (PR #3640). The manager settles its own run record,
+    // but nothing clears this slot and no turn-end event is ever coming, so
+    // every later startTurn refuses forever.
+    const session = createSession();
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      currentTurnId: string | null;
+      client: unknown;
+      foregroundTurnClearWaiters: Array<() => void>;
+    }>(session);
+    internals.client = {};
+    internals.currentTurnId = null;
+    expect(internals.activeForegroundTurnId).toBe("test-turn");
+
+    await expect(session.interrupt()).resolves.toBeUndefined();
+
+    expect(internals.activeForegroundTurnId).toBeNull();
+    // A startTurn already waiting on the slot is woken, not left to time out.
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+  });
+
+  it("keeps the foreground slot when Codex did identify the turn", async () => {
+    const session = createSession();
+    const requests: string[] = [];
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      currentTurnId: string | null;
+      client: unknown;
+    }>(session);
+    internals.client = {
+      request: async (method: string) => {
+        requests.push(method);
+        return {};
+      },
+    };
+    internals.currentTurnId = "native-turn";
+
+    await session.interrupt();
+
+    expect(requests).toEqual(["turn/interrupt"]);
+    // A real turn is being interrupted; Codex will report its end and clear
+    // the slot. Releasing it here would free the slot under a live turn.
+    expect(internals.activeForegroundTurnId).toBe("test-turn");
+  });
+
+  it("does not release a foreground slot a newer turn has taken", async () => {
+    const session = createSession();
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      currentTurnId: string | null;
+      client: unknown;
+      pendingForegroundTurnIdentification: {
+        foregroundTurnId: string;
+        promise: Promise<string | null>;
+        resolve: (turnId: string | null) => void;
+      } | null;
+    }>(session);
+    internals.client = {};
+    internals.currentTurnId = null;
+    let identify!: (turnId: string | null) => void;
+    const promise = new Promise<string | null>((resolve) => {
+      identify = resolve;
+    });
+    internals.pendingForegroundTurnIdentification = {
+      foregroundTurnId: "test-turn",
+      promise,
+      resolve: identify,
+    };
+
+    const interrupted = session.interrupt();
+    // While identification is still pending, a newer turn takes the slot.
+    internals.activeForegroundTurnId = "newer-turn";
+    identify(null);
+
+    await expect(interrupted).resolves.toBeUndefined();
+    expect(internals.activeForegroundTurnId).toBe("newer-turn");
   });
 
   it("refuses only when the teardown never completes, retaining no waiter", async () => {
