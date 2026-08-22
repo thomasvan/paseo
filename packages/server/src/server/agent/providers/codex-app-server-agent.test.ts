@@ -650,6 +650,47 @@ process.stdin.on("data", (chunk) => {
   }
 }
 
+describe("Codex foreground teardown wait (replace path)", () => {
+  // The replace path can call startTurn while the interrupted turn is still
+  // tearing down: the manager's force-cancel settles its run record before
+  // this provider clears activeForegroundTurnId (measured 4ms apart in
+  // production), and refusing immediately loses the incoming prompt and marks
+  // the agent errored.
+  it("waits out a clearing foreground turn instead of refusing", async () => {
+    const session = createSession();
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      flushForegroundTurnClearWaiters: () => void;
+    }>(session);
+    const attempt = session.startTurn("after teardown");
+    const raced = await Promise.race([
+      attempt.catch((error: unknown) => error),
+      new Promise((resolve) => setTimeout(resolve, 25, "pending")),
+    ]);
+    expect(raced).toBe("pending");
+    internals.activeForegroundTurnId = null;
+    internals.flushForegroundTurnClearWaiters();
+    // Getting past the foreground guard is the assertion; the harness spawns
+    // no app-server, so the next gate is the client-initialization error.
+    await expect(attempt).rejects.toThrow("Codex client not initialized");
+  });
+
+  it("refuses only when the teardown never completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = createSession();
+      const attempt = session.startTurn("never clears");
+      const expectation = expect(attempt).rejects.toThrow(
+        "A foreground turn is already active",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("Codex app-server provider", () => {
   test("getAvailableModes includes auto-review when the Codex version supports it", async () => {
     const session = createSession({}, { autoReviewEnabled: true });
@@ -3407,9 +3448,9 @@ describe("Codex app-server provider", () => {
       const interruptPromise = session.interrupt();
       appServer.completeTurn();
 
-      await expect(interruptPromise).rejects.toThrow(
-        "Cannot interrupt Codex before turn/started identifies the active turn",
-      );
+      // SLP-PATCH(dead-run-settles): upstream expects this interrupt to throw;
+      // this branch resolves it as a no-op so a dead run settles (PR #3640).
+      await expect(interruptPromise).resolves.toBeUndefined();
       await resultPromise;
       expect(interruptedTurns).toEqual([]);
       appServer.assertNoErrors();

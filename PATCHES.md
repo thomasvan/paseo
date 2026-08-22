@@ -6,10 +6,12 @@ Every patch site in code is marked `SLP-PATCH(<name>)`. `rg "SLP-PATCH\("` lists
 When syncing with upstream, merge `upstream/main` into this branch; if a hunk
 conflicts, the marker plus this file is enough to re-apply the intent by hand.
 
-Patches live in **four source files** — `packages/server/src/server/agent/agent-prompt.ts`,
+Patches live in **five source files** — `packages/server/src/server/agent/agent-prompt.ts`,
 one argument in `packages/server/src/server/agent/create-agent/create.ts`, one schema
-field in `packages/server/src/server/agent/tools/paseo-tools.ts`, and one guard in
-`packages/server/src/server/agent/providers/claude/agent.ts`. Tests for the first two
+field in `packages/server/src/server/agent/tools/paseo-tools.ts`, one guard in
+`packages/server/src/server/agent/providers/claude/agent.ts`, and two provider-local
+repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts`
+(`dead-run-settles`, `replace-awaits-teardown`). Tests for the first two
 are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
 not own. Two patches put their tests in upstream-owned files instead, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -26,9 +28,15 @@ finish-notification behavior broke that model in five ways — two are now fixed
 three are still carried here — and its native host-tool channel broke the omp family in a
 sixth, unrelated way.
 
-Two have landed upstream and their sections are gone. Five patches remain here.
-Last upstream sync: **2026-08-20**, `upstream/main` at `bed5d2b1b` (0.5.0-beta.2);
-all five upstream PRs were still open, so all five patches carry. The sync moved
+Two have landed upstream and their sections are gone. Seven patches remain here.
+Last upstream sync: **2026-08-22**, `upstream/main` at `8905ad416` (0.5.0-beta.4);
+all six upstream PRs were still open, so all six carried patches survive — the
+merge was conflict-free, but it brought an upstream test pinning the
+pre-#3640 interrupt-throw (`does not interrupt after the accepted turn
+terminates before identification`, upstream `9a7301d9a`), adapted on this
+branch to the no-op semantics `dead-run-settles` carries. The seventh patch,
+`replace-awaits-teardown`, was added in the same window from a production
+incident. The earlier 2026-08-20 sync note follows. The sync moved
 two of them: `native-tools-optin` re-woven through the rewritten daemon-config
 store (the field now rides `SupportedMutableConfigPatch`, the
 `pickSupportedPatchFields` gate, `mergeMutableDaemonPatch`, the reloadable-path
@@ -37,7 +45,11 @@ write so a restart cannot revert a seeded setting), and `wakeup-each`'s harness
 now stubs `steerOrReplaceActiveTurn` because upstream notify() dispatches with
 `activeTurnBehavior: "steer"`. Upstream's own Suite E (worktree tools) in
 `mcp-parity.e2e.test.ts` fails in this environment before and after the sync —
-not patch-related. Six patches remain here:
+not patch-related. One more environment note from the 2026-08-22 sync: the
+tip's `websocket-server.ts` typechecks only against a rebuilt
+`@getpaseo/protocol` dist (`pluginThemes` rode the protocol package), so a
+stale protocol dist fails `build:lib` with an error that looks like upstream
+breakage and is not. The patch table:
 
 | PR                                                   | Patches                    | Touches                                                               | Status                     |
 | ---------------------------------------------------- | -------------------------- | --------------------------------------------------------------------- | -------------------------- |
@@ -48,6 +60,30 @@ not patch-related. Six patches remain here:
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config                                                  | open                       |
 | [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`         | `codex-app-server-agent.ts` | open                       |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
+| (upstream PR pending)                                | `replace-awaits-teardown`  | `codex-app-server-agent.ts`                                           | new 2026-08-22             |
+
+## `replace-awaits-teardown`
+
+**Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
+one constant, one waiter field, two private methods, a bounded wait at the top
+of `startTurn`, and a flush at the four sites that clear
+`activeForegroundTurnId`. Tests sit in upstream's own
+`codex-app-server-agent.test.ts` (no marker, so the file converges if taken).
+
+**Why.** A prompt injected while a codex turn is being cancelled races the
+teardown. `steerOrReplaceActiveTurn` falls back to replace when steering is
+unavailable; `cancelAgentRunBefore` returns once the **manager's** run record
+settles — and a force-cancel settles it without waiting for the provider — so
+`startTurn` finds `activeForegroundTurnId` still set and throws `A foreground
+turn is already active`. Measured in production 2026-08-22: force-cancel
+logged at `.022`, the throw at `.026` — four milliseconds — six occurrences in
+one engagement on the busiest seat (the Supervisor), each one turning a live
+wakeup into a lost prompt and an `error`-status seat until the next heartbeat
+sweep re-prompted it. The provider owns "when may a new turn start", so the
+repair is provider-local: `startTurn` waits up to `FOREGROUND_TEARDOWN_WAIT_MS`
+(10s) for the teardown to clear the id — the four clear sites flush the
+waiters — and refuses only a turn that genuinely will not end. Zero manager
+changes; the refusal semantics for a truly stuck turn are unchanged.
 
 ## `question-answer-required`
 
