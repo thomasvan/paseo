@@ -551,7 +551,6 @@ export const en = {
       loading: "Loading...",
       modified: "Unsaved changes",
       loadingAgentTitle: "Loading agent title",
-      emptyPane: "No tabs in this pane.",
       fallback: {
         newAgent: "New agent",
         setup: "Setup",
@@ -593,6 +592,7 @@ export const en = {
         newBrowser: "New browser",
         maximizePane: "Maximize pane",
         restorePane: "Restore pane",
+        closePane: "Close pane",
         exitFocusMode: "Exit focus mode",
         splitRight: "Split pane right",
         splitDown: "Split pane down",
@@ -602,10 +602,10 @@ export const en = {
         terminalProfilesMenu: "Terminal profiles",
         editTerminalProfiles: "Edit profiles…",
       },
-      explorer: {
-        open: "Open explorer",
-        close: "Close explorer",
-        toggle: "Toggle explorer",
+      sidePanel: {
+        open: "Open side panel",
+        close: "Close side panel",
+        toggle: "Toggle side panel",
         changes: "Changes",
         files: "Files",
       },
@@ -705,6 +705,10 @@ export const en = {
         startFailed: "Failed to start {{scriptName}}",
         stopFailed: "Failed to stop {{scriptName}}",
       },
+    },
+    tree: {
+      showFolderTree: "Show folder tree",
+      hideFolderTree: "Hide folder tree",
     },
     git: {
       actions: {
@@ -864,8 +868,6 @@ export const en = {
         split: "Side-by-side diff",
         switchToUnified: "Switch to unified diff",
         switchToSplit: "Switch to side-by-side diff",
-        showTreeView: "Show folder tree",
-        hideTreeView: "Hide folder tree",
         options: "Diff options",
         hideWhitespace: "Hide whitespace",
         showWhitespace: "Show whitespace",
@@ -881,6 +883,8 @@ export const en = {
         failedRefresh: "Failed to refresh git state.",
         emptyHiddenWhitespace: "No visible changes after hiding whitespace",
         emptyUncommitted: "No uncommitted changes",
+        seeUncommittedChanges: "See uncommitted changes",
+        seeCommittedChanges: "See committed changes",
         emptyAgainstBase: "No changes vs {{baseRef}}",
         checkingRepository: "Checking repository...",
         notRepository: "Not a git repository",
@@ -992,8 +996,6 @@ export const en = {
     },
     filter: {
       clear: "Clear filter",
-      noMatchesTitle: "No workspaces match",
-      noMatchesDescription: "Change or clear the label filter to see workspaces.",
     },
     manage: {
       open: "Manage labels…",
@@ -1049,6 +1051,15 @@ export const en = {
         label: "Host",
         all: "All hosts",
       },
+      projectFilter: {
+        label: "Project",
+        all: "All projects",
+      },
+    },
+    filterEmpty: {
+      title: "No workspaces match",
+      description: "Change or clear the sidebar filters to see workspaces.",
+      clear: "Clear filters",
     },
     pinned: {
       title: "Pinned",
@@ -1981,6 +1992,11 @@ export const en = {
         description: "Lines kept in the built-in terminal buffer",
         accessibilityLabel: "Terminal scrollback lines",
       },
+      sidePanelRouting: {
+        label: "Open supporting tabs in the Side panel",
+        description:
+          "File links, pull requests, and setup progress open beside your work instead of in the focused pane",
+      },
       autoExpandReasoning: {
         label: "Always expand reasoning",
         description: "Show agent thinking and chain-of-thought blocks fully expanded by default",
@@ -2095,13 +2111,18 @@ export const en = {
         interfaceFont: "Interface font",
         interfaceFontHint: "Used across the app. Leave empty for the system default",
         interfaceFontAccessibility: "Interface font family",
-        baseSize: "Base size",
-        baseSizeAccessibility: "Base font size",
+        interfaceSize: "Interface size",
+        interfaceSizeHint: "Used for navigation, controls, and labels",
+        interfaceSizeAccessibility: "Interface font size",
+        contentSize: "Content size",
+        contentSizeHint: "Used for chat text and rendered Markdown",
+        contentSizeAccessibility: "Content font size",
         codeFont: "Code font",
         codeFontHint:
           "Used in code, diffs, and the terminal output. Leave empty for the system default",
         codeFontAccessibility: "Code font family",
         codeSize: "Code size",
+        codeSizeHint: "Used for code, diffs, and terminal output",
         codeSizeAccessibility: "Code font size",
       },
       syntax: {
@@ -2109,7 +2130,8 @@ export const en = {
         highlightTheme: "Highlight theme",
         highlightThemeHint: "Colors for code, independent of the app theme",
         highlightThemeAccessibility: "Highlight theme: {{value}}",
-        previewAccessibility: "Live preview of the syntax theme and code font",
+        previewAccessibility: "Live preview of content typography, syntax theme, and code font",
+        previewContent: "Readable content and code preview",
       },
     },
     shortcuts: {
@@ -2164,11 +2186,11 @@ export const en = {
         toggleCommandCenter: "Toggle command center",
         showKeyboardShortcuts: "Show keyboard shortcuts",
         toggleLeftSidebar: "Toggle left sidebar",
-        toggleRightSidebar: "Toggle right sidebar",
+        toggleRightSidebar: "Toggle side panel",
         toggleBothSidebars: "Toggle both sidebars",
         toggleSettings: "Toggle settings",
         toggleFocusMode: "Toggle focus mode",
-        toggleExplorerPaneMaximization: "Toggle Explorer pane maximization",
+        toggleExplorerPaneMaximization: "Toggle Side panel maximization",
         cycleTheme: "Cycle theme",
         focusMessageInput: "Focus message input",
         cycleAgentMode: "Cycle agent mode",

@@ -87,6 +87,8 @@ import {
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
+import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
+import type { WorkspaceTabPlacement } from "@/stores/workspace-layout-actions";
 import type { SurfaceBackdrop } from "@/styles/surface-backdrop";
 import type { Theme } from "@/styles/theme";
 import { RenderProfile } from "@/utils/render-profiler";
@@ -120,6 +122,7 @@ const TAB_ROW_PADDING_HORIZONTAL = 4;
 const TAB_ICON_WIDTH = 14;
 const TAB_CONTENT_GAP = 4;
 const TAB_DROP_INDICATOR_WIDTH = 4;
+const TAB_MODIFIED_DOT_SIZE = 8;
 const TAB_MIN_WIDTH = 96;
 const TAB_MAX_WIDTH = 160;
 const TAB_CLOSE_BUTTON_RESERVED_WIDTH = 0;
@@ -605,6 +608,7 @@ interface ResolvedWorkspaceDesktopTabRowItem extends WorkspaceDesktopTabRowItem 
 interface WorkspaceTabLabel {
   key: string;
   label: string;
+  modified: boolean;
 }
 
 interface WorkspaceTabLabelMeasurement {
@@ -628,12 +632,15 @@ function completeWorkspaceTabLabelWidths(
   measurements: Map<string, WorkspaceTabLabelMeasurement>,
 ): number[] | null {
   const widths: number[] = [];
-  for (const { key, label } of labels) {
+  for (const { key, label, modified } of labels) {
     const measurement = measurements.get(key);
     if (!measurement || measurement.label !== label || measurement.width <= 0) {
       return null;
     }
-    widths.push(measurement.width + TAB_LABEL_LAYOUT_ALLOWANCE);
+    // The modified dot sits in the content row, so a modified tab needs that much more width
+    // before its label starts truncating.
+    const modifiedAllowance = modified ? TAB_CONTENT_GAP + TAB_MODIFIED_DOT_SIZE : 0;
+    widths.push(measurement.width + TAB_LABEL_LAYOUT_ALLOWANCE + modifiedAllowance);
   }
   return widths;
 }
@@ -801,6 +808,7 @@ function TabHandleContent({
   backdrop,
   tabLabelSkeletonStyle,
   tabLabelStyle,
+  modifiedTestId,
 }: {
   presentation: WorkspaceTabPresentation;
   isHighlighted: boolean;
@@ -808,7 +816,9 @@ function TabHandleContent({
   backdrop: SurfaceBackdrop;
   tabLabelSkeletonStyle: React.ComponentProps<typeof View>["style"];
   tabLabelStyle: React.ComponentProps<typeof Text>["style"];
+  modifiedTestId: string;
 }) {
+  const { t } = useTranslation();
   const tabHandleDataSet = useMemo(
     () => ({ statusBucket: presentation.statusBucket ?? "none" }),
     [presentation.statusBucket],
@@ -826,6 +836,15 @@ function TabHandleContent({
         <Text style={tabLabelStyle} selectable={false} numberOfLines={1} ellipsizeMode="tail">
           {presentation.label}
         </Text>
+      ) : null}
+      {/* The dot is a laid-out sibling of the label, not an overlay, so a truncated label ends
+          before it instead of running underneath it. */}
+      {presentation.modified ? (
+        <View
+          style={styles.tabModifiedDot}
+          accessibilityLabel={t("workspace.tabs.modified")}
+          testID={modifiedTestId}
+        />
       ) : null}
     </View>
   );
@@ -866,7 +885,6 @@ function TabChip({
   onCloseTab: (tabId: string) => Promise<void> | void;
   dragHandleProps: DraggableListDragHandleProps | undefined;
 }) {
-  const { t } = useTranslation();
   const { closeButtonTestId, contextMenuTestId, menuEntries } = resolvedTab;
   const middleClickRef = useMiddleClickClose(
     useCallback(() => void onCloseTab(tab.tabId), [onCloseTab, tab.tabId]),
@@ -980,16 +998,8 @@ function TabChip({
                 backdrop={chipBackdrop}
                 tabLabelSkeletonStyle={tabLabelSkeletonStyle}
                 tabLabelStyle={tabLabelStyle}
+                modifiedTestId={`workspace-tab-modified-${buildDeterministicWorkspaceTabId(tab.target)}`}
               />
-              {presentation.modified ? (
-                <View
-                  style={styles.tabModifiedIndicator}
-                  accessibilityLabel={t("workspace.tabs.modified")}
-                  testID={`workspace-tab-modified-${buildDeterministicWorkspaceTabId(tab.target)}`}
-                >
-                  <View style={styles.tabModifiedDot} />
-                </View>
-              ) : null}
             </ContextMenuTrigger>
           </TooltipTrigger>
           <TooltipContent
@@ -1183,7 +1193,15 @@ function ResolvedWorkspaceDesktopTabsRow({
     serverId: normalizedServerId,
     workspaceId: normalizedWorkspaceId,
   });
-  const openTabFocused = useWorkspaceLayoutStore((state) => state.openTabFocused);
+  const openTab = useWorkspaceLayoutStore((state) => state.openTab);
+  const openNewTab = useCallback(
+    (
+      requestedWorkspaceKey: string,
+      target: WorkspaceTabTarget,
+      placement?: WorkspaceTabPlacement,
+    ) => openTab({ workspaceKey: requestedWorkspaceKey, target, intent: "new", placement }),
+    [openTab],
+  );
 
   const handleTabsContainerLayout = useCallback((event: LayoutChangeEvent) => {
     updateMeasuredWidth(setTabsContainerWidth, event);
@@ -1295,7 +1313,7 @@ function ResolvedWorkspaceDesktopTabsRow({
           tab.presentation.titleState === "loading"
             ? getFallbackTabLabel(tab.tab, fallbackTabLabels)
             : tab.presentation.label;
-        return { key: tab.tab.key, label };
+        return { key: tab.tab.key, label, modified: tab.presentation.modified };
       }),
     [fallbackTabLabels, tabs],
   );
@@ -1425,9 +1443,11 @@ function ResolvedWorkspaceDesktopTabsRow({
       if (!workspaceKey) {
         return;
       }
-      openTabFocused(workspaceKey, target, { paneId });
+      // Picked from this pane's own menu, so the tab belongs here even if it is
+      // currently open somewhere else.
+      openNewTab(workspaceKey, target, paneId ? { mode: "pane", paneId } : undefined);
     },
-    [openTabFocused, paneId, workspaceKey],
+    [openNewTab, paneId, workspaceKey],
   );
   const handleOpenChanges = useCallback(() => openPanelTarget(CHANGES_TARGET), [openPanelTarget]);
   const handleOpenFiles = useCallback(() => openPanelTarget(FILES_TARGET), [openPanelTarget]);
@@ -1997,17 +2017,10 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
     zIndex: 1,
   },
-  tabModifiedIndicator: {
-    position: "absolute",
-    right: 8,
-    top: 0,
-    bottom: 0,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   tabModifiedDot: {
-    width: 8,
-    height: 8,
+    width: TAB_MODIFIED_DOT_SIZE,
+    height: TAB_MODIFIED_DOT_SIZE,
+    flexShrink: 0,
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.foregroundMuted,
   },
