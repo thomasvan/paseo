@@ -61,7 +61,7 @@ breakage and is not. The patch table:
 | [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`         | `codex-app-server-agent.ts` | open                       |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | `replace-awaits-teardown`  | `codex-app-server-agent.ts`                                           | open                       |
-| (upstream PR pending)                                | `dispose-releases-foreground` | `codex-app-server-agent.ts`                                        | new 2026-08-22             |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | `dispose-releases-foreground` | `codex-app-server-agent.ts`                                        | open                       |
 
 ## `replace-awaits-teardown`
 
@@ -92,6 +92,8 @@ closures. Zero manager changes; the refusal semantics for a truly stuck turn
 are unchanged.
 
 ## `dispose-releases-foreground`
+
+**PR:** [#3683](https://github.com/getpaseo/paseo/pull/3683), cut from `upstream/main` without the fork markers.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 `disposeClient()`, with its test beside the others in the provider's own suite.
