@@ -85,8 +85,10 @@ wakeup into a lost prompt and an `error`-status seat until the next heartbeat
 sweep re-prompted it. The provider owns "when may a new turn start", so the
 repair is provider-local: `startTurn` waits up to `FOREGROUND_TEARDOWN_WAIT_MS`
 (10s) for the teardown to clear the id — the four clear sites flush the
-waiters — and refuses only a turn that genuinely will not end. Zero manager
-changes; the refusal semantics for a truly stuck turn are unchanged.
+waiters — and refuses only a turn that genuinely will not end. A timed-out
+waiter removes itself, so a stuck turn plus retrying prompts retains no dead
+closures. Zero manager changes; the refusal semantics for a truly stuck turn
+are unchanged.
 
 ## `question-answer-required`
 
@@ -289,8 +291,20 @@ git fetch upstream
 git diff --name-only $(git merge-base HEAD upstream/main) upstream/main -- \
   packages/server/src/server/agent/agent-prompt.ts \
   packages/server/src/server/agent/create-agent/create.ts \
-  packages/server/src/server/agent/tools/paseo-tools.ts
+  packages/server/src/server/agent/tools/paseo-tools.ts \
+  packages/server/src/server/agent/providers/claude/agent.ts \
+  packages/server/src/server/agent/providers/claude/agent.test.ts \
+  packages/server/src/server/agent/providers/codex-app-server-agent.ts \
+  packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
 ```
+
+**The two provider files and their upstream-owned test files are on that list
+deliberately.** Three patches live in providers now — `question-answer-required`
+in claude, `dead-run-settles` and `replace-awaits-teardown` in codex — and
+their tests sit in upstream's own files, which is exactly where a silent
+reversal arrives: the 2026-08-22 sync merged clean and still brought an
+upstream test asserting the pre-`#3640` interrupt-throw. Nothing in this
+procedure caught it; running the provider suite by habit did.
 
 Empty output means a conflict-free merge for the patches. Non-empty output is the normal
 case once patches start landing, and it means read the upstream commits before merging —
@@ -307,12 +321,19 @@ npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts
+npx vitest run packages/server/src/server/agent/providers/claude/agent.test.ts
+npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
+npx vitest run packages/server/src/server/agent/agent-manager.test.ts
 git push origin slp/patches
 ```
 
-Run the two upstream-owned files (`agent-prompt.test.ts`, `create.test.ts`) too, not just
-the `.slp.` ones: they are the tripwire for a patch that contradicts upstream intent, which
-is how `detached-wakeup` got redesigned before landing.
+Run the upstream-owned files (`agent-prompt.test.ts`, `create.test.ts`, both provider
+suites, `agent-manager.test.ts`) too, not just the `.slp.` ones: they are the tripwire for a
+patch that contradicts upstream intent, which is how `detached-wakeup` got redesigned before
+landing — and how the 2026-08-22 sync's contradicting codex test surfaced. When a run fails
+on an upstream assertion that a carried patch deliberately changed, adapt that assertion in
+place with a comment naming the patch and its PR; do not restore upstream's expectation and
+do not silently delete the case.
 
 Update this file in the same commit as any new patch. One section per patch; delete the
 section when a patch lands upstream.
