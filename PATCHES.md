@@ -60,9 +60,12 @@ breakage and is not. The patch table:
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config                                                  | open                       |
 | [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`         | `codex-app-server-agent.ts` | open                       |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
-| (upstream PR pending)                                | `replace-awaits-teardown`  | `codex-app-server-agent.ts`                                           | new 2026-08-22             |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | `replace-awaits-teardown`  | `codex-app-server-agent.ts`                                           | open                       |
 
 ## `replace-awaits-teardown`
+
+**PR:** [#3674](https://github.com/getpaseo/paseo/pull/3674), cut from
+`upstream/main` without the fork markers.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 one constant, one waiter field, two private methods, a bounded wait at the top
