@@ -706,11 +706,28 @@ describe("Codex foreground teardown wait (replace path)", () => {
     internals.currentTurnId = null;
     expect(internals.activeForegroundTurnId).toBe("test-turn");
 
+    // Queue a prompt behind the orphan so there is a real waiter to flush:
+    // asserting an already-empty array would pass even without the flush.
+    const queued = session.startTurn("queued behind the orphan");
+    const stillWaiting = await Promise.race([
+      queued.catch((error: unknown) => error),
+      new Promise((resolve) => setTimeout(resolve, 25, "pending")),
+    ]);
+    expect(stillWaiting).toBe("pending");
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
+
     await expect(session.interrupt()).resolves.toBeUndefined();
 
     expect(internals.activeForegroundTurnId).toBeNull();
-    // A startTurn already waiting on the slot is woken, not left to time out.
     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+    // The queued prompt is woken by the release. It still fails on a later
+    // gate in this harness, but it must not be the foreground refusal, and it
+    // must not have waited out FOREGROUND_TEARDOWN_WAIT_MS to get there.
+    const outcome = await queued.then(
+      () => "resolved",
+      (error: unknown) => (error as Error).message,
+    );
+    expect(outcome).not.toContain("A foreground turn is already active");
   });
 
   it("keeps the foreground slot when Codex did identify the turn", async () => {
@@ -774,13 +791,9 @@ describe("Codex foreground teardown wait (replace path)", () => {
     vi.useFakeTimers();
     try {
       const session = createSession();
-      const internals = castInternals<{ foregroundTurnClearWaiters: Array<() => void> }>(
-        session,
-      );
+      const internals = castInternals<{ foregroundTurnClearWaiters: Array<() => void> }>(session);
       const attempt = session.startTurn("never clears");
-      const expectation = expect(attempt).rejects.toThrow(
-        "A foreground turn is already active",
-      );
+      const expectation = expect(attempt).rejects.toThrow("A foreground turn is already active");
       expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_000);
       await expectation;
