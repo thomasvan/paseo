@@ -4739,6 +4739,28 @@ export class CodexAppServerAgentSession implements AgentSession {
     const client = this.client;
     this.client = null;
     this.connected = false;
+    // SLP-PATCH(dispose-releases-foreground): a disposed client cannot own a
+    // live turn, so release the foreground slot with it. Without this, a
+    // failed reconnect clears the native turn id and leaves
+    // activeForegroundTurnId held forever: interrupt() then finds no turn to
+    // interrupt and no-ops, the manager force-cancels its own run record, and
+    // every later startTurn refuses with "A foreground turn is already
+    // active" — a permanently wedged seat that even the heartbeat cannot
+    // re-prompt (measured in production 2026-08-22, recovered only by a
+    // daemon restart). close() already clears the slot before disposing, so
+    // this is a no-op on that path.
+    if (this.activeForegroundTurnId) {
+      this.emitEvent({
+        type: "turn_failed",
+        provider: CODEX_PROVIDER,
+        error: "Codex client was disposed while a foreground turn was active",
+      });
+      this.activeForegroundTurnId = null;
+      this.activeClientMessageId = null;
+      this.flushForegroundTurnClearWaiters();
+      this.pendingForegroundTurnIdentification?.resolve(null);
+      this.pendingForegroundTurnIdentification = null;
+    }
     this.currentTurnId = null;
     if (client) {
       await client.dispose();

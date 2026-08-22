@@ -675,6 +675,21 @@ describe("Codex foreground teardown wait (replace path)", () => {
     await expect(attempt).rejects.toThrow("Codex client not initialized");
   });
 
+  it("releases the foreground slot when the client is disposed", async () => {
+    // A failed reconnect disposes the client and clears the native turn id.
+    // If the foreground slot survived that, interrupt() would find no turn to
+    // interrupt and every later startTurn would refuse forever.
+    const session = createSession();
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      disposeClient: () => Promise<void>;
+      client: unknown;
+    }>(session);
+    expect(internals.activeForegroundTurnId).toBe("test-turn");
+    await internals.disposeClient();
+    expect(internals.activeForegroundTurnId).toBeNull();
+  });
+
   it("refuses only when the teardown never completes, retaining no waiter", async () => {
     vi.useFakeTimers();
     try {
