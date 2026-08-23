@@ -122,7 +122,15 @@ which already cleared the slot.
 
 ## `interrupt-releases-foreground`
 
-**PR:** _(pending)_ — to be cut from `upstream/main` without the fork markers.
+**PR:** [#3640](https://github.com/getpaseo/paseo/pull/3640) — carried as a
+second commit on that PR rather than its own, because the release only makes
+sense once `dead-run-settles` has replaced the throw with the no-op branch it
+attaches to. Cut without the fork markers, and **adapted**: the upstream commit
+omits the `flushForegroundTurnClearWaiters()` call, because that method arrives
+with `replace-awaits-teardown` (#3674), which is still open. If #3674 lands
+first, the flush must be added there. The same PR also repairs the interrupt
+test that still asserted the old throw — it had been left failing when #3640
+changed the contract, which is why that PR sat red.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 `interrupt()`, on the branch `dead-run-settles` added, with its tests beside the
