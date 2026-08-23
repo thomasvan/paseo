@@ -9,9 +9,10 @@ conflicts, the marker plus this file is enough to re-apply the intent by hand.
 Patches live in **five source files** — `packages/server/src/server/agent/agent-prompt.ts`,
 one argument in `packages/server/src/server/agent/create-agent/create.ts`, one schema
 field in `packages/server/src/server/agent/tools/paseo-tools.ts`, one guard in
-`packages/server/src/server/agent/providers/claude/agent.ts`, and two provider-local
+`packages/server/src/server/agent/providers/claude/agent.ts`, and four provider-local
 repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts`
-(`dead-run-settles`, `replace-awaits-teardown`, `dispose-releases-foreground`). Tests for the first two
+(`dead-run-settles`, `replace-awaits-teardown`, `dispose-releases-foreground`,
+`interrupt-releases-foreground`). Tests for the first two
 are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
 not own. Two patches put their tests in upstream-owned files instead, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -118,6 +119,48 @@ releases the slot with it: emit `turn_failed` so the manager's run settles,
 clear the foreground and client-message ids, flush the teardown waiters, and
 resolve any pending turn identification. Idempotent on the `close()` path,
 which already cleared the slot.
+
+## `interrupt-releases-foreground`
+
+**PR:** _(pending)_ — to be cut from `upstream/main` without the fork markers.
+
+**Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
+`interrupt()`, on the branch `dead-run-settles` added, with its tests beside the
+others in the provider's own suite.
+
+**Why.** `dead-run-settles` stopped `interrupt()` throwing when Codex accepted
+`turn/start` but never published a native turn id, so the manager can settle
+its own run record. Nothing releases the **session's** foreground slot on that
+path, and no turn-end event is ever coming to clear it — the turn Codex would
+report the end of was never identified. Every later `startTurn` then refuses
+with "A foreground turn is already active", permanently. This is the same
+terminal state `dispose-releases-foreground` fixed for the failed-reconnect
+caller, reached through the other door: `paseo stop` reports a no-op,
+`paseo agent reload` reports `thread ... already has an active writer`, and
+only killing the agent's `codex app-server` process recovers the seat.
+
+Measured **nine times in one 8h window** on 2026-08-22, on a daemon already
+carrying `dead-run-settles`, `replace-awaits-teardown` and
+`dispose-releases-foreground`. The blast radius is wider than the wedged seat:
+while a parent holds an unreachable foreground turn, the child-finish
+notifications addressed to it are dropped with no retry — 20 in that window, 15
+`finished` and 5 `was closed`, three of them addressed to a Lead rather than
+the Supervisor. A supervising agent silently loses the completion signals it
+delegates on, and its scheduled sweeps are refused too (14 of 68 that window).
+
+**Fix.** An unidentifiable turn is one nothing will ever end, so the no-op
+branch releases the slot it sampled: clear the foreground and client-message
+ids, flush the teardown waiters `replace-awaits-teardown` installs, and resolve
+any pending turn identification. It releases **only** the slot this call
+sampled — if identification raced a newer turn into it, that turn is live and
+owns the slot, which the third test pins.
+
+**Test-file note.** The same commit adds the missing `it` to the provider
+suite's `vitest` import. `it` arrived with `replace-awaits-teardown` and was
+never imported, so the file failed to load outright and every test in it —
+including the ones pinning `replace-awaits-teardown` and
+`dispose-releases-foreground` — had been silently not running. Restoring the
+import brings the file back to 148 passing tests.
 
 ## `question-answer-required`
 
