@@ -29,7 +29,7 @@ finish-notification behavior broke that model in five ways — two are now fixed
 three are still carried here — and its native host-tool channel broke the omp family in a
 sixth, unrelated way.
 
-Two have landed upstream and their sections are gone. Eight patches remain here.
+Two have landed upstream and their sections are gone. Nine patches remain here.
 Last upstream sync: **2026-08-22**, `upstream/main` at `8905ad416` (0.5.0-beta.4);
 all six upstream PRs were still open, so all six carried patches survive — the
 merge was conflict-free, but it brought an upstream test pinning the
@@ -59,15 +59,45 @@ breakage and is not. The patch table:
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`                                              | open                       |
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`                                                      | open                       |
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config                                                  | open                       |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`         | `codex-app-server-agent.ts` | open                       |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground` | `codex-app-server-agent.ts` | open — **consolidated**, see below |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
-| [#3674](https://github.com/getpaseo/paseo/pull/3674) | `replace-awaits-teardown`  | `codex-app-server-agent.ts`                                           | open                       |
-| [#3683](https://github.com/getpaseo/paseo/pull/3683) | `dispose-releases-foreground` | `codex-app-server-agent.ts`                                        | open                       |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                          | `codex-app-server-agent.ts`                                           | closed into #3640          |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                          | `codex-app-server-agent.ts`                                        | closed into #3640          |
+
+## The four codex patches ride one PR
+
+`replace-awaits-teardown`, `dead-run-settles`, `interrupt-releases-foreground`
+and `dispose-releases-foreground` all repair one piece of state — the
+provider's single `activeForegroundTurnId` slot — and on 2026-08-23 they were
+consolidated onto #3640; #3674 and #3683 are closed pointing at it.
+
+Not for tidiness. **Two lines could not exist in any of the three PRs
+separately.** `interrupt()` and `disposeClient()` each release the slot, and
+each must wake the callers blocked on it through
+`flushForegroundTurnClearWaiters()` — a method `replace-awaits-teardown`
+introduces. Both other branches were cut against a base that lacks it, so in
+*every* merge order upstream would have landed slot releases that leave
+waiters asleep for the full 10s timeout: the exact race #3674 exists to close,
+reintroduced at the two sites #3640 and #3683 repair. The note that used to
+stand here — *"if #3674 lands first, the flush must be added there"* —
+understated it; the call appeared in no PR at all.
+
+Measured before the consolidation: with both flush calls deleted, the
+provider suite passed 148/148. Nothing proved them. The consolidated PR adds
+one test per call, each asserting that a `startTurn` blocked on the teardown
+settles within 50ms of the release rather than sleeping out the timeout;
+deleting either call fails its own test and nothing else. Each of the four
+commits is green on its own — `dead-run-settles` and
+`interrupt-releases-foreground` are squashed into one commit because the
+former invalidates an upstream test that only the latter repairs, which is
+why #3640 sat red on its first push.
+
 
 ## `replace-awaits-teardown`
 
-**PR:** [#3674](https://github.com/getpaseo/paseo/pull/3674), cut from
-`upstream/main` without the fork markers.
+**PR:** [#3640](https://github.com/getpaseo/paseo/pull/3640), consolidated
+there on 2026-08-23; [#3674](https://github.com/getpaseo/paseo/pull/3674) is
+closed into it. Cut from `upstream/main` without the fork markers.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 one constant, one waiter field, two private methods, a bounded wait at the top
@@ -94,7 +124,12 @@ are unchanged.
 
 ## `dispose-releases-foreground`
 
-**PR:** [#3683](https://github.com/getpaseo/paseo/pull/3683), cut from `upstream/main` without the fork markers.
+**PR:** [#3640](https://github.com/getpaseo/paseo/pull/3640), consolidated
+there on 2026-08-23; [#3683](https://github.com/getpaseo/paseo/pull/3683) is
+closed into it. Cut from `upstream/main` without the fork markers, and
+**adapted**: the upstream commit now carries the
+`flushForegroundTurnClearWaiters()` call this branch has, which the standalone
+PR could not.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 `disposeClient()`, with its test beside the others in the provider's own suite.
@@ -122,15 +157,14 @@ which already cleared the slot.
 
 ## `interrupt-releases-foreground`
 
-**PR:** [#3640](https://github.com/getpaseo/paseo/pull/3640) — carried as a
-second commit on that PR rather than its own, because the release only makes
-sense once `dead-run-settles` has replaced the throw with the no-op branch it
-attaches to. Cut without the fork markers, and **adapted**: the upstream commit
-omits the `flushForegroundTurnClearWaiters()` call, because that method arrives
-with `replace-awaits-teardown` (#3674), which is still open. If #3674 lands
-first, the flush must be added there. The same PR also repairs the interrupt
-test that still asserted the old throw — it had been left failing when #3640
-changed the contract, which is why that PR sat red.
+**PR:** [#3640](https://github.com/getpaseo/paseo/pull/3640) — squashed with
+`dead-run-settles` into one commit there, because the release only makes sense
+once that patch has replaced the throw with the no-op branch it attaches to,
+and because `dead-run-settles` alone leaves red the upstream interrupt test
+that this patch repairs. Cut without the fork markers. Since the 2026-08-23
+consolidation the upstream commit carries the
+`flushForegroundTurnClearWaiters()` call this branch has; before it, the PR
+omitted that call because the method arrives with `replace-awaits-teardown`.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 `interrupt()`, on the branch `dead-run-settles` added, with its tests beside the
