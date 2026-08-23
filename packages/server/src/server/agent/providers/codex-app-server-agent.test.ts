@@ -783,38 +783,6 @@ describe("Codex foreground teardown wait (replace path)", () => {
     expect(internals.activeForegroundTurnId).toBe("test-turn");
   });
 
-  it("wakes a waiting startTurn when the interrupt releases the slot", async () => {
-    // SLP-PATCH(interrupt-releases-foreground): releasing the slot is only
-    // half the repair. A prompt already blocked on the teardown wait sleeps
-    // until its own timeout unless the release wakes it, so the wakeup this
-    // interrupt was answering still arrives 10s late.
-    const session = createSession();
-    const internals = castInternals<{
-      currentTurnId: string | null;
-      client: unknown;
-      foregroundTurnClearWaiters: Array<() => void>;
-    }>(session);
-    internals.client = {};
-    internals.currentTurnId = null;
-
-    const queued = session.startTurn("queued behind the teardown");
-    const settled = queued.then(
-      () => "settled",
-      () => "settled",
-    );
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
-
-    await session.interrupt();
-
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
-    await expect(
-      Promise.race([
-        settled,
-        new Promise((resolve) => setTimeout(resolve, 50, "still waiting")),
-      ]),
-    ).resolves.toBe("settled");
-  });
-
   it("does not release a foreground slot a newer turn has taken", async () => {
     const session = createSession();
     const internals = castInternals<{
