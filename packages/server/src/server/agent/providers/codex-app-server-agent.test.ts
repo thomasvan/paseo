@@ -690,6 +690,35 @@ describe("Codex foreground teardown wait (replace path)", () => {
     expect(internals.activeForegroundTurnId).toBeNull();
   });
 
+  it("wakes a waiting startTurn when disposal releases the slot", async () => {
+    // SLP-PATCH(dispose-releases-foreground): the reconnect that disposes the
+    // client is usually racing a prompt already blocked on the teardown wait.
+    // Clearing the slot without waking that prompt trades a permanent wedge
+    // for a 10s one.
+    const session = createSession();
+    const internals = castInternals<{
+      disposeClient: () => Promise<void>;
+      foregroundTurnClearWaiters: Array<() => void>;
+    }>(session);
+
+    const queued = session.startTurn("queued behind the disposal");
+    const settled = queued.then(
+      () => "settled",
+      () => "settled",
+    );
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
+
+    await internals.disposeClient();
+
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+    await expect(
+      Promise.race([
+        settled,
+        new Promise((resolve) => setTimeout(resolve, 50, "still waiting")),
+      ]),
+    ).resolves.toBe("settled");
+  });
+
   it("releases an orphaned foreground slot when the turn was never identified", async () => {
     // Codex accepted turn/start but never published a native turn id, so
     // interrupt() no-ops (PR #3640). The manager settles its own run record,
@@ -752,6 +781,38 @@ describe("Codex foreground teardown wait (replace path)", () => {
     // A real turn is being interrupted; Codex will report its end and clear
     // the slot. Releasing it here would free the slot under a live turn.
     expect(internals.activeForegroundTurnId).toBe("test-turn");
+  });
+
+  it("wakes a waiting startTurn when the interrupt releases the slot", async () => {
+    // SLP-PATCH(interrupt-releases-foreground): releasing the slot is only
+    // half the repair. A prompt already blocked on the teardown wait sleeps
+    // until its own timeout unless the release wakes it, so the wakeup this
+    // interrupt was answering still arrives 10s late.
+    const session = createSession();
+    const internals = castInternals<{
+      currentTurnId: string | null;
+      client: unknown;
+      foregroundTurnClearWaiters: Array<() => void>;
+    }>(session);
+    internals.client = {};
+    internals.currentTurnId = null;
+
+    const queued = session.startTurn("queued behind the teardown");
+    const settled = queued.then(
+      () => "settled",
+      () => "settled",
+    );
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
+
+    await session.interrupt();
+
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+    await expect(
+      Promise.race([
+        settled,
+        new Promise((resolve) => setTimeout(resolve, 50, "still waiting")),
+      ]),
+    ).resolves.toBe("settled");
   });
 
   it("does not release a foreground slot a newer turn has taken", async () => {
