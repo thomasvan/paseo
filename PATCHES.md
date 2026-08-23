@@ -82,15 +82,26 @@ reintroduced at the two sites #3640 and #3683 repair. The note that used to
 stand here — *"if #3674 lands first, the flush must be added there"* —
 understated it; the call appeared in no PR at all.
 
-Measured before the consolidation: with both flush calls deleted, the
-provider suite passed 148/148. Nothing proved them. The consolidated PR adds
-one test per call, each asserting that a `startTurn` blocked on the teardown
-settles within 50ms of the release rather than sleeping out the timeout;
-deleting either call fails its own test and nothing else. Each of the four
-commits is green on its own — `dead-run-settles` and
+Neither call was proven upstream: on a branch carrying all four patches
+without this branch's own tests, deleting both left the provider suite at
+148/148. The consolidated PR therefore adds one test per call, each asserting
+that a `startTurn` blocked on the teardown settles within 50ms of the release
+rather than sleeping out the timeout; there, deleting either call fails its
+own test and nothing else.
+
+**Here the two calls are not equally exposed**, and an earlier version of this
+section said they were. `d7c8450c6` already pinned the interrupt-side call:
+`releases an orphaned foreground slot when the turn was never identified`
+queues a real prompt, then asserts the waiter list empties and the queued
+prompt is not refused. Deleting that call fails it. Only the dispose-side call
+was unproven on this branch — deleted alone at `716b6379c`, the suite passed
+148/148 — so only its test is carried here; the interrupt-side test would
+duplicate coverage that already exists.
+
+Each of the four upstream commits is green on its own. `dead-run-settles` and
 `interrupt-releases-foreground` are squashed into one commit because the
-former invalidates an upstream test that only the latter repairs, which is
-why #3640 sat red on its first push.
+former invalidates an upstream test that only the latter repairs, which is why
+#3640 sat red on its first push.
 
 
 ## `replace-awaits-teardown`
