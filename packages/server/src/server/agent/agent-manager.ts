@@ -2755,6 +2755,23 @@ export class AgentManager {
       releaseForegroundTurn?: (turnId: string) => boolean;
     };
     if (typeof session.releaseForegroundTurn !== "function") {
+      // SLP-DIAGNOSTIC(force-cancel-release): local only, do not upstream.
+      const probe = session as unknown as Record<string, unknown>;
+      this.logger.warn(
+        {
+          agentId: agent.id,
+          provider: agent.provider,
+          turnId,
+          sessionClass: (session as object)?.constructor?.name ?? null,
+          hasStartTurn: typeof probe.startTurn,
+          hasInterrupt: typeof probe.interrupt,
+          hasActiveFg: typeof probe.activeForegroundTurnId,
+          ownKeys: Object.getOwnPropertyNames(
+            Object.getPrototypeOf(session as object) ?? {},
+          ).slice(0, 40),
+        },
+        "cancelAgentRun.force_cancel_release_no_method",
+      );
       return;
     }
     let released = false;
@@ -2771,6 +2788,14 @@ export class AgentManager {
       this.logger.warn(
         { agentId: agent.id, provider: agent.provider, turnId },
         "cancelAgentRun.force_cancel_released_foreground",
+      );
+    } else {
+      // SLP-DIAGNOSTIC(force-cancel-release): local only, do not upstream.
+      const held = (agent.session as { activeForegroundTurnId?: string | null })
+        .activeForegroundTurnId;
+      this.logger.warn(
+        { agentId: agent.id, provider: agent.provider, turnId, heldSlot: held ?? null },
+        "cancelAgentRun.force_cancel_release_declined",
       );
     }
   }
