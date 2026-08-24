@@ -712,10 +712,7 @@ describe("Codex foreground teardown wait (replace path)", () => {
 
     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
     await expect(
-      Promise.race([
-        settled,
-        new Promise((resolve) => setTimeout(resolve, 50, "still waiting")),
-      ]),
+      Promise.race([settled, new Promise((resolve) => setTimeout(resolve, 50, "still waiting"))]),
     ).resolves.toBe("settled");
   });
 
@@ -814,6 +811,66 @@ describe("Codex foreground teardown wait (replace path)", () => {
 
     await expect(interrupted).resolves.toBeUndefined();
     expect(internals.activeForegroundTurnId).toBe("newer-turn");
+  });
+
+  it("releases the foreground slot only for the turn that owns it", async () => {
+    // SLP-PATCH(force-cancel-releases-foreground): the manager calls this after
+    // a force-cancel, because its own turn_canceled dispatch settles only the
+    // run record and the provider will never report the turn end that would
+    // otherwise clear the slot. Keyed, so a force-cancel racing a newer turn
+    // into the slot cannot strip the live turn's ownership.
+    const session = createSession();
+    const internals = castInternals<{ activeForegroundTurnId: string | null }>(session);
+    const releaser = session as unknown as {
+      releaseForegroundTurn(turnId: string): boolean;
+    };
+
+    internals.activeForegroundTurnId = "owning-turn";
+
+    expect(releaser.releaseForegroundTurn("a-stale-turn")).toBe(false);
+    expect(internals.activeForegroundTurnId).toBe("owning-turn");
+    expect(releaser.releaseForegroundTurn("")).toBe(false);
+    expect(internals.activeForegroundTurnId).toBe("owning-turn");
+
+    expect(releaser.releaseForegroundTurn("owning-turn")).toBe(true);
+    expect(internals.activeForegroundTurnId).toBeNull();
+    expect(releaser.releaseForegroundTurn("owning-turn")).toBe(false);
+  });
+
+  it("frees a startTurn queued behind a wedged slot when the slot is released", async () => {
+    // The payoff: without the release the waiter sits until
+    // FOREGROUND_TEARDOWN_WAIT_MS expires and the seat wedges, and every retry
+    // re-wedges it. Only the queue-release is asserted here — once past the
+    // guard startTurn goes on to connect(), which this harness has no client
+    // for, so its own outcome says nothing about the property under test.
+    vi.useFakeTimers();
+    try {
+      const session = createSession();
+      const internals = castInternals<{
+        activeForegroundTurnId: string | null;
+        foregroundTurnClearWaiters: Array<() => void>;
+      }>(session);
+      const releaser = session as unknown as {
+        releaseForegroundTurn(turnId: string): boolean;
+      };
+
+      const owning = internals.activeForegroundTurnId;
+      expect(owning).toBeTruthy();
+
+      const attempt = session.startTurn("queued behind a wedged slot");
+      attempt.catch(() => {
+        // Harness has no Codex client; irrelevant to the queue-release.
+      });
+      expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
+
+      expect(releaser.releaseForegroundTurn(owning as string)).toBe(true);
+      expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+      expect(internals.activeForegroundTurnId).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses only when the teardown never completes, retaining no waiter", async () => {

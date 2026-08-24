@@ -4726,6 +4726,34 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
   }
 
+  // SLP-PATCH(force-cancel-releases-foreground): the manager's force-cancel
+  // settles its own run record and never reaches this session. Its
+  // `turn_canceled` dispatch resolves `runs.getMatchingWaiters`; nothing in
+  // that path clears `activeForegroundTurnId`. The slot is released only when
+  // Codex itself reports the turn ended — and the force-cancel exists exactly
+  // because Codex did not report it. So the slot is held forever, every later
+  // startTurn burns FOREGROUND_TEARDOWN_WAIT_MS against a turn that will never
+  // end, and each retry re-wedges the seat; only killing the app-server
+  // process clears it. Measured 4 times in one hour (2026-08-24) on a daemon
+  // carrying all four earlier wedge patches: none of them covers this path —
+  // interrupt-releases-foreground fires on the interrupt no-op and had nothing
+  // to release (both id fields were already null when it sampled), and the
+  // leak was opened by the turn that started 5ms later. Keyed release only:
+  // `run.turnId` is this session's own `createTurnId()` value, so a mismatch
+  // means a newer turn owns the slot and must keep it.
+  releaseForegroundTurn(turnId: string): boolean {
+    if (!turnId || this.activeForegroundTurnId !== turnId) {
+      return false;
+    }
+    this.activeForegroundTurnId = null;
+    this.activeClientMessageId = null;
+    this.currentTurnId = null;
+    this.flushForegroundTurnClearWaiters();
+    this.pendingForegroundTurnIdentification?.resolve(null);
+    this.pendingForegroundTurnIdentification = null;
+    return true;
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     this.clearPendingPermissions();

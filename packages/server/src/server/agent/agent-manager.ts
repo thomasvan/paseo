@@ -2716,6 +2716,11 @@ export class AgentManager {
         reason: "interrupted",
         turnId: run.turnId,
       });
+      // SLP-PATCH(force-cancel-releases-foreground): the dispatch above settles
+      // this manager's run record only. Release the provider session's
+      // foreground slot too, before awaiting settlement so a settle that never
+      // arrives cannot strand it.
+      this.releaseSessionForegroundTurn(agent, run.turnId);
       await run.settledPromise;
     } else if (settlement === "timed_out" && run.kind === "autonomous") {
       this.logger.warn(
@@ -2735,6 +2740,39 @@ export class AgentManager {
       this.emitState(agent);
     }
     return { status: "settled" };
+  }
+
+  // SLP-PATCH(force-cancel-releases-foreground): a force-cancel means the
+  // provider acknowledged the interrupt and then did not end the turn. The
+  // session keeps `activeForegroundTurnId` until the provider reports a
+  // turn end that will never come, so every later startTurn refuses with
+  // "A foreground turn is already active" and each retry re-wedges the seat.
+  // Optional on the session interface: providers that do not implement it are
+  // unaffected. Only codex is patched here, because only codex is measured;
+  // claude, acp and opencode carry the same field and should be audited.
+  private releaseSessionForegroundTurn(agent: ActiveManagedAgent, turnId: string): void {
+    const session = agent.session as {
+      releaseForegroundTurn?: (turnId: string) => boolean;
+    };
+    if (typeof session.releaseForegroundTurn !== "function") {
+      return;
+    }
+    let released = false;
+    try {
+      released = session.releaseForegroundTurn(turnId);
+    } catch (error) {
+      this.logger.warn(
+        { agentId: agent.id, turnId, err: error },
+        "cancelAgentRun.force_cancel_release_foreground_failed",
+      );
+      return;
+    }
+    if (released) {
+      this.logger.warn(
+        { agentId: agent.id, provider: agent.provider, turnId },
+        "cancelAgentRun.force_cancel_released_foreground",
+      );
+    }
   }
 
   private async cancelAgentRunBefore(

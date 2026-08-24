@@ -1192,6 +1192,8 @@ class McpCapableTestAgentClient extends TestAgentClient {
 
 class ControlledInterruptSession extends TestAgentSession {
   interruptCalled = false;
+  releasedForegroundTurnIds: string[] = [];
+  heldForegroundTurnId: string | null = null;
 
   constructor(
     config: AgentSessionConfig,
@@ -1202,6 +1204,7 @@ class ControlledInterruptSession extends TestAgentSession {
   }
 
   override async startTurn(): Promise<{ turnId: string }> {
+    this.heldForegroundTurnId = this.turnId;
     setTimeout(() => {
       this.pushEvent({ type: "turn_started", provider: this.provider, turnId: this.turnId });
     }, 0);
@@ -1211,6 +1214,16 @@ class ControlledInterruptSession extends TestAgentSession {
   override async interrupt(): Promise<void> {
     this.interruptCalled = true;
     await this.interruptBehavior(this);
+  }
+
+  // Mirrors the codex session's keyed release: only the slot this id owns.
+  releaseForegroundTurn(turnId: string): boolean {
+    this.releasedForegroundTurnIds.push(turnId);
+    if (this.heldForegroundTurnId !== turnId) {
+      return false;
+    }
+    this.heldForegroundTurnId = null;
+    return true;
   }
 }
 
@@ -2363,6 +2376,38 @@ test("cancelAgentRun force-cancels an acknowledged interrupt whose run never set
     await expect(fixture.manager.cancelAgentRun(fixture.agentId)).resolves.toEqual({
       status: "not_running",
     });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("cancelAgentRun force-cancel releases the session's foreground slot", async () => {
+  // SLP-PATCH(force-cancel-releases-foreground): the force-cancel settles the
+  // manager's run record via dispatchSessionEvent, which only resolves
+  // runs.getMatchingWaiters — nothing in that path reaches the session. The
+  // session releases its foreground slot only when the provider reports the
+  // turn ended, and a force-cancel happens precisely because the provider did
+  // not. The slot was therefore held forever: every later startTurn refused
+  // with "A foreground turn is already active" and each retry re-wedged the
+  // seat, recoverable only by killing the provider process. Measured 4 times
+  // in one hour (2026-08-24) with all four earlier wedge patches live.
+  const fixture = await createControlledInterruptFixture({
+    name: "interrupt-foreground-release",
+    agentId: "00000000-0000-4000-8000-000000000306",
+    turnId: "wedging-turn",
+    interrupt: async () => {},
+  });
+
+  try {
+    await fixture.startForegroundRun();
+    expect(fixture.session.heldForegroundTurnId).toBe("wedging-turn");
+
+    await expect(fixture.manager.cancelAgentRun(fixture.agentId)).resolves.toEqual({
+      status: "settled",
+    });
+
+    expect(fixture.session.releasedForegroundTurnIds).toContain("wedging-turn");
+    expect(fixture.session.heldForegroundTurnId).toBeNull();
   } finally {
     await fixture.cleanup();
   }
