@@ -447,6 +447,41 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   the local markers if it lands. Coverage lives in
   `packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts`.
 
+### archived-live-list
+
+- **What:** an archived agent is resumed back into memory whenever something reads its
+  history — `agent-loading.ts` passes `{ purpose: "history" }` to
+  `resumeAgentFromPersistence` exactly when `record.archivedAt` is set. Its id is then in
+  the manager's map, so `list_agents` treats it as live and the stored branch drops it
+  (`!liveIds.has(record.id)`). The stored record is the only carrier of the archive
+  timestamp, so the value and the archive filter went with it: the agent came back as live
+  with `archivedAt: null`, and `includeArchived: false` returned it anyway because that
+  filter only ever ran on the stored branch. The protocol declares the field
+  `z.string().nullable().optional()`, so the omission validated silently. The fix keeps
+  storage the single owner — `serializeSnapshotWithMetadata` merges the stored record at
+  the MCP boundary, reusing the read it already did for the title, and archive filtering
+  moves to the combined live-plus-stored list.
+- **Why it matters here:** this stopped the room. A Supervisor reconciling project
+  ownership read an archived Lead as live and refused to proceed, correctly, on data that
+  was wrong. It then recurred while the review of its own fix was running: reading the
+  archived Lead's and Peer's transcripts resurrected both, and the next sweep found two
+  seats it had already closed. Whole-project ownership reconciliation is built on this
+  call, so it can invent an owning Lead from an archived one.
+- **No `SLP-PATCH` marker, deliberately.** The diff is byte-identical to the upstream PR,
+  so if upstream takes it the files converge instead of conflicting — the same reasoning
+  recorded above for `detached-arg`'s and `question-answer-required`'s tests. Nothing here
+  needs re-applying by hand; if the PR lands, delete this section.
+- **Rejected alternative, recorded because it is the tempting one:** carrying `archivedAt`
+  on `ManagedAgent`. `unarchiveSnapshot` clears only the stored record and then notifies,
+  so a managed copy survives the unarchive and reports a live agent as archived until it
+  is reloaded — a second owner of state that one transition forgets to update, which is
+  the same bug in mirror image. Review caught this; it was not caught by writing it.
+- **Upstream status:** open — [getpaseo/paseo#3803](https://github.com/getpaseo/paseo/pull/3803),
+  branch `fix/archived-agents-in-live-listing` off `upstream/main`. Coverage lives in
+  upstream's own `packages/server/src/server/agent/mcp-server.test.ts`, beside the archive
+  cases it extends; two of the three tests are mutation-checked, and the third is labelled
+  in-file as a structural guard that passes on unfixed code.
+
 ## Sync procedure
 
 First, check whether upstream touched the patched files since the last sync:
@@ -460,8 +495,19 @@ git diff --name-only $(git merge-base HEAD upstream/main) upstream/main -- \
   packages/server/src/server/agent/providers/claude/agent.ts \
   packages/server/src/server/agent/providers/claude/agent.test.ts \
   packages/server/src/server/agent/providers/codex-app-server-agent.ts \
-  packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
+  packages/server/src/server/agent/providers/codex-app-server-agent.test.ts \
+  packages/server/src/server/agent/mcp-shared.ts \
+  packages/server/src/server/agent/agent-projections.ts \
+  packages/server/src/server/messages.ts \
+  packages/server/src/server/agent/mcp-server.test.ts
 ```
+
+The last four carry `archived-live-list`, which has **no marker at all** — so a
+silent reversal there leaves nothing to grep for. Until
+[#3803](https://github.com/getpaseo/paseo/pull/3803) lands, the check that it
+survived a sync is behavioural, not textual: an archived agent hydrated by a
+history read must stay out of a default `list_agents` and must report a real
+`archivedAt` under `includeArchived: true`.
 
 **The two provider files and their upstream-owned test files are on that list
 deliberately.** Three patches live in providers now — `question-answer-required`
