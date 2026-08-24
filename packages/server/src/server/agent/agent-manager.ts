@@ -2717,10 +2717,16 @@ export class AgentManager {
         turnId: run.turnId,
       });
       // SLP-PATCH(force-cancel-releases-foreground): the dispatch above settles
-      // this manager's run record only. Release the provider session's
-      // foreground slot too, before awaiting settlement so a settle that never
-      // arrives cannot strand it.
-      this.releaseSessionForegroundTurn(agent, run.turnId);
+      // this manager's run record only, and the
+      // session clears its foreground slot only on a turn end that a
+      // force-cancel means is never coming. Release it here, before awaiting
+      // settlement so a settle that never arrives cannot strand the slot.
+      if (agent.session.releaseForegroundTurn?.(run.turnId)) {
+        this.logger.warn(
+          { agentId, provider: agent.provider, turnId: run.turnId },
+          "cancelAgentRun.force_cancel_released_foreground",
+        );
+      }
       await run.settledPromise;
     } else if (settlement === "timed_out" && run.kind === "autonomous") {
       this.logger.warn(
@@ -2740,64 +2746,6 @@ export class AgentManager {
       this.emitState(agent);
     }
     return { status: "settled" };
-  }
-
-  // SLP-PATCH(force-cancel-releases-foreground): a force-cancel means the
-  // provider acknowledged the interrupt and then did not end the turn. The
-  // session keeps `activeForegroundTurnId` until the provider reports a
-  // turn end that will never come, so every later startTurn refuses with
-  // "A foreground turn is already active" and each retry re-wedges the seat.
-  // Optional on the session interface: providers that do not implement it are
-  // unaffected. Only codex is patched here, because only codex is measured;
-  // claude, acp and opencode carry the same field and should be audited.
-  private releaseSessionForegroundTurn(agent: ActiveManagedAgent, turnId: string): void {
-    const session = agent.session as {
-      releaseForegroundTurn?: (turnId: string) => boolean;
-    };
-    if (typeof session.releaseForegroundTurn !== "function") {
-      // SLP-DIAGNOSTIC(force-cancel-release): local only, do not upstream.
-      const probe = session as unknown as Record<string, unknown>;
-      this.logger.warn(
-        {
-          agentId: agent.id,
-          provider: agent.provider,
-          turnId,
-          sessionClass: (session as object)?.constructor?.name ?? null,
-          hasStartTurn: typeof probe.startTurn,
-          hasInterrupt: typeof probe.interrupt,
-          hasActiveFg: typeof probe.activeForegroundTurnId,
-          ownKeys: Object.getOwnPropertyNames(
-            Object.getPrototypeOf(session as object) ?? {},
-          ).slice(0, 40),
-        },
-        "cancelAgentRun.force_cancel_release_no_method",
-      );
-      return;
-    }
-    let released = false;
-    try {
-      released = session.releaseForegroundTurn(turnId);
-    } catch (error) {
-      this.logger.warn(
-        { agentId: agent.id, turnId, err: error },
-        "cancelAgentRun.force_cancel_release_foreground_failed",
-      );
-      return;
-    }
-    if (released) {
-      this.logger.warn(
-        { agentId: agent.id, provider: agent.provider, turnId },
-        "cancelAgentRun.force_cancel_released_foreground",
-      );
-    } else {
-      // SLP-DIAGNOSTIC(force-cancel-release): local only, do not upstream.
-      const held = (agent.session as { activeForegroundTurnId?: string | null })
-        .activeForegroundTurnId;
-      this.logger.warn(
-        { agentId: agent.id, provider: agent.provider, turnId, heldSlot: held ?? null },
-        "cancelAgentRun.force_cancel_release_declined",
-      );
-    }
   }
 
   private async cancelAgentRunBefore(

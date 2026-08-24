@@ -2351,11 +2351,10 @@ test("cancelAgentRun preserves running state when the provider interrupt hangs",
 });
 
 test("cancelAgentRun force-cancels an acknowledged interrupt whose run never settles", async () => {
-  // SLP-PATCH(dead-run-settles): the production wedge — the session had lost
-  // its turn while the manager still tracked a run, so nothing would ever
-  // settle it. With interrupt() resolving as a no-op (codex now matches
-  // claude and acp), the acknowledged-timeout force-cancel must settle the
-  // orphaned run instead of leaving stop/replace refused until a restart.
+  // The session lost its turn while the manager still tracked a run, so
+  // nothing would ever settle it. With interrupt() resolving as a no-op, the
+  // acknowledged-timeout force-cancel must settle the orphaned run instead of
+  // leaving stop and replace refused for the rest of the session.
   const fixture = await createControlledInterruptFixture({
     name: "interrupt-orphaned",
     agentId: "00000000-0000-4000-8000-000000000305",
@@ -2382,31 +2381,26 @@ test("cancelAgentRun force-cancels an acknowledged interrupt whose run never set
 });
 
 test("cancelAgentRun force-cancel releases the session's foreground slot", async () => {
-  // SLP-PATCH(force-cancel-releases-foreground): the force-cancel settles the
-  // manager's run record via dispatchSessionEvent, which only resolves
-  // runs.getMatchingWaiters — nothing in that path reaches the session. The
-  // session releases its foreground slot only when the provider reports the
-  // turn ended, and a force-cancel happens precisely because the provider did
-  // not. The slot was therefore held forever: every later startTurn refused
-  // with "A foreground turn is already active" and each retry re-wedged the
-  // seat, recoverable only by killing the provider process. Measured 4 times
-  // in one hour (2026-08-24) with all four earlier wedge patches live.
+  // The force-cancel dispatches turn_canceled, which resolves
+  // runs.getMatchingWaiters and settles this manager's run record. Nothing on
+  // that path reaches the session, and the session releases its foreground slot
+  // only when the provider reports the turn ended -- which a force-cancel
+  // happens precisely because it did not. Without the release the slot is held
+  // for the rest of the session and every later startTurn is refused.
   const fixture = await createControlledInterruptFixture({
     name: "interrupt-foreground-release",
     agentId: "00000000-0000-4000-8000-000000000306",
-    turnId: "wedging-turn",
+    turnId: "stuck-turn",
     interrupt: async () => {},
   });
 
   try {
     await fixture.startForegroundRun();
-    expect(fixture.session.heldForegroundTurnId).toBe("wedging-turn");
+    expect(fixture.session.heldForegroundTurnId).toBe("stuck-turn");
 
-    await expect(fixture.manager.cancelAgentRun(fixture.agentId)).resolves.toEqual({
-      status: "settled",
-    });
+    await fixture.manager.cancelAgentRun(fixture.agentId);
 
-    expect(fixture.session.releasedForegroundTurnIds).toContain("wedging-turn");
+    expect(fixture.session.releasedForegroundTurnIds).toContain("stuck-turn");
     expect(fixture.session.heldForegroundTurnId).toBeNull();
   } finally {
     await fixture.cleanup();

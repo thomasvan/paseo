@@ -135,12 +135,13 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
   return message.includes(`no archived rollout found for thread id ${threadId}`);
 }
 
-// SLP-PATCH(replace-awaits-teardown): how long an incoming turn waits for the
-// previous foreground turn's teardown before refusing. The replace path can
-// reach startTurn while the interrupted turn is still tearing down — the
-// manager's force-cancel settles its run record before this provider clears
-// activeForegroundTurnId (measured 4ms apart in production) — and refusing
-// immediately loses the incoming wakeup and marks the seat errored.
+// SLP-PATCH(replace-awaits-teardown)
+// How long an incoming turn waits for the previous foreground turn's teardown
+// before refusing. A replace path can reach startTurn while the interrupted
+// turn is still tearing down: the manager's force-cancel settles its run
+// record before this provider clears activeForegroundTurnId (measured 4ms
+// apart in production), and refusing immediately loses the incoming prompt
+// and marks the agent errored.
 const FOREGROUND_TEARDOWN_WAIT_MS = 10_000;
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
@@ -3240,8 +3241,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
   // SLP-PATCH(replace-awaits-teardown): resolved whenever the foreground turn
-  // clears, so an incoming startTurn can wait out a teardown instead of
-  // refusing a 4ms race.
+  // clears, so an incoming startTurn can
+  // wait out a teardown instead of refusing a milliseconds-wide race.
   private foregroundTurnClearWaiters: Array<() => void> = [];
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
@@ -4123,7 +4124,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     if (this.activeForegroundTurnId) {
       // SLP-PATCH(replace-awaits-teardown): wait bounded for the previous
-      // turn's teardown; only a turn that genuinely will not end is refused.
+      // turn's teardown; only a turn that
+      // genuinely will not end is refused.
       await this.waitForForegroundTurnClear(FOREGROUND_TEARDOWN_WAIT_MS);
       if (this.activeForegroundTurnId) {
         throw new Error("A foreground turn is already active");
@@ -4679,14 +4681,12 @@ export class CodexAppServerAgentSession implements AgentSession {
       turnId = await pendingIdentification.promise;
     }
     if (!turnId || (foregroundTurnId && this.activeForegroundTurnId !== foregroundTurnId)) {
-      // SLP-PATCH(dead-run-settles): resolve as a no-op — claude and acp both
-      // return when there is nothing to interrupt, and codex was the one
-      // provider that threw. The throw made the manager read a cancel as
-      // unacknowledged and refuse forever when the session had lost its turn
-      // while a run was still tracked (measured twice in production, 2h+
-      // each, repaired only by daemon restarts). Resolving lets
-      // cancelAgentRun's existing acknowledged-timeout force-cancel settle
-      // the orphaned run.
+      // SLP-PATCH(dead-run-settles): nothing identifiable to interrupt. Resolve
+      // rather than throw, matching
+      // the claude and acp providers: throwing leaves the manager reading the
+      // cancel as unacknowledged, so it refuses every later stop and replace
+      // for the rest of the session. Resolving lets the existing
+      // acknowledged-timeout force-cancel settle the orphaned run.
       this.logger.warn(
         {
           agentId: this.agentId,
@@ -4696,23 +4696,13 @@ export class CodexAppServerAgentSession implements AgentSession {
         },
         "provider.codex.interrupt.no_identified_turn_noop",
       );
-      // SLP-PATCH(interrupt-releases-foreground): the no-op above lets the
-      // manager settle its own run record, but nothing releases this session's
-      // foreground slot. Codex never identified the turn, so no turn-end event
-      // will ever arrive to clear it, and the slot then refuses every later
-      // startTurn with "A foreground turn is already active" — a wedge that
-      // survives stop() and agent reload and clears only by killing the
-      // app-server process. Measured 9 times in one 8h production window
-      // (2026-08-22); while a parent is wedged this way, the child-finish
-      // notifications addressed to it are dropped with no retry. Release only
-      // the slot this call sampled: if identification raced a newer turn into
-      // it, that turn is live and owns it.
-      if (!turnId && foregroundTurnId && this.activeForegroundTurnId === foregroundTurnId) {
-        this.activeForegroundTurnId = null;
-        this.activeClientMessageId = null;
-        this.flushForegroundTurnClearWaiters();
-        this.pendingForegroundTurnIdentification?.resolve(null);
-        this.pendingForegroundTurnIdentification = null;
+      // SLP-PATCH(interrupt-releases-foreground): the turn was never identified,
+      // so no turn-end event will arrive to
+      // release the foreground slot, and every later startTurn would refuse
+      // with "A foreground turn is already active". Release only the slot this
+      // call sampled: a newer turn that raced into it is live and keeps it.
+      if (!turnId && foregroundTurnId) {
+        this.releaseForegroundTurn(foregroundTurnId);
       }
       return;
     }
@@ -4726,21 +4716,17 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
   }
 
-  // SLP-PATCH(force-cancel-releases-foreground): the manager's force-cancel
-  // settles its own run record and never reaches this session. Its
-  // `turn_canceled` dispatch resolves `runs.getMatchingWaiters`; nothing in
-  // that path clears `activeForegroundTurnId`. The slot is released only when
-  // Codex itself reports the turn ended — and the force-cancel exists exactly
-  // because Codex did not report it. So the slot is held forever, every later
-  // startTurn burns FOREGROUND_TEARDOWN_WAIT_MS against a turn that will never
-  // end, and each retry re-wedges the seat; only killing the app-server
-  // process clears it. Measured 4 times in one hour (2026-08-24) on a daemon
-  // carrying all four earlier wedge patches: none of them covers this path —
-  // interrupt-releases-foreground fires on the interrupt no-op and had nothing
-  // to release (both id fields were already null when it sampled), and the
-  // leak was opened by the turn that started 5ms later. Keyed release only:
-  // `run.turnId` is this session's own `createTurnId()` value, so a mismatch
-  // means a newer turn owns the slot and must keep it.
+  // SLP-PATCH(force-cancel-releases-foreground): a force-canceled run settles
+  // the manager's run record, but nothing on that
+  // path clears this session's foreground slot. The slot is released only when
+  // Codex reports the turn ended, and a force-cancel happens precisely because
+  // it did not. startTurn then waits out FOREGROUND_TEARDOWN_WAIT_MS against a
+  // turn that will never end and refuses, and every retry is refused the same
+  // way, so the only repair is killing the app-server process.
+  //
+  // Release only the slot the cancel targeted. turnId is this session's own
+  // createTurnId() value, so a mismatch means a newer turn owns the slot and
+  // keeps it.
   releaseForegroundTurn(turnId: string): boolean {
     if (!turnId || this.activeForegroundTurnId !== turnId) {
       return false;
@@ -4786,26 +4772,19 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.client = null;
     this.connected = false;
     // SLP-PATCH(dispose-releases-foreground): a disposed client cannot own a
-    // live turn, so release the foreground slot with it. Without this, a
-    // failed reconnect clears the native turn id and leaves
-    // activeForegroundTurnId held forever: interrupt() then finds no turn to
-    // interrupt and no-ops, the manager force-cancels its own run record, and
-    // every later startTurn refuses with "A foreground turn is already
-    // active" — a permanently wedged seat that even the heartbeat cannot
-    // re-prompt (measured in production 2026-08-22, recovered only by a
-    // daemon restart). close() already clears the slot before disposing, so
-    // this is a no-op on that path.
-    if (this.activeForegroundTurnId) {
+    // live turn, so release the foreground slot
+    // with it. Without this, a failed reconnect clears the native turn id and
+    // leaves activeForegroundTurnId held forever, and every later startTurn
+    // refuses with "A foreground turn is already active". close() already
+    // clears the slot before disposing, so this is a no-op on that path.
+    const disposedForegroundTurnId = this.activeForegroundTurnId;
+    if (disposedForegroundTurnId) {
       this.emitEvent({
         type: "turn_failed",
         provider: CODEX_PROVIDER,
         error: "Codex client was disposed while a foreground turn was active",
       });
-      this.activeForegroundTurnId = null;
-      this.activeClientMessageId = null;
-      this.flushForegroundTurnClearWaiters();
-      this.pendingForegroundTurnIdentification?.resolve(null);
-      this.pendingForegroundTurnIdentification = null;
+      this.releaseForegroundTurn(disposedForegroundTurnId);
     }
     this.currentTurnId = null;
     if (client) {

@@ -9,10 +9,13 @@ conflicts, the marker plus this file is enough to re-apply the intent by hand.
 Patches live in **five source files** — `packages/server/src/server/agent/agent-prompt.ts`,
 one argument in `packages/server/src/server/agent/create-agent/create.ts`, one schema
 field in `packages/server/src/server/agent/tools/paseo-tools.ts`, one guard in
-`packages/server/src/server/agent/providers/claude/agent.ts`, and four provider-local
+`packages/server/src/server/agent/providers/claude/agent.ts`, four provider-local
 repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts`
 (`dead-run-settles`, `replace-awaits-teardown`, `dispose-releases-foreground`,
-`interrupt-releases-foreground`). Tests for the first two
+`interrupt-releases-foreground`), and a fifth,
+`force-cancel-releases-foreground`, which spans the manager
+(`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
+`provider-registry.ts`). Tests for the first two
 are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
 not own. Two patches put their tests in upstream-owned files instead, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -59,7 +62,7 @@ breakage and is not. The patch table:
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`                                              | open                       |
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`                                                      | open                       |
 | [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config                                                  | open                       |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground` | `codex-app-server-agent.ts` | open — **consolidated**, see below |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | open — **consolidated**, see below |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                          | `codex-app-server-agent.ts`                                           | closed into #3640          |
 | [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                          | `codex-app-server-agent.ts`                                        | closed into #3640          |
@@ -208,12 +211,49 @@ any pending turn identification. It releases **only** the slot this call
 sampled — if identification raced a newer turn into it, that turn is live and
 owns the slot, which the third test pins.
 
-**Test-file note.** The same commit adds the missing `it` to the provider
-suite's `vitest` import. `it` arrived with `replace-awaits-teardown` and was
-never imported, so the file failed to load outright and every test in it —
-including the ones pinning `replace-awaits-teardown` and
-`dispose-releases-foreground` — had been silently not running. Restoring the
-import brings the file back to 148 passing tests.
+**Test-file note.** `it` arrived with `replace-awaits-teardown` and was never
+added to the provider suite's `vitest` import, so the file failed to load
+outright and every test in it — including the ones pinning
+`replace-awaits-teardown` and `dispose-releases-foreground` — had been
+silently not running. The suite now calls `test()` throughout, matching the
+file's own convention, which fixes the load without touching the import.
+
+## `force-cancel-releases-foreground`
+
+**PR:** [#3640](https://github.com/getpaseo/paseo/pull/3640).
+**Sites:** `agent-manager.ts` (`cancelAgentRunNow`), plus the facade forward in
+`provider-registry.ts` and the declaration in `agent-sdk-types.ts`.
+
+**Why.** `cancelAgentRunNow`'s force-cancel dispatches `turn_canceled`, which
+resolves `runs.getMatchingWaiters` and settles the **manager's** run record.
+Nothing on that path reaches the provider session, and the session clears
+`activeForegroundTurnId` only on a turn end that a force-cancel means is never
+coming. The slot is then held for the rest of the session: `startTurn` burns
+the `replace-awaits-teardown` wait against a turn that will never end and
+refuses, every retry re-wedges the seat, and only killing the app-server
+process clears it. Measured four times in one hour (2026-08-24) with the other
+four repairs live — none of them covers this path.
+
+**Fix.** Release the slot the cancel targeted, before awaiting settlement so a
+settle that never arrives cannot strand it. Keyed: `run.turnId` is the
+session's own `createTurnId()` value, so a mismatch means a newer turn owns the
+slot and keeps it.
+
+**Why the facade forward is part of the patch, not incidental.**
+`wrapSessionProvider` returns a plain object literal that hand-enumerates the
+`AgentSession` surface. A method added to `CodexAppServerAgentSession` is
+invisible through it, and the manager's optional-method probe finds
+`undefined`. Every room provider is registry-defined and therefore wrapped, so
+without the forward the release is correct code that never executes — measured
+directly: the probe reported the method missing with `sessionClass: Object`
+while the same session's `startTurn` demonstrably came from the patched class.
+Declaring it on `AgentSession` also brings it under the wrap test's
+compile-time exhaustiveness guard, which exists for exactly this omission.
+
+**Shared release.** All three provider-local releases
+(`interrupt-releases-foreground`, `dispose-releases-foreground`, and this one)
+call one keyed `releaseForegroundTurn()`, so the slot has a single release
+path and one test covers the waiter flush for all of them.
 
 ## `question-answer-required`
 
