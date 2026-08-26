@@ -2,11 +2,15 @@
 
 Local patches carried on top of upstream `getpaseo/paseo` (fork: `thomasvan/paseo`, branch `slp/patches`).
 
-Every patch site in code is marked `SLP-PATCH(<name>)`. `rg "SLP-PATCH\("` lists all sites.
+Every patch site in code is marked `SLP-PATCH(<name>)`. To list them, use the
+gate in `Sync procedure` below — a bare `rg` also matches this file's own prose,
+which is why the gate excludes it.
 When syncing with upstream, merge `upstream/main` into this branch; if a hunk
 conflicts, the marker plus this file is enough to re-apply the intent by hand.
 
-Patches live in **five source files** — `packages/server/src/server/agent/agent-prompt.ts`,
+Patches live in **more files than any sentence here should try to list** — the
+manifest is derived in `Sync procedure` below, and a hand-kept list drifted
+twice before that. The shape, though: `packages/server/src/server/agent/agent-prompt.ts`,
 one argument in `packages/server/src/server/agent/create-agent/create.ts`, one schema
 field in `packages/server/src/server/agent/tools/paseo-tools.ts`, one guard in
 `packages/server/src/server/agent/providers/claude/agent.ts`, four provider-local
@@ -15,9 +19,15 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 `interrupt-releases-foreground`), and a fifth,
 `force-cancel-releases-foreground`, which spans the manager
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
-`provider-registry.ts`). Tests for the first two
-are in `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`, files upstream does
-not own. Two patches put their tests in upstream-owned files instead, for the same reason in
+`provider-registry.ts`).
+
+Three patches keep their tests in fork-only `.slp.test.ts` files upstream does
+not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`, and
+`providers/omp/native-tools-optin.slp.test.ts`. That last one opens with
+`SLP-PATCH coverage (native-tools-optin)` rather than a bare marker, so a
+`SLP-PATCH(` grep does not find it — see the manifest note in `Sync procedure`.
+
+Two other patches put their tests in upstream-owned files, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
 shows through a live MCP tool call, so its two tests sit in `mcp-parity.e2e.test.ts` beside
 the legacy-shape test they mirror; `question-answer-required` guards a rule defined in the
@@ -32,8 +42,12 @@ finish-notification behavior broke that model in five ways — two are now fixed
 three are still carried here — and its native host-tool channel broke the omp family in a
 sixth, unrelated way.
 
-Two have landed upstream and their sections are gone. Nine patches remain here.
-Last upstream sync: **2026-08-22**, `upstream/main` at `8905ad416` (0.5.0-beta.4);
+Two have landed upstream and their sections are gone. **Eleven patches remain
+here** — the count was nine for a while after `force-cancel-releases-foreground`
+and `archived-live-list` arrived without it being updated, which is why the
+`Sync procedure` below now derives its file manifest with a command instead of
+restating a total.
+Last upstream sync: **2026-08-24**, `upstream/main` at `8fdca94ea`;
 all six upstream PRs were still open, so all six carried patches survive — the
 merge was conflict-free, but it brought an upstream test pinning the
 pre-#3640 interrupt-throw (`does not interrupt after the accepted turn
@@ -49,23 +63,25 @@ write so a restart cannot revert a seeded setting), and `wakeup-each`'s harness
 now stubs `steerOrReplaceActiveTurn` because upstream notify() dispatches with
 `activeTurnBehavior: "steer"`. Upstream's own Suite E (worktree tools) in
 `mcp-parity.e2e.test.ts` fails in this environment before and after the sync —
-not patch-related. One more environment note from the 2026-08-22 sync: the
+not patch-related. Suite D can fail here too, but only by timing out; see the
+baseline under `Sync procedure`. One more environment note from the 2026-08-22 sync: the
 tip's `websocket-server.ts` typechecks only against a rebuilt
 `@getpaseo/protocol` dist (`pluginThemes` rode the protocol package), so a
 stale protocol dist fails `build:lib` with an error that looks like upstream
 breakage and is not. The patch table:
 
-| PR                                                   | Patches                    | Touches                                                               | Status                     |
-| ---------------------------------------------------- | -------------------------- | --------------------------------------------------------------------- | -------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                          | `agent-prompt.ts`                                                     | landed `cdb116314`, synced |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`              | `agent-prompt.ts`                                                     | open — **opt-in shape**    |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`          | `create-agent/create.ts`                                              | open                       |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`             | `paseo-tools.ts`                                                      | open                       |
-| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`       | omp provider, config                                                  | open                       |
+| PR                                                   | Patches                                                                                                                                           | Touches                                                                                       | Status                             |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                             | landed `cdb116314`, synced         |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                             | open — **opt-in shape**            |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                      | open                               |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | open                               |
+| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`                                                                                                                              | omp provider, config                                                                          | open                               |
 | [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | open — **consolidated**, see below |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required` | claude provider                                                       | open                       |
-| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                          | `codex-app-server-agent.ts`                                           | closed into #3640          |
-| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                          | `codex-app-server-agent.ts`                                        | closed into #3640          |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                               | open                               |
+| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**               |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                  |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                  |
 
 ## The four codex patches ride one PR
 
@@ -79,10 +95,10 @@ separately.** `interrupt()` and `disposeClient()` each release the slot, and
 each must wake the callers blocked on it through
 `flushForegroundTurnClearWaiters()` — a method `replace-awaits-teardown`
 introduces. Both other branches were cut against a base that lacks it, so in
-*every* merge order upstream would have landed slot releases that leave
+_every_ merge order upstream would have landed slot releases that leave
 waiters asleep for the full 10s timeout: the exact race #3674 exists to close,
 reintroduced at the two sites #3640 and #3683 repair. The note that used to
-stand here — *"if #3674 lands first, the flush must be added there"* —
+stand here — _"if #3674 lands first, the flush must be added there"_ —
 understated it; the call appeared in no PR at all.
 
 Neither call was proven upstream: on a branch carrying all four patches
@@ -105,7 +121,6 @@ Each of the four upstream commits is green on its own. `dead-run-settles` and
 `interrupt-releases-foreground` are squashed into one commit because the
 former invalidates an upstream test that only the latter repairs, which is why
 #3640 sat red on its first push.
-
 
 ## `replace-awaits-teardown`
 
@@ -447,7 +462,54 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   the local markers if it lands. Coverage lives in
   `packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts`.
 
+### dead-run-settles
+
+`packages/server/src/server/agent/providers/codex-app-server-agent.ts` — one
+marker, in `interrupt()`.
+
+**It had no section here until 2026-08-26**, while being named in the PR table,
+in the cluster rationale, and inside four other patches' sections, so a reader
+scanning headings concluded it was gone.
+
+Scanning headings does not enumerate the patches anyway, and nothing in this file
+said so until now: five patches are documented as `##` sections _above_
+`## Patches`, and six as `###` sections under it, so neither level alone lists
+them all. The roster is the marker manifest in `Sync procedure`, plus
+`archived-live-list`, which carries no marker. That mattered more than a missing heading
+usually does: it is the patch nearest the region upstream rewrote in #3742, so
+it is the one most likely to need re-applying by hand, and it had the least
+written intent to re-apply _from_.
+
+**What it changes.** Codex accepted `turn/start` but never published a native
+turn id, so there is nothing identifiable to interrupt. Upstream throws.
+This resolves instead, matching the claude and acp providers.
+
+**Why.** A throw leaves the manager reading the cancel as unacknowledged, and
+it then refuses every later stop and replace for the rest of the session.
+Resolving lets the existing acknowledged-timeout force-cancel settle the
+orphaned run.
+
+**Carried in #3640**, squashed with `interrupt-releases-foreground` into one
+commit — the two are one repair read from two sides: this one decides not to
+throw, that one releases the foreground slot the no-op branch had sampled.
+Separating them would land a resolve that leaks a slot.
+
+**Its test lives in upstream's own file** (`codex-app-server-agent.test.ts`),
+which is where a silent reversal arrives. Note the recorded episode where that
+whole suite failed to load for a period because `it` was never imported, so the
+tests pinning this cluster "had been silently not running" — a marker check
+would not have noticed either.
+
 ### archived-live-list
+
+**This patch carries no `SLP-PATCH(` marker, by design** — so `rg` cannot
+see it, and a silent reversal during a sync leaves nothing to grep for. Its
+survival check is **behavioural, not textual**: after any merge, an archived
+agent hydrated by a history read must stay out of a default `list_agents`
+and must report a real `archivedAt` under `includeArchived: true`. Run that,
+not a marker count. It was also missing from the PR table above until
+2026-08-26 — the mirror of `dead-run-settles` having a table row and no
+section.
 
 - **What:** an archived agent is resumed back into memory whenever something reads its
   history — `agent-loading.ts` passes `{ purpose: "history" }` to
@@ -484,59 +546,183 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
 
 ## Sync procedure
 
-First, check whether upstream touched the patched files since the last sync:
+First, derive the patch-owned file manifest, then check whether upstream touched
+any of it since the last sync.
+
+**The manifest is derived, never restated.** Every hand-kept total in this file
+has been wrong at least once — nine patches when there were eleven, five source
+files when there were far more, and a marker count that could not pass on a
+healthy tree. A number nobody can regenerate is a number nobody can check.
 
 ```bash
 git fetch upstream
-git diff --name-only $(git merge-base HEAD upstream/main) upstream/main -- \
-  packages/server/src/server/agent/agent-prompt.ts \
-  packages/server/src/server/agent/create-agent/create.ts \
-  packages/server/src/server/agent/tools/paseo-tools.ts \
-  packages/server/src/server/agent/providers/claude/agent.ts \
-  packages/server/src/server/agent/providers/claude/agent.test.ts \
-  packages/server/src/server/agent/providers/codex-app-server-agent.ts \
-  packages/server/src/server/agent/providers/codex-app-server-agent.test.ts \
-  packages/server/src/server/agent/mcp-shared.ts \
-  packages/server/src/server/agent/agent-projections.ts \
-  packages/server/src/server/messages.ts \
-  packages/server/src/server/agent/mcp-server.test.ts
+
+# UPSTREAM_OID is the one value this procedure will NOT derive for you, and the
+# refusal is the point. Read the ref once, review THAT commit, then paste the
+# literal in. Everything below -- derivation, dry run, merge -- consumes the
+# variable and never re-reads the ref, because a procedure that re-resolves
+# after a fetch can verify one commit and merge another.
+#
+#     git rev-parse upstream/main     # read it, go review that commit, then:
+#     UPSTREAM_OID=<the 40-char OID>  # a literal, pasted, not a substitution
+#
+[ -n "${UPSTREAM_OID:-}" ] && [ ${#UPSTREAM_OID} -eq 40 ] || {
+  echo "set UPSTREAM_OID to a literal 40-char OID you have reviewed"; exit 1; }
+
+# It need not be the tip -- deliberately merging an older reviewed commit is a
+# legitimate choice -- but it must still exist on upstream's line.
+git merge-base --is-ancestor "$UPSTREAM_OID" upstream/main || {
+  echo "UPSTREAM_OID is not an ancestor of upstream/main: history was rewritten"; exit 1; }
+[ "$UPSTREAM_OID" = "$(git rev-parse upstream/main)" ] || {
+  echo "NOTE: upstream/main has moved past UPSTREAM_OID. That is allowed, but it"
+  echo "is a decision -- record which commit you chose and why, before merging."; }
+
+BASE=$(git merge-base HEAD "$UPSTREAM_OID")
+
+# Set A -- everything a patch owns, and nothing else. A patch is a change this
+# fork made, so the files a patch owns are exactly the files the fork changed.
+# No marker grep, no curated list: both were proxies for this, and both leaked.
+# The grep missed native-tools-optin.slp.test.ts, whose header reads
+# "SLP-PATCH coverage (...)" with a space; the curated list carried two files
+# the fork never touched.
+git diff --name-only "$BASE" HEAD -- packages/ | sort > /tmp/set-a.txt
+
+# Set B -- the diff argument. Fork-only files cannot appear in an upstream diff.
+grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
+git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 ```
 
-The last four carry `archived-live-list`, which has **no marker at all** — so a
-silent reversal there leaves nothing to grep for. Until
-[#3803](https://github.com/getpaseo/paseo/pull/3803) lands, the check that it
-survived a sync is behavioural, not textual: an archived agent hydrated by a
-history read must stay out of a default `list_agents` and must report a real
-`archivedAt` under `includeArchived: true`.
+Set A is **27 files**, Set B **24** — the difference is the three fork-only
+`.slp.test.ts` files, which cannot appear in an upstream diff. Both numbers are
+outputs of the command above, not claims: regenerate them, do not trust them.
 
-**The two provider files and their upstream-owned test files are on that list
-deliberately.** Three patches live in providers now — `question-answer-required`
-in claude, `dead-run-settles` and `replace-awaits-teardown` in codex — and
-their tests sit in upstream's own files, which is exactly where a silent
-reversal arrives: the 2026-08-22 sync merged clean and still brought an
-upstream test asserting the pre-`#3640` interrupt-throw. Nothing in this
-procedure caught it; running the provider suite by habit did.
+Set A is wider than the marker set on purpose, and by more than you would guess.
+Ask it, do not estimate it:
+
+```bash
+git grep -l 'SLP-PATCH' HEAD -- packages/ | sed 's|^[^:]*:||' | sort > /tmp/marked.txt
+comm -23 /tmp/set-a.txt /tmp/marked.txt        # patched, but nothing to grep for
+```
+
+At the 2026-08-26 sync that was **11 of 27** — five source files
+(`force-cancel-releases-foreground`'s interface and facade, and all of
+`archived-live-list`) and six test files, every one of them owned by upstream.
+A marker gate is blind to all eleven, which is why the diff runs on Set A and not
+on the marker set.
+
+It is also _narrower_ than the watch list you might reach for. `agent-prompt.test.ts`
+and `create-agent/create.test.ts` are upstream's own suites for two patched source
+files, and this fork has never touched either, so they are not patch-owned and do
+not belong in a set that answers "what does a patch own". They are still run after
+every merge — see the test list below. Coverage comes from the test list; the
+manifest only answers ownership. Conflating the two is what put them in a curated
+list nothing could regenerate.
 
 Empty output means a conflict-free merge for the patches. Non-empty output is the normal
 case once patches start landing, and it means read the upstream commits before merging —
 a patch of yours may have landed, been redesigned, or had its insertion point rewritten.
-`git log $(git merge-base HEAD upstream/main)..upstream/main -- <file>` names them.
+`git log "$BASE".."$UPSTREAM_OID" -- <file>` names them.
+
+**Dry-run the merge before committing to it.** `git merge-tree --write-tree`
+performs the whole merge in the object store and touches nothing — it prints the
+resulting tree OID on success, or the conflict list and a non-zero exit. Then
+every post-merge check below can be run against that tree first, so a merge that
+would lose a patch is discovered before there is anything to undo.
+
+```bash
+# On a clean merge this prints one line, the tree OID, and exits 0. On conflict
+# it exits non-zero and the lines after the OID name the conflicted paths.
+out=$(git merge-tree --write-tree --name-only HEAD "$UPSTREAM_OID"); rc=$?
+T=$(printf '%s\n' "$out" | head -1)
+[ $rc -eq 0 ] || { echo "CONFLICTS:"; printf '%s\n' "$out" | tail -n +2; }
+
+# The same marker gate, against the merged tree. Note -h here means
+# --no-filename: that is git grep, not ripgrep, where -h is --help.
+git grep -c  "SLP-PATCH(" "$T" -- packages/ | awk -F: '{n+=$NF} END {print n}'
+git grep -oh "SLP-PATCH([a-z-]*)" "$T" -- packages/ | sort -u | wc -l
+
+# The wakeup-each / timeline_replacement shape, without checking anything out.
+git cat-file -p "$T:packages/server/src/server/agent/agent-prompt.ts" \
+  | grep -n 'SLP-PATCH(wakeup-each)\|timeline_replacement\|event.event.type ==='
+```
+
+The last one is the check no marker count can make. Upstream guards
+`timeline_replacement` with an early `return` inside `setupFinishNotification`,
+and that variant carries no `.event`. The guard must land **above** every
+`event.event.type` read; below them, the first replacement event throws inside
+the watcher that makes a caller hear its children finish, and every marker is
+still present.
 
 Then merge:
 
 ```bash
-git merge upstream/main       # merge, not rebase: pushed history stays stable, no force-push
-rg "SLP-PATCH\("              # verify every marker survived the merge
+git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
+                              # merge time can differ from the one you checked
+
+# Marker gate. Expect 10 names across 40 code/test sites, and the per-name
+# manifest below -- a bare total hides a site moving from one patch to another.
+# This file is excluded because it quotes marker-shaped strings in its own
+# prose, in a number that changes whenever the prose does; include it and the
+# gate can never pass on a healthy tree. Note -I (--no-filename): -o alone
+# prefixes each match with its path, so sort -u would dedupe path:name pairs
+# and return one line per file, not per name.
+rg -c "SLP-PATCH\(" --glob '!PATCHES.md' | awk -F: '{n+=$2} END {print n" sites"}'
+rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 10
+rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
+#   21 native-tools-optin              2 question-answer-required
+#    4 wakeup-each                     2 force-cancel-releases-foreground
+#    3 replace-awaits-teardown         2 detached-arg
+#    3 detached-wakeup                 1 interrupt-releases-foreground
+#                                      1 dispose-releases-foreground
+#                                      1 dead-run-settles
+# archived-live-list is absent from this manifest by design -- it carries no
+# marker, so its survival check is behavioural (see its section below).
+
+npm ci --ignore-scripts       # the lockfile moves on any non-patch bump;
+                              # building without it resolves the old graph
+npm run typecheck:server      # catches a new union member across session.ts
+                              # and hub/daemon-executions.ts -- no test does
+
 npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts
+npx vitest run packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts --bail=1
+npx vitest run packages/server/src/server/agent/provider-registry-wrap.test.ts --bail=1
+npx vitest run packages/server/src/server/agent/mcp-server.test.ts
 npx vitest run packages/server/src/server/agent/providers/claude/agent.test.ts
 npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
 npx vitest run packages/server/src/server/agent/agent-manager.test.ts
+npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts   # diff vs baseline
+
+npm run format:check && npm run lint
 git push origin slp/patches
 ```
+
+Order matters. Typecheck first — it fails fastest and on the class of breakage
+a merge introduces. Then the `.slp.` files, which this fork owns and which are
+the cheapest signal. Then the upstream-owned suites, which are where a patch
+contradicting upstream intent surfaces.
+
+`mcp-parity.e2e.test.ts` is the only one without `--bail=1`, because it fails
+in this environment before and after a sync. **Re-measure the baseline before
+merging** — without it you cannot tell a pre-existing failure from one the merge
+caused. Measured twice on 2026-08-26 at `8fdca94ea`, 33 tests:
+
+| Suite              | Failing                                                                                                                                                                                | Kind                          | Stable?                   |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------- |
+| E (worktree tools) | `list_worktrees on empty repo`, `create_worktree and list_worktrees`, `archive_worktree removes worktree`, `archive_worktree succeeds when caller cwd is inside the archived worktree` | `ZodError` / `AssertionError` | yes — 4/4 both runs       |
+| D (provider tools) | `list_providers returns providers`, `list_profiles returns configured agent profiles, including notes`                                                                                 | `Test timed out in 5000ms`    | **no** — 2 failed, then 1 |
+
+So the gate is not a failure count. **Suite E's four names are the baseline.**
+A Suite D timeout is machine load against a 5 s default, not merge damage —
+re-run before concluding. Anything else is the merge's: a failure outside D and
+E, a _non-timeout_ failure in D, or a fifth name in E.
+
+Three of these were missing from this list until 2026-08-26:
+`native-tools-optin.slp.test.ts`, `provider-registry-wrap.test.ts` and
+`mcp-server.test.ts` — the fork-owned test for the largest patch, and the two
+covering `force-cancel-releases-foreground` and `archived-live-list`.
 
 Run the upstream-owned files (`agent-prompt.test.ts`, `create.test.ts`, both provider
 suites, `agent-manager.test.ts`) too, not just the `.slp.` ones: they are the tripwire for a
