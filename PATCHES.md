@@ -680,8 +680,34 @@ rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
 
 npm ci --ignore-scripts       # the lockfile moves on any non-patch bump;
                               # building without it resolves the old graph
-npm run typecheck:server      # catches a new union member across session.ts
-                              # and hub/daemon-executions.ts -- no test does
+
+# --ignore-scripts is deliberate -- a just-merged upstream should not get to run
+# arbitrary install scripts -- but this repo NEEDS its own postinstall. There
+# are six patches in patches/, applied by scripts/postinstall-patches.mjs, and
+# react-native-draggable-flatlist+4.0.3.patch adds the very prop that
+# sidebar-workspace-list.tsx passes down. Skip this and @getpaseo/app fails
+# typecheck with TS2322 on a prop that "does not exist". Read the script, then
+# run it -- via npm, so node_modules/.bin is on PATH; calling node directly
+# fails with `patch-package ENOENT`.
+npm run postinstall
+
+# Build BEFORE typechecking, and do not skip this because the merge "looks
+# clean". --ignore-scripts means no workspace built, so every cross-package
+# declaration is whatever dist held before -- and a merge that adds a protocol
+# module leaves the server importing a file no dist has. The 0.6.1 sync failed
+# here on @getpaseo/protocol/gitlab-pipeline: src had it, dist did not, and the
+# error reads as upstream breakage. Same shape as the pluginThemes trap in the
+# 2026-08-22 sync, one package over.
+npm run build:server
+
+npm run typecheck             # the WHOLE workspace, not typecheck:server.
+                              # typecheck:server catches a new union member
+                              # across session.ts and hub/daemon-executions.ts,
+                              # which no test does -- but it cannot see the app
+                              # or desktop, and the 0.6.1 sync broke exactly
+                              # there. The pre-commit hook runs the full one
+                              # regardless, so a server-only check just moves
+                              # the failure to your first commit.
 
 npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
@@ -695,7 +721,19 @@ npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent
 npx vitest run packages/server/src/server/agent/agent-manager.test.ts
 npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts   # diff vs baseline
 
-npm run format:check && npm run lint
+npm run format:check
+
+# lint is NOT a pass/fail gate on this branch, and pretending it is stops the
+# sync. Three errors are carried, all in patched code, all pre-existing:
+#   complexity 24 > 20   interrupt()               codex-app-server-agent.ts
+#   no-multiple-resolved                            codex-app-server-agent.ts
+#   complexity 24 > 20   pickSupportedPatchFields  daemon-config-store.ts
+# Compare against that, the way you compare mcp-parity against its baseline:
+# a fourth error, or a different one, is the merge's. Measure both sides if you
+# want certainty -- `git worktree add --detach <dir> <pre-merge-oid>`, symlink
+# node_modules in, run lint there. The 0.6.1 sync did exactly that and got
+# 3 errors / 0 warnings on both sides.
+npm run lint
 git push origin slp/patches
 ```
 
