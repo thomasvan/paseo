@@ -47,7 +47,15 @@ here** — the count was nine for a while after `force-cancel-releases-foregroun
 and `archived-live-list` arrived without it being updated, which is why the
 `Sync procedure` below now derives its file manifest with a command instead of
 restating a total.
-Last upstream sync: **2026-08-24**, `upstream/main` at `8fdca94ea`;
+Last upstream sync: **2026-08-26**, `upstream/main` at `59e623278` (0.6.1),
+merge `256ab1a94`. All eleven patches audited against that tree and all eleven
+retained: every upstream PR is still open, so nothing could retire, and upstream
+touched only six of the twenty-seven patched files — none within a patch region.
+The nearest approach was #3642's `timeline_replacement` guard, which lands in
+`agent-prompt.ts` immediately below `wakeup-each` and above the two
+`event.event.type` reads, where it belongs.
+
+The 2026-08-24 sync note follows. `upstream/main` was at `8fdca94ea`;
 all six upstream PRs were still open, so all six carried patches survive — the
 merge was conflict-free, but it brought an upstream test pinning the
 pre-#3640 interrupt-throw (`does not interrupt after the accepted turn
