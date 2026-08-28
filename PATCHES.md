@@ -443,6 +443,19 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   this one makes a detached child _requestable_ from the canonical shape. Independent fixes,
   different files.
 - **Upstream status:** submitted — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, off `upstream/main`, marker and SLP wording stripped).
+- **Retirement and revisit:** this patch retires when upstream owns canonical detached
+  creation — either `#3147 lands first` or upstream ships a behaviorally equivalent advertised
+  path some other way. In that case, drop the marker and this section during the incorporating
+  sync; any later cleanup of `COMPAT(detachedCreate)` itself is upstream's own concern from
+  there. The other order matters too: if `COMPAT(detachedCreate)` is removed before that — or
+  rewritten enough to change what it does — do not retire this patch. Reopen it and adapt so
+  `detached: true` still creates a parentless agent and still strips the injected parent label.
+  `2027-01-17` is `COMPAT(detachedCreate)`'s own revisit deadline in
+  `packages/server/src/server/agent/create-agent/intent.ts`, not a retirement trigger for this
+  patch — the date changes no runtime behavior, it only forces a look. Removing
+  `COMPAT(nestedCreateAgentPlacement)` alone does not retire this patch either: that only drops
+  the hidden legacy `relationship` fallback this patch's canonical path already bypasses, and
+  may just mean rebasing the explanation above.
 
 ### native-tools-optin
 
