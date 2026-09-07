@@ -731,12 +731,13 @@ npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts   # diff 
 npm run format:check
 
 # lint is NOT a pass/fail gate on this branch, and pretending it is stops the
-# sync. Three errors are carried, all in patched code, all pre-existing:
+# sync. Two errors are carried, all in patched code, all pre-existing:
 #   complexity 24 > 20   interrupt()               codex-app-server-agent.ts
 #   no-multiple-resolved                            codex-app-server-agent.ts
-#   complexity 24 > 20   pickSupportedPatchFields  daemon-config-store.ts
+# (A third, complexity in `pickSupportedPatchFields` (daemon-config-store.ts),
+# left with the native-tools-optin patch in the 2026-09-07 sync.)
 # Compare against that, the way you compare mcp-parity against its baseline:
-# a fourth error, or a different one, is the merge's. Measure both sides if you
+# a third error, or a different one, is the merge's. Measure both sides if you
 # want certainty -- `git worktree add --detach <dir> <pre-merge-oid>`, symlink
 # node_modules in, run lint there. The 0.6.1 sync did exactly that and got
 # 3 errors / 0 warnings on both sides.
