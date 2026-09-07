@@ -21,10 +21,10 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
 `provider-registry.ts`).
 
-Two patches keep their tests in fork-only `.slp.test.ts` files upstream does
-not own: `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`.
-(`native-tools-optin.slp.test.ts` was a third until the 2026-09-07 sync retired
-the patch — see below.)
+Three patches keep their tests in fork-only `.slp.test.ts` files upstream does
+not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts` and
+`native-tools-gate.slp.test.ts`. (`native-tools-optin.slp.test.ts` was a fourth
+until the 2026-09-07 sync retired that patch — see below.)
 
 Two other patches put their tests in upstream-owned files, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -39,10 +39,12 @@ The SLP room repository — named `room-workflow` until 2026-08-10, now `airoom`
 Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
 finish-notification behavior broke that model in five ways — two are now fixed upstream and
 three are still carried here — and its native host-tool channel broke the omp family in a
-sixth, unrelated way. The sixth one retired in the 2026-09-07 sync: upstream's own
-[#4277](https://github.com/getpaseo/paseo/pull/4277) superseded it in a different shape (below).
+sixth, unrelated way. The sixth one left the merge, then came back narrower
+the same day: #4277 superseded the fork's shape but still ties the native
+catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
+`mcp.enabled` alone.
 
-Two have landed upstream and their sections are gone. **Ten patches remain
+Two have landed upstream and their sections are gone. **Eleven patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated, which is why the
 `Sync procedure` below now derives its file manifest with a command instead of
@@ -68,6 +70,17 @@ stub could not satisfy), and `force-cancel-releases-foreground` reads the
 canceled run's turn id from `this.runs.getTurnId(agentId)` now that upstream
 tracks runs in `AgentRunState`. The other nine patches were all retained: their
 upstream PRs are all still open.
+
+A same-day review follow-up re-opened part of the retirement. A read-only Lead
+review (codex-lead, room review of the merge) found that #4277 alone does not
+preserve the room's setup: upstream still gates the native catalog on
+`mcp.injectIntoAgents !== false` (bootstrap startup and both live field-change
+handlers), and the room runs injection off. So `native-tools-injection-independent`
+below re-couples the native catalog's master enable to `mcp.enabled` alone,
+keeping #4277's per-provider policy as the seat-level gate. The room's live
+`~/.paseo/config.json` still carries the retired shape (`daemon.mcp.nativeAgentTools`
+and omp `params.paseoTools`) and must migrate to `paseoTools: { enabled: … }`
+per provider id before this merge is activated.
 
 The 2026-08-24 sync note follows. `upstream/main` was at `8fdca94ea`;
 all six upstream PRs were still open, so all six carried patches survive — the
@@ -471,6 +484,34 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   the hidden legacy `relationship` fallback this patch's canonical path already bypasses, and
   may just mean rebasing the explanation above.
 
+### native-tools-injection-independent
+
+Opened the same day the 2026-09-07 sync retired `native-tools-optin`, after a
+Lead review showed the retirement alone breaks the room. **No upstream PR yet**
+— this is a candidate to upstream once #4277's shape has settled.
+
+- **What:** upstream #4277 kept `agentManager.setPaseoToolsEnabled` and the
+  provider-runtime catalog switch tied to MCP injection
+  (`mcpEnabled && mcp.injectIntoAgents !== false`) at bootstrap startup and at
+  both live field-change handlers (`mcp.enabled`, `mcp.injectIntoAgents`). A
+  deployment that serves MCP caller-scoped — injection off — therefore loses
+  the native catalog entirely, whatever its per-provider policy says, which is
+  the original defect #3449 existed to close. This fork calls a fork-owned
+  gate, `isNativePaseoToolsEnabled(mcpEnabled)` (`native-tools-gate.ts`), at
+  those sites instead: the catalog's master enable follows the MCP stack being
+  enabled, and injection controls only the injected MCP server
+  (`agentMcpBaseUrl`/`setMcpBaseUrl`), never the native catalog.
+- **Why here:** the room runs `daemon.mcp.injectIntoAgents: false` (launchers
+  give each seat caller-scoped servers) while its omp Supervisor and Lead seats
+  must receive the native catalog and its omp Peer seat must not. Under merged
+  upstream, `#4277`'s per-provider policy cannot help: it is a second gate on
+  top of a `paseoToolsEnabled` that injection already forced to false.
+- **Coverage:** `native-tools-gate.slp.test.ts` pins the room's live shape
+  (mcp enabled + injection off ⇒ catalog available) and the two other branches.
+- **Retirement and revisit:** if upstream decouples the native master from MCP
+  injection on its own — or accepts this patch — delete the marker sites, this
+  section, and the fork-owned gate module.
+
 ### dead-run-settles
 
 `packages/server/src/server/agent/providers/codex-app-server-agent.ts` — one
@@ -601,7 +642,7 @@ grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 ```
 
-Set A is **19 files**, Set B **17** — the difference is the two fork-only
+Set A is **22 files**, Set B **19** — the difference is the three fork-only
 `.slp.test.ts` files, which cannot appear in an upstream diff. Both numbers are
 outputs of the command above, not claims: regenerate them, do not trust them.
 
@@ -668,7 +709,7 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Expect 9 names across 19 code/test sites, and the per-name
+# Marker gate. Expect 10 names across 25 code/test sites, and the per-name
 # manifest below -- a bare total hides a site moving from one patch to another.
 # This file is excluded because it quotes marker-shaped strings in its own
 # prose, in a number that changes whenever the prose does; include it and the
@@ -676,13 +717,13 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # prefixes each match with its path, so sort -u would dedupe path:name pairs
 # and return one line per file, not per name.
 rg -c "SLP-PATCH\(" --glob '!PATCHES.md' | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 9
+rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 10
 rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
-#    4 wakeup-each                     2 question-answer-required
-#    3 replace-awaits-teardown         2 force-cancel-releases-foreground
-#    3 detached-wakeup                 2 detached-arg
-#    1 interrupt-releases-foreground   1 dispose-releases-foreground
-#                                      1 dead-run-settles
+#    6 native-tools-injection-independent   2 force-cancel-releases-foreground
+#    4 wakeup-each                          2 detached-arg
+#    3 replace-awaits-teardown              1 interrupt-releases-foreground
+#    3 detached-wakeup                      1 dispose-releases-foreground
+#    2 question-answer-required             1 dead-run-settles
 # archived-live-list is absent from this manifest by design -- it carries no
 # marker, so its survival check is behavioural (see its section below).
 
@@ -720,6 +761,7 @@ npm run typecheck             # the WHOLE workspace, not typecheck:server.
 npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
+npx vitest run packages/server/src/server/native-tools-gate.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/provider-registry-wrap.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/mcp-server.test.ts

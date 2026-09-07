@@ -148,6 +148,8 @@ import {
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
+// SLP-PATCH(native-tools-injection-independent): fork-owned gate module.
+import { isNativePaseoToolsEnabled } from "./native-tools-gate.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
 import { resolveConfigFromPersisted, type CliConfigOverrides } from "./config.js";
 import { resolvePaseoToolPolicy } from "./agent/paseo-tool-policy.js";
@@ -1420,8 +1422,11 @@ export async function createPaseoDaemon(
     agentProviderRuntime.setPaseoToolCatalog(enabled ? createAgentToolCatalog({}) : null);
   };
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
-  agentManager.setPaseoToolsEnabled(config.mcpInjectIntoAgents !== false);
-  setAgentProviderToolsEnabled(config.mcpEnabled !== false && config.mcpInjectIntoAgents !== false);
+  // SLP-PATCH(native-tools-injection-independent): upstream gates the native
+  // catalog on MCP injection; this room injects nothing but needs native tools
+  // for policy-enabled omp seats. Gate on the MCP stack being enabled instead.
+  agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(config.mcpEnabled));
+  setAgentProviderToolsEnabled(isNativePaseoToolsEnabled(config.mcpEnabled));
 
   let mcpEnabled = config.mcpEnabled ?? true;
   let agentMcpBaseUrl: string | null = null;
@@ -1593,18 +1598,23 @@ export async function createPaseoDaemon(
             agentMcpBaseUrl =
               !mcpEnabled || config.mcpInjectIntoAgents === false ? null : mcpBaseUrl;
             agentManager.setMcpBaseUrl(agentMcpBaseUrl);
-            agentManager.setPaseoToolsEnabled(mcpEnabled && config.mcpInjectIntoAgents !== false);
+            // SLP-PATCH(native-tools-injection-independent)
+            agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
             daemonConfigStore.onFieldChange("mcp.enabled", (value) => {
               mcpEnabled = value !== false;
               const inject = daemonConfigStore.get().mcp.injectIntoAgents !== false;
               agentManager.setMcpBaseUrl(mcpEnabled && inject ? mcpBaseUrl : null);
-              agentManager.setPaseoToolsEnabled(mcpEnabled && inject);
-              setAgentProviderToolsEnabled(mcpEnabled && inject);
+              // SLP-PATCH(native-tools-injection-independent): injection only
+              // controls the injected MCP server; native tools follow
+              // mcp.enabled alone.
+              agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
+              setAgentProviderToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
             });
             daemonConfigStore.onFieldChange("mcp.injectIntoAgents", (value) => {
               agentManager.setMcpBaseUrl(mcpEnabled && value ? mcpBaseUrl : null);
-              agentManager.setPaseoToolsEnabled(mcpEnabled && value !== false);
-              setAgentProviderToolsEnabled(mcpEnabled && value !== false);
+              // SLP-PATCH(native-tools-injection-independent)
+              agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
+              setAgentProviderToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
             });
             daemonConfigStore.onFieldChange("appendSystemPrompt", (value) => {
               agentManager.setAppendSystemPrompt(typeof value === "string" ? value : "");
