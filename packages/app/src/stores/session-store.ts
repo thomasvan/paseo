@@ -54,12 +54,10 @@ import {
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
 import {
-  applyTurnLivenessTransition,
   resolveTurnPresentation,
   TURN_LIVENESS_IDLE,
   type TurnLiveness,
   type TurnPresentation,
-  type TurnLivenessTransition,
 } from "@/timeline/turn-liveness";
 
 export interface AgentRuntimeInfo {
@@ -76,7 +74,7 @@ export interface Agent {
   id: string;
   provider: AgentProvider;
   status: AgentLifecycleStatus;
-  activeTurn: { turnId: string | null; startedAt: Date | null } | null;
+  turn: TurnLiveness;
   createdAt: Date;
   updatedAt: Date;
   lastUserMessageAt: Date | null;
@@ -298,20 +296,6 @@ export interface AgentTimelineCursorState {
   }>;
 }
 
-export interface SessionReplicaTimeline {
-  agentId: string;
-  items: StreamItem[];
-  range: AgentTimelineCursorState | null;
-  hasOlder: boolean;
-}
-
-export interface SessionReplica {
-  agents: Map<string, Agent>;
-  workspaces: Map<string, WorkspaceDescriptor>;
-  projects: Map<string, ProjectDescriptor>;
-  timeline: SessionReplicaTimeline | null;
-}
-
 export type AgentTimelineState =
   | { status: "cold" }
   | { status: "painted"; items: StreamItem[] }
@@ -346,7 +330,9 @@ export function selectAgentTurnPresentation(
   agentId: string,
 ): TurnPresentation {
   return resolveTurnPresentation(
-    session?.agentTurnLiveness.get(agentId) ?? TURN_LIVENESS_IDLE,
+    session?.agents.get(agentId)?.turn ??
+      session?.agentDetails.get(agentId)?.turn ??
+      TURN_LIVENESS_IDLE,
     getActiveMessageSubmissions(session?.messageSubmissions.get(agentId)).length > 0,
   );
 }
@@ -401,7 +387,6 @@ export interface SessionState {
   agentStreamTail: Map<string, StreamItem[]>;
   agentStreamHead: Map<string, StreamItem[]>;
   agentTasks: Map<string, TodoEntry[]>;
-  agentTurnLiveness: Map<string, TurnLiveness>;
   messageSubmissions: Map<string, MessageSubmissionRecord[]>;
   agentTimelineCursor: Map<string, AgentTimelineCursorState>;
   agentTimelineHasOlder: Map<string, boolean>;
@@ -454,7 +439,6 @@ interface SessionStoreActions {
     client: DaemonClient | null,
     clientGeneration?: number,
   ) => void;
-  restoreSessionReplica: (serverId: string, replica: SessionReplica) => void;
   clearSession: (serverId: string) => void;
   getSession: (serverId: string) => SessionState | undefined;
   updateSessionClient: (serverId: string, client: DaemonClient, clientGeneration?: number) => void;
@@ -491,14 +475,6 @@ interface SessionStoreActions {
       taskSnapshot?: TodoEntry[];
     },
   ) => void;
-  applyAgentTurnLiveness: (
-    serverId: string,
-    agentId: string,
-    transition: TurnLivenessTransition | readonly TurnLivenessTransition[],
-  ) => void;
-  beginAgentCancellation: (serverId: string, agentId: string) => number;
-  settleAgentCancellation: (serverId: string, agentId: string, requestId: number) => void;
-  clearAgentTurnLiveness: (serverId: string) => void;
   beginAgentMessageSubmission: (
     serverId: string,
     agentId: string,
@@ -628,6 +604,7 @@ interface SessionStoreActions {
   // Hydration
   setHasHydratedAgents: (serverId: string, hydrated: boolean) => void;
   setHasHydratedWorkspaces: (serverId: string, hydrated: boolean) => void;
+  setHasWorkspaceDirectorySnapshot: (serverId: string, available: boolean) => void;
 
   // Agent directory (derived from agents)
   getAgentDirectory: (serverId: string) => AgentDirectoryEntry[] | undefined;
@@ -658,7 +635,6 @@ function createInitialSessionState(
     agentStreamTail: new Map(),
     agentStreamHead: new Map(),
     agentTasks: new Map(),
-    agentTurnLiveness: new Map(),
     messageSubmissions: new Map(),
     agentTimelineCursor: new Map(),
     agentTimelineHasOlder: new Map(),
@@ -725,7 +701,6 @@ function isSessionServerInfoUnchanged(input: {
 
 export const useSessionStore = create<SessionStore>()(
   subscribeWithSelector((set, get) => {
-    let nextCancellationRequestId = 0;
     const commitActivityUpdates: AgentLastActivityCommitter = (updates) => {
       set((prev) => {
         let nextActivity: Map<string, Date> | null = null;
@@ -766,58 +741,6 @@ export const useSessionStore = create<SessionStore>()(
               ...prev.sessions,
               [serverId]: createInitialSessionState(serverId, client, clientGeneration),
             },
-          };
-        });
-      },
-
-      restoreSessionReplica: (serverId, replica) => {
-        set((prev) => {
-          if (prev.sessions[serverId]) {
-            return prev;
-          }
-          const session = createInitialSessionState(serverId, null);
-          const timeline = replica.timeline;
-          const agentStreamTail = new Map<string, StreamItem[]>();
-          const agentTasks = new Map<string, TodoEntry[]>();
-          if (timeline) {
-            agentStreamTail.set(timeline.agentId, timeline.items);
-            const tasks = latestTasksFromStream(timeline.items);
-            if (tasks.length > 0) agentTasks.set(timeline.agentId, tasks);
-          }
-          const agentTimelineCursor = new Map<string, AgentTimelineCursorState>();
-          const agentTimelineHasOlder = new Map<string, boolean>();
-          const agentTimelineHasNewer = new Map<string, boolean>();
-          const agentAuthoritativeHistoryApplied = new Map<string, boolean>();
-          if (timeline?.range) {
-            agentTimelineCursor.set(timeline.agentId, timeline.range);
-            agentTimelineHasOlder.set(timeline.agentId, timeline.hasOlder);
-            agentTimelineHasNewer.set(timeline.agentId, false);
-            agentAuthoritativeHistoryApplied.set(timeline.agentId, true);
-          }
-          const agentLastActivity = new Map(prev.agentLastActivity);
-          for (const agent of replica.agents.values()) {
-            agentLastActivity.set(agent.id, agent.lastActivityAt);
-          }
-          return {
-            ...prev,
-            sessions: {
-              ...prev.sessions,
-              [serverId]: {
-                ...session,
-                agents: replica.agents,
-                workspaceAgentActivity: buildWorkspaceAgentActivityIndex(replica.agents),
-                workspaces: replica.workspaces,
-                projects: replica.projects,
-                hasWorkspaceDirectorySnapshot: true,
-                agentStreamTail,
-                agentTasks,
-                agentTimelineCursor,
-                agentTimelineHasOlder,
-                agentTimelineHasNewer,
-                agentAuthoritativeHistoryApplied,
-              },
-            },
-            agentLastActivity,
           };
         });
       },
@@ -1119,57 +1042,6 @@ export const useSessionStore = create<SessionStore>()(
                 agentTasks,
                 messageSubmissions,
               },
-            },
-          };
-        });
-      },
-
-      applyAgentTurnLiveness: (serverId, agentId, transition) => {
-        set((prev) => {
-          const session = prev.sessions[serverId];
-          if (!session) return prev;
-          const agentTurnLiveness = applyTurnLivenessTransition(
-            session.agentTurnLiveness,
-            agentId,
-            transition,
-          );
-          if (agentTurnLiveness === session.agentTurnLiveness) return prev;
-          return {
-            ...prev,
-            sessions: {
-              ...prev.sessions,
-              [serverId]: { ...session, agentTurnLiveness },
-            },
-          };
-        });
-      },
-
-      beginAgentCancellation: (serverId, agentId) => {
-        nextCancellationRequestId += 1;
-        const requestId = nextCancellationRequestId;
-        get().applyAgentTurnLiveness(serverId, agentId, {
-          type: "cancellation_started",
-          requestId,
-        });
-        return requestId;
-      },
-
-      settleAgentCancellation: (serverId, agentId, requestId) => {
-        get().applyAgentTurnLiveness(serverId, agentId, {
-          type: "cancellation_settled",
-          requestId,
-        });
-      },
-
-      clearAgentTurnLiveness: (serverId) => {
-        set((prev) => {
-          const session = prev.sessions[serverId];
-          if (!session || session.agentTurnLiveness.size === 0) return prev;
-          return {
-            ...prev,
-            sessions: {
-              ...prev.sessions,
-              [serverId]: { ...session, agentTurnLiveness: new Map() },
             },
           };
         });
@@ -1959,6 +1831,20 @@ export const useSessionStore = create<SessionStore>()(
         });
       },
 
+      setHasWorkspaceDirectorySnapshot: (serverId, available) => {
+        set((prev) => {
+          const session = prev.sessions[serverId];
+          if (!session || session.hasWorkspaceDirectorySnapshot === available) return prev;
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [serverId]: { ...session, hasWorkspaceDirectorySnapshot: available },
+            },
+          };
+        });
+      },
+
       // Agent directory - derived from agents (computed on-demand)
       getAgentDirectory: (serverId) => {
         const state = get();
@@ -1976,6 +1862,7 @@ export const useSessionStore = create<SessionStore>()(
             serverId,
             title: agent.title ?? null,
             status: agent.status,
+            turn: agent.turn,
             lastActivityAt,
             cwd: agent.cwd,
             provider: agent.provider,

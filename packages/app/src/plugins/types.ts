@@ -2,9 +2,15 @@ import type { QueryClient } from "@tanstack/react-query";
 import type {
   PluginAttachmentSourceContribution,
   PluginCommandCenterItemContribution,
+  PluginClientSlashCommandContribution,
+  PluginCleanup,
+  PluginComposerPillContribution,
   PluginSidebarContribution,
   PluginSurfaceContribution,
+  PluginSettingsScreenContribution,
   PluginThemeContribution,
+  PluginTimelineRendererContribution,
+  PluginTimelineTransformerContribution,
   PluginPanelLocation,
   PluginWorkspacePanelContribution,
 } from "@getpaseo/plugin";
@@ -15,13 +21,17 @@ export type EvaluatedPluginWorkspacePanelContribution = PluginWorkspacePanelCont
 
 export interface EvaluatedPlugin {
   id: string;
-  cleanup: () => void;
+  cleanup: PluginCleanup;
   surfaces: PluginSurfaceContribution[];
+  settingsScreens: PluginSettingsScreenContribution[];
   sidebarItems: PluginSidebarContribution[];
   workspacePanels: EvaluatedPluginWorkspacePanelContribution[];
   commandCenterItems: PluginCommandCenterItemContribution[];
+  clientSlashCommands: PluginClientSlashCommandContribution[];
   attachmentSources: PluginAttachmentSourceContribution[];
   themes: PluginThemeContribution[];
+  timelineTransformers: PluginTimelineTransformerContribution[];
+  timelineRenderers: PluginTimelineRendererContribution[];
 }
 
 export interface InstalledPlugin extends EvaluatedPlugin {
@@ -33,8 +43,13 @@ export interface InstalledPlugin extends EvaluatedPlugin {
 export type {
   PluginAttachmentSourceContribution,
   PluginCommandCenterItemContribution,
+  PluginClientSlashCommandContribution,
+  PluginComposerPillContribution,
   PluginSidebarContribution,
   PluginSurfaceContribution,
+  PluginSettingsScreenContribution,
   PluginThemeContribution,
+  PluginTimelineRendererContribution,
+  PluginTimelineTransformerContribution,
   PluginWorkspacePanelContribution,
 };

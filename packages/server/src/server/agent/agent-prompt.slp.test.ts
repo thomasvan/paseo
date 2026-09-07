@@ -5,7 +5,7 @@
 // closed-wakeup and response-cap used to be covered here. They landed upstream
 // as #3192; upstream's own "closing a watched child notifies the caller" and
 // "finish notifications truncate oversized child responses" own them now.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
@@ -21,11 +21,15 @@ interface SlpScenarioOptions {
 interface SlpScenario {
   startWatchingChild(): void;
   finishChild(): void;
-  flush(): Promise<void>;
-  parentPrompts: string[];
+  flush(parentPromptsLength: number): Promise<void>;
+  parentPrompts(): string[];
   isSubscribed(): boolean;
 }
 
+// Harness mirrors upstream's own agent-prompt.test.ts: a real AgentManager
+// with only the dispatch surface stubbed (getAgent/subscribe/…/streamAgent),
+// because the merged notify path walks ensureAgentLoaded → startAgentRun
+// across the manager's run tracker before reaching streamAgent.
 function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
   let subscriber: ((event: AgentManagerEvent) => void) | null = null;
   const parentPrompts: string[] = [];
@@ -34,20 +38,14 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
   Reflect.set(childAgent, "id", "child-agent");
   Reflect.set(childAgent, "lifecycle", "idle");
   Reflect.set(childAgent, "config", { title: "Child Agent" });
-  // Upstream's permission gate reads pendingPermissions on every "running"
-  // event. Reflect.set builds this stub past the type checker, so a missing
-  // field surfaces as a runtime TypeError, not a compile error.
   Reflect.set(childAgent, "pendingPermissions", new Map());
 
-  // The caller must resolve as a live agent: notify() delivers through
-  // sendPromptToAgent → ensureAgentLoaded, which throws if the caller is
-  // neither live nor in storage.
   const callerAgent: ManagedAgent = Object.create(null);
   Reflect.set(callerAgent, "id", "caller-agent");
   Reflect.set(callerAgent, "lifecycle", "idle");
   Reflect.set(callerAgent, "config", { title: "Caller Agent" });
 
-  const agentManager: AgentManager = Object.create(AgentManager.prototype);
+  const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
   Reflect.set(agentManager, "getAgent", (agentId: string) => {
     if (agentId === "child-agent") {
       return childAgent;
@@ -64,17 +62,17 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
     };
   });
   Reflect.set(agentManager, "getLastAssistantMessage", async () => {
-    return options?.childLastAssistantMessage ?? null;
+    return options?.childLastAssistantMessage ?? "turn done";
   });
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
-  // Upstream's notify path now dispatches with activeTurnBehavior: "steer";
-  // an idle caller reports no active turn, so dispatch falls through to
-  // streamAgent below exactly as before steering existed.
-  Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => ({ status: "inactive" }));
   Reflect.set(agentManager, "hasInFlightRun", () => false);
+  Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => ({ status: "inactive" }));
   Reflect.set(agentManager, "streamAgent", (_agentId: string, prompt: string) => {
     parentPrompts.push(prompt);
     return (async function* noop() {})();
+  });
+  Reflect.set(agentManager, "replaceAgentRun", async (_agentId: string, prompt: string) => {
+    parentPrompts.push(prompt);
   });
 
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
@@ -114,10 +112,14 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
       emitLifecycle("running");
       emitLifecycle("idle");
     },
-    async flush() {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    async flush(parentPromptsLength: number) {
+      await vi.waitFor(() => {
+        expect(parentPrompts).toHaveLength(parentPromptsLength);
+      });
     },
-    parentPrompts,
+    parentPrompts() {
+      return parentPrompts;
+    },
     isSubscribed() {
       return subscriber !== null;
     },
@@ -126,29 +128,27 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
 
 // SLP-PATCH(wakeup-each)
 test("the watcher re-arms: every finish of the child notifies the caller", async () => {
-  const scenario = createSlpScenario({ childLastAssistantMessage: "turn done" });
+  const scenario = createSlpScenario();
 
   scenario.startWatchingChild();
   scenario.finishChild();
-  await scenario.flush();
+  await scenario.flush(1);
   scenario.finishChild();
-  await scenario.flush();
+  await scenario.flush(2);
 
-  expect(scenario.parentPrompts).toHaveLength(2);
   expect(scenario.isSubscribed()).toBe(true);
 });
 
 // SLP-PATCH(wakeup-each)
 test("an archived caller disarms the watcher instead of leaking it", async () => {
   const scenario = createSlpScenario({
-    childLastAssistantMessage: "turn done",
     callerArchivedAt: new Date().toISOString(),
   });
 
   scenario.startWatchingChild();
   scenario.finishChild();
-  await scenario.flush();
+  await new Promise((resolve) => setTimeout(resolve, 25));
 
-  expect(scenario.parentPrompts).toHaveLength(0);
+  expect(scenario.parentPrompts()).toHaveLength(0);
   expect(scenario.isSubscribed()).toBe(false);
 });

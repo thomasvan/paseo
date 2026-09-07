@@ -8,6 +8,8 @@ import type { ProviderRuntimeSettings } from "../../provider-launch-config.js";
 
 const OMP_SESSION_DIR = "~/.omp/agent/sessions";
 const DEFAULT_OMP_MODE_ID = "full";
+const DEFAULT_OMP_READY_TIMEOUT_MS = 20_000;
+const DEFAULT_OMP_RPC_TIMEOUT_MS = 60_000;
 
 export const MIN_SUPPORTED_OMP_VERSION = "16.3.9";
 export { OMP_MODES };
@@ -15,21 +17,17 @@ export { OMP_MODES };
 export const OmpProviderParamsSchema = z
   .object({
     sessionDir: z.string().min(1).optional(),
+    rpcTimeoutMs: z.number().int().positive().optional(),
     smolModel: z.string().min(1).optional(),
     slowModel: z.string().min(1).optional(),
     planModel: z.string().min(1).optional(),
-    // SLP-PATCH(native-tools-optin): whether this provider's seats receive
-    // Paseo's native host tools. Defaults to true, which is the behaviour
-    // before this field existed; set false to run an omp seat with no
-    // orchestration surface at all.
-    paseoTools: z.boolean().optional(),
   })
   .strict();
 
 export interface OmpRuntimeProviderParams {
   sessionDir: string;
-  // SLP-PATCH(native-tools-optin)
-  paseoTools: boolean;
+  readyTimeoutMs: number;
+  rpcTimeoutMs: number;
 }
 
 export interface OmpModelRoleParams {
@@ -136,11 +134,12 @@ export function resolveOmpProviderParams(providerParams: unknown): {
   modelRoleParams: OmpModelRoleParams;
 } {
   const params = OmpProviderParamsSchema.parse(providerParams ?? {});
+  const configuredRpcTimeoutMs = params.rpcTimeoutMs;
   return {
     runtimeProviderParams: {
       sessionDir: params.sessionDir ?? OMP_SESSION_DIR,
-      // SLP-PATCH(native-tools-optin)
-      paseoTools: params.paseoTools ?? true,
+      readyTimeoutMs: configuredRpcTimeoutMs ?? DEFAULT_OMP_READY_TIMEOUT_MS,
+      rpcTimeoutMs: configuredRpcTimeoutMs ?? DEFAULT_OMP_RPC_TIMEOUT_MS,
     },
     modelRoleParams: {
       ...(params.smolModel ? { smolModel: params.smolModel } : {}),

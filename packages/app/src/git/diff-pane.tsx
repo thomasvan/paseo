@@ -102,8 +102,8 @@ import { DiffTooLargeState } from "@/git/diff-too-large-state";
 import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
 import { PullRequestStateIcon } from "@/git/pull-request-state-icon";
 import { openExternalUrl } from "@/utils/open-external-url";
-import { openWorkspaceSupportingView } from "@/workspace-tabs/open-supporting-view";
-import type { OpenInSidePanePreferences } from "@/hooks/use-settings";
+import { openWorkspacePullRequest } from "@/workspace-tabs/open-supporting-view";
+import type { PullRequestOpenLocation } from "@/hooks/use-settings";
 
 export type { GitActionId, GitAction, GitActions } from "@/git/policy";
 
@@ -187,7 +187,6 @@ interface ChangesSurfaceProps {
   cwd: string;
   enabled?: boolean;
   presentation?: ChangesPresentation;
-  modeScope: string;
   focusPath?: string;
   focusRequestId?: number;
   onOpenFile?: (path: string) => void;
@@ -1035,25 +1034,6 @@ function ChangesDiffOptions({ options }: { options: ChangesToolbarDiffOptions })
 
 const ThemedRotateCw = withUnistyles(RotateCw);
 
-function computeEmptyMessage(
-  hideWhitespace: boolean,
-  diffMode: "uncommitted" | "base",
-  baseRefLabel: string,
-  labels: {
-    hiddenWhitespace: string;
-    uncommitted: string;
-    againstBase: (baseRefLabel: string) => string;
-  },
-): string {
-  if (hideWhitespace) {
-    return labels.hiddenWhitespace;
-  }
-  if (diffMode === "uncommitted") {
-    return labels.uncommitted;
-  }
-  return labels.againstBase(baseRefLabel);
-}
-
 interface DiffBodyContentProps {
   isStatusLoading: boolean;
   statusErrorMessage: string | null;
@@ -1511,13 +1491,13 @@ function useDiffTabNavigation({
   workspaceId,
   cwd,
   isMobile,
-  openInSidePane,
+  pullRequestOpenLocation,
 }: {
   serverId: string;
   workspaceId?: string | null;
   cwd: string;
   isMobile: boolean;
-  openInSidePane: OpenInSidePanePreferences;
+  pullRequestOpenLocation: PullRequestOpenLocation;
 }) {
   const openTab = useWorkspaceLayoutStore((state) => state.openTab);
   const openWorkspaceTab = useCallback(
@@ -1545,14 +1525,13 @@ function useDiffTabNavigation({
   );
   const openPullRequest = useCallback(() => {
     if (!persistenceKey) return;
-    openWorkspaceSupportingView({
-      view: "pull-request",
+    openWorkspacePullRequest({
       isCompact: isMobile,
       workspaceKey: persistenceKey,
       checkout: { serverId, cwd, isGit: true },
-      preferences: openInSidePane,
+      destination: pullRequestOpenLocation,
     });
-  }, [cwd, isMobile, openInSidePane, persistenceKey, serverId]);
+  }, [cwd, isMobile, persistenceKey, pullRequestOpenLocation, serverId]);
   return {
     openDiff,
     openCommit,
@@ -1566,7 +1545,6 @@ export function ChangesSurface({
   cwd,
   enabled,
   presentation = "combined",
-  modeScope,
   focusPath,
   focusRequestId,
   onOpenFile,
@@ -1633,7 +1611,7 @@ export function ChangesSurface({
     workspaceId,
     cwd,
     isMobile,
-    openInSidePane: appSettings.openInSidePane,
+    pullRequestOpenLocation: appSettings.pullRequestOpenLocation,
   });
   const refreshSupported = useSessionStore(
     (s) => s.sessions[serverId]?.serverInfo?.features?.checkoutRefresh === true,
@@ -1680,7 +1658,6 @@ export function ChangesSurface({
     cwd,
     ignoreWhitespace: preferences.hideWhitespace,
     enabled: enabled !== false,
-    modeScope,
   });
   usePublishWorkingDiffAttachment({
     serverId,
@@ -1886,11 +1863,7 @@ export function ChangesSurface({
     () => computeCommittedDiffDescription(branchLabel, baseRefLabel),
     [baseRefLabel, branchLabel],
   );
-  const emptyMessage = computeEmptyMessage(preferences.hideWhitespace, diffMode, baseRefLabel, {
-    hiddenWhitespace: t("workspace.git.diff.emptyHiddenWhitespace"),
-    uncommitted: t("workspace.git.diff.emptyUncommitted"),
-    againstBase: (label) => t("workspace.git.diff.emptyAgainstBase", { baseRef: label }),
-  });
+  const emptyMessage = t("diffViewer.empty");
   const emptyAction = computeChangesEmptyAction({
     hideWhitespace: preferences.hideWhitespace,
     diffMode,

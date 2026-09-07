@@ -69,7 +69,7 @@ export { formatOmpVersionSupport, resolveOmpDiagnosticPaths } from "./provider-c
 import { OmpSubagentCardTracker, type OmpSubagentCardScheduler } from "./subagent-card-tracker.js";
 import { shouldDisplayOmpCustomMessage } from "./custom-message.js";
 import { getUserMessageText } from "./message-history.js";
-import { mapOmpSystemNoticeToToolCall } from "./system-notice.js";
+import { mapOmpSystemNoticeToNotification } from "./system-notice.js";
 import { materializeProviderImage } from "../provider-image-output.js";
 import { OmpCliRuntime } from "./cli-runtime.js";
 import { listOmpImportableSessions, readOmpImportSessionConfig } from "./session-descriptor.js";
@@ -459,15 +459,11 @@ function readNativeMessageId(
   return typeof message.entryId === "string" ? message.entryId : undefined;
 }
 
-// SLP-PATCH(native-tools-optin): the native-tools capability was a constant, so
-// every omp provider advertised it and the only control was the daemon-wide
-// flag. A room needs its Peer seats to hold no orchestration tools while its
-// Lead and Supervisor do, which is a per-provider decision.
-function withOmpCapabilities(paseoTools = true): AgentCapabilityFlags {
+function withOmpCapabilities(): AgentCapabilityFlags {
   return {
     ...OMP_CORE_CAPABILITIES,
     supportsMcpServers: false,
-    supportsNativePaseoTools: paseoTools,
+    supportsNativePaseoTools: true,
   };
 }
 
@@ -832,12 +828,15 @@ function buildExtensionUiResponse(
 function createRuntime(
   logger: Logger,
   runtimeSettings: ProviderRuntimeSettings | undefined,
+  providerParams: OmpRuntimeProviderParams,
 ): OmpRuntime {
   return new OmpCliRuntime({
     logger,
     runtimeSettings,
     command: ["omp"],
     commandsRpcName: "get_available_commands",
+    readyTimeoutMs: providerParams.readyTimeoutMs,
+    requestTimeoutMs: providerParams.rpcTimeoutMs,
   });
 }
 
@@ -2020,7 +2019,7 @@ export class OmpAgentSession implements AgentSession {
         if (text) {
           const item =
             mapOmpAdvisorMessageToToolCall(event.message, text) ??
-            mapOmpSystemNoticeToToolCall(text);
+            mapOmpSystemNoticeToNotification(text);
           this.emit({
             type: "timeline",
             provider: this.provider,
@@ -2184,9 +2183,7 @@ export class OmpAgentSession implements AgentSession {
 
 export class OmpAgentClient implements AgentClient {
   readonly provider: AgentProvider = OMP_PROVIDER;
-  // SLP-PATCH(native-tools-optin): assigned in the constructor, because it now
-  // depends on this provider's own params.
-  readonly capabilities: AgentCapabilityFlags;
+  readonly capabilities: AgentCapabilityFlags = withOmpCapabilities();
 
   private readonly logger: Logger;
   private readonly runtimeSettings?: ProviderRuntimeSettings;
@@ -2202,8 +2199,6 @@ export class OmpAgentClient implements AgentClient {
     const { runtimeProviderParams, modelRoleParams } = resolveOmpProviderParams(
       options.providerParams,
     );
-    // SLP-PATCH(native-tools-optin)
-    this.capabilities = withOmpCapabilities(runtimeProviderParams.paseoTools);
     const runtimeSettings = mergeOmpRuntimeSettings(
       {
         command: {
@@ -2221,7 +2216,8 @@ export class OmpAgentClient implements AgentClient {
     this.providerIdleScheduler = options.providerIdleScheduler;
     this.noTurnScheduler = options.noTurnScheduler;
     this.usagePollScheduler = options.usagePollScheduler;
-    this.runtime = options.runtime ?? createRuntime(options.logger, runtimeSettings);
+    this.runtime =
+      options.runtime ?? createRuntime(options.logger, runtimeSettings, this.providerParams);
   }
 
   private async configureNativePaseoTools(

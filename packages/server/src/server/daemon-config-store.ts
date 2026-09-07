@@ -18,9 +18,7 @@ type ProviderOverride = import("./agent/provider-launch-config.js").ProviderOver
 
 interface SupportedMutableConfigPatch {
   relay?: { enabled?: boolean };
-  // SLP-PATCH(native-tools-optin): the native tool channel is patchable
-  // independently of MCP injection.
-  mcp?: { injectIntoAgents?: boolean; nativeAgentTools?: boolean };
+  mcp?: { injectIntoAgents?: boolean };
   browserTools?: { enabled?: boolean };
   providers?: MutableDaemonConfig["providers"];
   removeProviders?: string[];
@@ -174,8 +172,6 @@ const RELOADABLE_PATHS = [
   "daemon.relay.enabled",
   "daemon.mcp.enabled",
   "daemon.mcp.injectIntoAgents",
-  // SLP-PATCH(native-tools-optin)
-  "daemon.mcp.nativeAgentTools",
   "daemon.browserTools.enabled",
   "daemon.hostnames",
   "daemon.cors.allowedOrigins",
@@ -199,8 +195,6 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.relay.enabled", "relay.enabled"],
   ["daemon.mcp.enabled", "mcp.enabled"],
   ["daemon.mcp.injectIntoAgents", "mcp.injectIntoAgents"],
-  // SLP-PATCH(native-tools-optin)
-  ["daemon.mcp.nativeAgentTools", "mcp.nativeAgentTools"],
   ["daemon.browserTools.enabled", "browserTools.enabled"],
   ["daemon.hostnames", "hostnames"],
   ["daemon.cors.allowedOrigins", "cors.allowedOrigins"],
@@ -258,20 +252,8 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
-    ...(patch.mcp?.injectIntoAgents !== undefined || patch.mcp?.nativeAgentTools !== undefined
-      ? {
-          mcp: {
-            ...(patch.mcp?.injectIntoAgents !== undefined
-              ? { injectIntoAgents: patch.mcp.injectIntoAgents }
-              : {}),
-            // SLP-PATCH(native-tools-optin): the picker is the gate every
-            // mutable patch passes through; dropping the field here silently
-            // discards a live opt-out.
-            ...(patch.mcp?.nativeAgentTools !== undefined
-              ? { nativeAgentTools: patch.mcp.nativeAgentTools }
-              : {}),
-          },
-        }
+    ...(patch.mcp?.injectIntoAgents !== undefined
+      ? { mcp: { injectIntoAgents: patch.mcp.injectIntoAgents } }
       : {}),
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
@@ -307,9 +289,19 @@ export function applyMutableProviderConfigToOverrides(
 
   const nextOverrides: Record<string, ProviderOverride> = { ...baseOverrides };
   for (const [providerId, providerConfig] of Object.entries(mutableProviders ?? {})) {
+    const previousOverride = nextOverrides[providerId];
+    const parsedOverride = ProviderOverrideSchema.strip().parse(providerConfig);
     nextOverrides[providerId] = {
-      ...nextOverrides[providerId],
-      ...ProviderOverrideSchema.strip().parse(providerConfig),
+      ...previousOverride,
+      ...parsedOverride,
+      ...(parsedOverride.paseoTools
+        ? {
+            paseoTools: {
+              ...previousOverride?.paseoTools,
+              ...parsedOverride.paseoTools,
+            },
+          }
+        : {}),
     };
   }
 
@@ -568,15 +560,6 @@ export class DaemonConfigStore {
     patch: Omit<SupportedMutableConfigPatch, "removeProviders">,
     removeProviders: readonly string[],
   ): { previous: PersistedConfig; knownNext: PersistedConfig } {
-    // SLP-PATCH(native-tools-optin): any mcp write materializes the current
-    // native-tools value, so a seeded-but-never-patched setting reaches disk
-    // and a restart cannot silently revert what the daemon is running.
-    if (patch.mcp !== undefined && patch.mcp.nativeAgentTools === undefined) {
-      patch = {
-        ...patch,
-        mcp: { ...patch.mcp, nativeAgentTools: this.current.mcp.nativeAgentTools },
-      };
-    }
     const persisted = loadPersistedConfig(this.paseoHome, this.logger);
     const merge = (source: PersistedConfig) =>
       mergeMutablePatchIntoPersistedConfig({
@@ -665,11 +648,6 @@ function mergeMutableDaemonPatch(
   }
   if (patch.mcp?.injectIntoAgents !== undefined) {
     next.mcp = { ...next.mcp, injectIntoAgents: patch.mcp.injectIntoAgents };
-  }
-  // SLP-PATCH(native-tools-optin): without this a live opt-out is silently
-  // undone by the next restart.
-  if (patch.mcp?.nativeAgentTools !== undefined) {
-    next.mcp = { ...next.mcp, nativeAgentTools: patch.mcp.nativeAgentTools };
   }
   if (patch.browserTools?.enabled !== undefined) {
     next.browserTools = { ...next.browserTools, enabled: patch.browserTools.enabled };
