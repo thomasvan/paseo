@@ -82,7 +82,7 @@ describe("Codex executable discovery", () => {
   });
 });
 
-import { CodexAppServerClient } from "./codex/app-server-transport.js";
+import { CodexAppServerClient, CodexAppServerRpcError } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
   type FakeCodexAppServer,
@@ -3679,6 +3679,46 @@ describe("Codex client disposal", () => {
     } finally {
       await session.close();
     }
+  });
+
+  test("flushes a queued startTurn when Codex reports the interrupted turn is already idle", async () => {
+    // Fork adaptation (SLP-PATCH(interrupt-releases-foreground), #3640): the
+    // already-idle interrupt response used to clear the slot field-by-field,
+    // leaving a startTurn queued on it to sleep out FOREGROUND_TEARDOWN_WAIT_MS
+    // before the guard re-checks. Releasing through the keyed path flushes the
+    // waiters immediately and resolves any pending turn identification.
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      () => {
+        throw new Error("Test session cannot spawn Codex app-server");
+      },
+      {},
+      false,
+    );
+    session.connected = true;
+    session.currentThreadId = "test-thread";
+    session.activeForegroundTurnId = "test-turn";
+    session.currentTurnId = "test-turn";
+    (session as { client: unknown }).client = {
+      request: async () => {
+        throw new CodexAppServerRpcError("no active turn to interrupt", -32600, undefined);
+      },
+    };
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      foregroundTurnClearWaiters: Array<() => void>;
+    }>(session);
+
+    const attempt = session.startTurn("queued behind an already-idle turn");
+    attempt.catch(() => {});
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
+
+    await session.interrupt();
+
+    expect(internals.activeForegroundTurnId).toBeNull();
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
   });
 
   test("waits for Codex to identify an accepted turn before interrupting it", async () => {

@@ -4853,11 +4853,19 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (!isCodexAlreadyIdleInterrupt(error)) {
         throw error;
       }
-      this.activeForegroundTurnId = null;
-      this.activeClientMessageId = null;
-      this.currentTurnId = null;
-      this.pendingForegroundTurnIdentification?.resolve(null);
-      this.pendingForegroundTurnIdentification = null;
+      // SLP-PATCH(interrupt-releases-foreground): Codex reports the interrupted
+      // turn as already idle — the turn ended, so release through the keyed
+      // path: it flushes startTurn waiters blocked on this slot (otherwise they
+      // sleep out FOREGROUND_TEARDOWN_WAIT_MS) and resolves any pending turn
+      // identification, and it refuses to touch a newer turn that raced in.
+      if (foregroundTurnId) {
+        this.releaseForegroundTurn(foregroundTurnId);
+      } else {
+        this.activeClientMessageId = null;
+        this.currentTurnId = null;
+        this.pendingForegroundTurnIdentification?.resolve(null);
+        this.pendingForegroundTurnIdentification = null;
+      }
     }
   }
 
