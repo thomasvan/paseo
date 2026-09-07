@@ -73,7 +73,7 @@ stub could not satisfy), and `force-cancel-releases-foreground` reads the
 canceled run's turn id from `this.runs.getTurnId(agentId)` now that upstream
 tracks runs in `AgentRunState`. Ten patches are retained in total — the nine
 above plus `native-tools-injection-independent`; the six upstream PRs are all
-still open and the new patch has none yet.
+still open and the new patch is filed as #4434.
 
 A same-day review follow-up re-opened part of the retirement. A read-only Lead
 review (codex-lead, room review of the merge) found that #4277 alone does not
@@ -116,7 +116,7 @@ breakage and is not. The patch table:
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                      | open                                                      |
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | open                                                      |
 | [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                | landed `53c960747`; closed #3449 as superseded 2026-09-03 |
-| —                                                    | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                        | local — no upstream PR yet                                |
+| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                        | open                                                      |
 | [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | open — **consolidated**, see below                        |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                               | open                                                      |
 | [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**                                      |
@@ -498,7 +498,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
 
 Opened the same day the 2026-09-07 sync retired `native-tools-optin`, after a
 Lead review showed the retirement alone breaks the room. **No upstream PR yet**
-— this is a candidate to upstream once #4277's shape has settled.
+— filed upstream as [#4434](https://github.com/getpaseo/paseo/pull/4434).
 
 - **What:** upstream #4277 kept `agentManager.setPaseoToolsEnabled` and the
   provider-runtime catalog switch tied to MCP injection
