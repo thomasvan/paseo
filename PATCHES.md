@@ -21,11 +21,10 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
 `provider-registry.ts`).
 
-Three patches keep their tests in fork-only `.slp.test.ts` files upstream does
-not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`, and
-`providers/omp/native-tools-optin.slp.test.ts`. That last one opens with
-`SLP-PATCH coverage (native-tools-optin)` rather than a bare marker, so a
-`SLP-PATCH(` grep does not find it — see the manifest note in `Sync procedure`.
+Two patches keep their tests in fork-only `.slp.test.ts` files upstream does
+not own: `agent-prompt.slp.test.ts` and `create-agent/create.slp.test.ts`.
+(`native-tools-optin.slp.test.ts` was a third until the 2026-09-07 sync retired
+the patch — see below.)
 
 Two other patches put their tests in upstream-owned files, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -40,20 +39,35 @@ The SLP room repository — named `room-workflow` until 2026-08-10, now `airoom`
 Its Supervisor > Lead > Peers model runs long-lived agents as Paseo subagents. Upstream's
 finish-notification behavior broke that model in five ways — two are now fixed upstream and
 three are still carried here — and its native host-tool channel broke the omp family in a
-sixth, unrelated way.
+sixth, unrelated way. The sixth one retired in the 2026-09-07 sync: upstream's own
+[#4277](https://github.com/getpaseo/paseo/pull/4277) superseded it in a different shape (below).
 
-Two have landed upstream and their sections are gone. **Eleven patches remain
+Two have landed upstream and their sections are gone. **Ten patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated, which is why the
 `Sync procedure` below now derives its file manifest with a command instead of
 restating a total.
-Last upstream sync: **2026-08-26**, `upstream/main` at `59e623278` (0.6.1),
-merge `256ab1a94`. All eleven patches audited against that tree and all eleven
-retained: every upstream PR is still open, so nothing could retire, and upstream
-touched only six of the twenty-seven patched files — none within a patch region.
-The nearest approach was #3642's `timeline_replacement` guard, which lands in
-`agent-prompt.ts` immediately below `wakeup-each` and above the two
-`event.event.type` reads, where it belongs.
+Last upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
+merge `9934a5a60`. One patch left in that merge: `native-tools-optin`. Its PR
+[#3449](https://github.com/getpaseo/paseo/pull/3449) was closed on 2026-09-03
+as superseded by the maintainer's own
+[#4277](https://github.com/getpaseo/paseo/pull/4277) ("Control Paseo tools per
+provider", merged as `53c960747`), which delivers per-provider control of the
+Paseo tool catalog across native and MCP delivery and deliberately refused the
+fork's two switches — `daemon.mcp.nativeAgentTools` and the omp-specific
+`params.paseoTools` — as two global switches for one catalog. The fork hunks
+were dropped to upstream's shape. Only two files conflicted (`bootstrap.ts`,
+`omp/provider-config.ts`); everything else auto-merged, and no marker site of
+another patch was lost. Consequences to hold onto: the room's omp configuration
+must migrate to #4277's per-provider policy before this merge is activated, and
+two adaptations rode the merge in — `agent-prompt.slp.test.ts` was re-seamed to
+the merged dispatch internals (it now mirrors upstream's own harness, a real
+`AgentManager` with `streamAgent` recording the prompts, because merged
+`sendPromptToAgent` walks `ensureAgentLoaded → startAgentRun`, which the old
+stub could not satisfy), and `force-cancel-releases-foreground` reads the
+canceled run's turn id from `this.runs.getTurnId(agentId)` now that upstream
+tracks runs in `AgentRunState`. The other nine patches were all retained: their
+upstream PRs are all still open.
 
 The 2026-08-24 sync note follows. `upstream/main` was at `8fdca94ea`;
 all six upstream PRs were still open, so all six carried patches survive — the
@@ -78,18 +92,18 @@ tip's `websocket-server.ts` typechecks only against a rebuilt
 stale protocol dist fails `build:lib` with an error that looks like upstream
 breakage and is not. The patch table:
 
-| PR                                                   | Patches                                                                                                                                           | Touches                                                                                       | Status                             |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                             | landed `cdb116314`, synced         |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                             | open — **opt-in shape**            |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                      | open                               |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | open                               |
-| [#3449](https://github.com/getpaseo/paseo/pull/3449) | `native-tools-optin`                                                                                                                              | omp provider, config                                                                          | open                               |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | open — **consolidated**, see below |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                               | open                               |
-| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**               |
-| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                  |
-| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                  |
+| PR                                                   | Patches                                                                                                                                           | Touches                                                                                       | Status                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                             | landed `cdb116314`, synced                                |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                             | open — **opt-in shape**                                   |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                      | open                                                      |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | open                                                      |
+| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                | landed `53c960747`; closed #3449 as superseded 2026-09-03 |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | open — **consolidated**, see below                        |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                               | open                                                      |
+| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**                                      |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
 
 ## The four codex patches ride one PR
 
@@ -457,32 +471,6 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   the hidden legacy `relationship` fallback this patch's canonical path already bypasses, and
   may just mean rebasing the explanation above.
 
-### native-tools-optin
-
-- **What:** Paseo's native host-tool channel (the one that carries `create_agent`
-  and friends to an omp seat) is no longer governed by `daemon.mcp.injectIntoAgents`,
-  and the per-provider `paseoTools` param decides whether a given omp provider's
-  seats receive it. Two changes, one cause. Upstream gated a non-MCP mechanism on
-  an MCP-injection flag, so a room that turns daemon-wide MCP injection off — as
-  this one does, because its launchers generate caller-scoped servers per seat and
-  an inherited one would be scoped to another agent — silently loses native tools
-  as collateral. And `supportsNativePaseoTools` was a constant `true`, so every omp
-  provider advertised the channel when the room needs its Peer seats to hold no
-  orchestration tools at all while its Lead and Supervisor do.
-  `daemon.mcp.nativeAgentTools` (default `true`) is the global switch; per-provider
-  `params.paseoTools` (default `true`) is the seat-level one.
-- **Why here:** measured in the omp pilot of 2026-08-16. An omp Lead attempting
-  `create_agent` returned `Unknown tool from js runtime`, while a codex Lead and a
-  claude Lead on the same daemon both created an omp Peer that ran and replied. The
-  difference was not the room's configuration: the caller-scoped endpoint answered
-  `initialize` with HTTP 200, and omp reaches its stdio MCP servers normally. It is
-  that omp's tools arrive over the native channel, and that channel was switched
-  off by a flag about something else.
-- **Upstream status:** submitted — [getpaseo/paseo#3449](https://github.com/getpaseo/paseo/pull/3449),
-  branch `feat/omp-native-tools-optin` off `upstream/main`. Delete this section and
-  the local markers if it lands. Coverage lives in
-  `packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts`.
-
 ### dead-run-settles
 
 `packages/server/src/server/agent/providers/codex-app-server-agent.ts` — one
@@ -603,9 +591,9 @@ BASE=$(git merge-base HEAD "$UPSTREAM_OID")
 # Set A -- everything a patch owns, and nothing else. A patch is a change this
 # fork made, so the files a patch owns are exactly the files the fork changed.
 # No marker grep, no curated list: both were proxies for this, and both leaked.
-# The grep missed native-tools-optin.slp.test.ts, whose header reads
-# "SLP-PATCH coverage (...)" with a space; the curated list carried two files
-# the fork never touched.
+# (The grep once missed native-tools-optin.slp.test.ts, whose header read
+# "SLP-PATCH coverage (...)" with a space; that file left with its patch in the
+# 2026-09-07 sync.)
 git diff --name-only "$BASE" HEAD -- packages/ | sort > /tmp/set-a.txt
 
 # Set B -- the diff argument. Fork-only files cannot appear in an upstream diff.
@@ -613,7 +601,7 @@ grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 ```
 
-Set A is **27 files**, Set B **24** — the difference is the three fork-only
+Set A is **19 files**, Set B **17** — the difference is the two fork-only
 `.slp.test.ts` files, which cannot appear in an upstream diff. Both numbers are
 outputs of the command above, not claims: regenerate them, do not trust them.
 
@@ -680,7 +668,7 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Expect 10 names across 40 code/test sites, and the per-name
+# Marker gate. Expect 9 names across 19 code/test sites, and the per-name
 # manifest below -- a bare total hides a site moving from one patch to another.
 # This file is excluded because it quotes marker-shaped strings in its own
 # prose, in a number that changes whenever the prose does; include it and the
@@ -688,13 +676,12 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # prefixes each match with its path, so sort -u would dedupe path:name pairs
 # and return one line per file, not per name.
 rg -c "SLP-PATCH\(" --glob '!PATCHES.md' | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 10
+rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 9
 rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
-#   21 native-tools-optin              2 question-answer-required
-#    4 wakeup-each                     2 force-cancel-releases-foreground
-#    3 replace-awaits-teardown         2 detached-arg
-#    3 detached-wakeup                 1 interrupt-releases-foreground
-#                                      1 dispose-releases-foreground
+#    4 wakeup-each                     2 question-answer-required
+#    3 replace-awaits-teardown         2 force-cancel-releases-foreground
+#    3 detached-wakeup                 2 detached-arg
+#    1 interrupt-releases-foreground   1 dispose-releases-foreground
 #                                      1 dead-run-settles
 # archived-live-list is absent from this manifest by design -- it carries no
 # marker, so its survival check is behavioural (see its section below).
@@ -734,7 +721,6 @@ npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=
 npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/create-agent/create.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/providers/omp/native-tools-optin.slp.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/provider-registry-wrap.test.ts --bail=1
 npx vitest run packages/server/src/server/agent/mcp-server.test.ts
 npx vitest run packages/server/src/server/agent/providers/claude/agent.test.ts
@@ -778,10 +764,11 @@ A Suite D timeout is machine load against a 5 s default, not merge damage —
 re-run before concluding. Anything else is the merge's: a failure outside D and
 E, a _non-timeout_ failure in D, or a fifth name in E.
 
-Three of these were missing from this list until 2026-08-26:
-`native-tools-optin.slp.test.ts`, `provider-registry-wrap.test.ts` and
-`mcp-server.test.ts` — the fork-owned test for the largest patch, and the two
-covering `force-cancel-releases-foreground` and `archived-live-list`.
+Two of these were missing from this list until 2026-08-26:
+`provider-registry-wrap.test.ts` and `mcp-server.test.ts` — the two covering
+`force-cancel-releases-foreground` and `archived-live-list`. A third,
+`native-tools-optin.slp.test.ts`, joined on that date and left on 2026-09-07
+when its patch retired.
 
 Run the upstream-owned files (`agent-prompt.test.ts`, `create.test.ts`, both provider
 suites, `agent-manager.test.ts`) too, not just the `.slp.` ones: they are the tripwire for a
