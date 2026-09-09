@@ -792,7 +792,7 @@ rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
 #    3 replace-awaits-teardown              3 interrupt-releases-foreground
 #    3 detached-wakeup                      1 dispose-releases-foreground
 #    2 question-answer-required             1 dead-run-settles
-#    2 mcp-protocol-version-clip
+#    3 mcp-protocol-version-clip
 # archived-live-list is absent from this manifest by design -- it carries no
 # marker, so its survival check is behavioural (see its section below).
 
