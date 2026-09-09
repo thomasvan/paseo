@@ -508,9 +508,11 @@ review-and-adjust (Claude `348b437`); plan and impact at
   normalises the `mcp-protocol-version` request header to
   `SUPPORTED_PROTOCOL_VERSIONS[0]` (`2025-11-25`) whenever it is present but
   unsupported — rewriting both `req.headers` and every
-  `req.rawHeaders[i + 1]` pair whose name matches case-insensitively (Node
-  preserves wire case in `rawHeaders`; `@hono/node-server` builds the Web
-  Request from `incoming.rawHeaders`, so mutating only `req.headers` is a
+  `req.rawHeaders[i + 1]` pair whose name matches case-insensitively, then
+  **collapsing duplicate raw pairs to one effective value** (Hono joins
+  same-name raw pairs into a comma-separated value the SDK rejects)
+  (Node preserves wire case in `rawHeaders`; `@hono/node-server` builds the
+  Web Request from `incoming.rawHeaders`, so mutating only `req.headers` is a
   silent no-op).
 - **Why it matters here:** seat CLIs bundle MCP clients that negotiate protocol
   versions newer than the bundled `@modelcontextprotocol/sdk` server supports —
@@ -520,16 +522,19 @@ review-and-adjust (Claude `348b437`); plan and impact at
   wraps the check in `if (!isInitializationRequest)`), so a seat's injected
   `paseo` MCP mount fails on its first post-initialize request with
   `Bad Request: Unsupported protocol version` and the daemon logs a level-50
-  `Agent MCP transport error` after every claude seat creation. `initialize`
-  itself is exempt and its body-param negotiation is already soft
+  `Agent MCP transport error` after claude seat creations (measured 2026-09-09:
+  5 errors against 6 mount-bearing claude creations in the daemon logs — a
+  rate, not a fixed count; claude peers never mount the endpoint).
+  `initialize` itself is exempt and its body-param negotiation is already soft
   (`server/index.js`), so clipping only the header leaves the response honest.
   The clip lets the seat's injected mount complete its post-initialize
   requests; peers never mount the endpoint (`claude-room:169`,
   `omp-room:174-176`), so this only reaches non-peer seats.
 - **Scope:** `bootstrap.ts` `runAgentMcpRequest` only; no SDK
   (`node_modules/@modelcontextprotocol/sdk`, hoisted, not vendored) and no
-  other file. Three e2e cases in `agent-mcp.e2e.test.ts` prove it
-  (`2026-07-28`, `DRAFT-2026-v1`, and the `2025-11-25` untouched control),
+  other file. Four e2e cases in `agent-mcp.e2e.test.ts` prove it
+  (`2026-07-28`, `DRAFT-2026-v1`, the `2025-11-25` untouched control, and
+  duplicated raw headers collapsing to one effective value),
   red before the patch (the client's `notifications/initialized` gets the 400)
   and green after.
 - **Upstream status:** to file — a PR to

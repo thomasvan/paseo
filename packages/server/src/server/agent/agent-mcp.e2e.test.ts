@@ -1,4 +1,5 @@
 import net from "node:net";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
@@ -848,11 +849,12 @@ describe("agent MCP end-to-end (offline)", () => {
 
   test("a client speaking protocol 2026-07-28 completes post-initialize requests after the version clip", async () => {
     // initialize is exempt from the header gate (webStandardStreamableHttp.js
-    // wraps the check in `if (!isInitializationRequest)`), so constructing the
-    // client succeeds before and after the fix. The first post-initialize
-    // request carries the injected header and is rejected with 400 by the
-    // unpatched daemon (red) and normalised by
-    // SLP-PATCH(mcp-protocol-version-clip) (green).
+    // wraps the check in `if (!isInitializationRequest)`), so the initialize
+    // leg is green by design. But the AI SDK client sends
+    // `notifications/initialized` during construction — the first
+    // post-initialize request — so on the unpatched daemon construction itself
+    // is rejected with the protocol 400 (red; cleanup below still runs), and
+    // after SLP-PATCH(mcp-protocol-version-clip) it completes (green).
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
     const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
@@ -872,12 +874,13 @@ describe("agent MCP end-to-end (offline)", () => {
     const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
     await daemon.start();
 
-    const client = await createMcpClientWithProtocol(
-      `http://127.0.0.1:${port}/mcp/agents`,
-      "2026-07-28",
-    );
+    let client: McpClient | null = null;
     let agentId: string | null = null;
     try {
+      client = await createMcpClientWithProtocol(
+        `http://127.0.0.1:${port}/mcp/agents`,
+        "2026-07-28",
+      );
       const result = await client.callTool({
         name: "create_agent",
         args: {
@@ -894,9 +897,9 @@ describe("agent MCP end-to-end (offline)", () => {
       expect(agentId).toBeTruthy();
     } finally {
       if (agentId) {
-        await client.callTool({ name: "kill_agent", args: { agentId } });
+        await client?.callTool({ name: "kill_agent", args: { agentId } });
       }
-      await client.close();
+      await client?.close();
       await daemon.stop();
       await rm(paseoHome, { recursive: true, force: true });
       await rm(staticDir, { recursive: true, force: true });
@@ -924,12 +927,13 @@ describe("agent MCP end-to-end (offline)", () => {
     const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
     await daemon.start();
 
-    const client = await createMcpClientWithProtocol(
-      `http://127.0.0.1:${port}/mcp/agents`,
-      "DRAFT-2026-v1",
-    );
+    let client: McpClient | null = null;
     let agentId: string | null = null;
     try {
+      client = await createMcpClientWithProtocol(
+        `http://127.0.0.1:${port}/mcp/agents`,
+        "DRAFT-2026-v1",
+      );
       const result = await client.callTool({
         name: "create_agent",
         args: {
@@ -946,9 +950,9 @@ describe("agent MCP end-to-end (offline)", () => {
       expect(agentId).toBeTruthy();
     } finally {
       if (agentId) {
-        await client.callTool({ name: "kill_agent", args: { agentId } });
+        await client?.callTool({ name: "kill_agent", args: { agentId } });
       }
-      await client.close();
+      await client?.close();
       await daemon.stop();
       await rm(paseoHome, { recursive: true, force: true });
       await rm(staticDir, { recursive: true, force: true });
@@ -976,12 +980,13 @@ describe("agent MCP end-to-end (offline)", () => {
     const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
     await daemon.start();
 
-    const client = await createMcpClientWithProtocol(
-      `http://127.0.0.1:${port}/mcp/agents`,
-      "2025-11-25",
-    );
+    let client: McpClient | null = null;
     let agentId: string | null = null;
     try {
+      client = await createMcpClientWithProtocol(
+        `http://127.0.0.1:${port}/mcp/agents`,
+        "2025-11-25",
+      );
       const result = await client.callTool({
         name: "create_agent",
         args: {
@@ -998,9 +1003,104 @@ describe("agent MCP end-to-end (offline)", () => {
       expect(agentId).toBeTruthy();
     } finally {
       if (agentId) {
-        await client.callTool({ name: "kill_agent", args: { agentId } });
+        await client?.callTool({ name: "kill_agent", args: { agentId } });
       }
-      await client.close();
+      await client?.close();
+      await daemon.stop();
+      await rm(paseoHome, { recursive: true, force: true });
+      await rm(staticDir, { recursive: true, force: true });
+      await rm(agentCwd, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("duplicate mcp-protocol-version raw headers collapse to one effective value", async () => {
+    // A client can emit the protocol header twice as separate raw lines (same
+    // name, any casing). @hono/node-server joins same-name raw pairs into one
+    // comma-separated value, which the SDK's server rejects — so the clip must
+    // leave exactly one effective raw pair. Node's http client emits an array
+    // header value as repeated raw lines, exercising that path through the real
+    // HTTP boundary.
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
+    const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
+    const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
+    const port = await getAvailablePort();
+    const daemonConfig: PaseoDaemonConfig = {
+      listen: `127.0.0.1:${port}`,
+      paseoHome,
+      corsAllowedOrigins: [],
+      hostnames: true,
+      mcpEnabled: true,
+      staticDir,
+      mcpDebug: false,
+      agentClients: createTestAgentClients(),
+      agentStoragePath: path.join(paseoHome, "agents"),
+    };
+    const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
+    await daemon.start();
+
+    const post = (
+      headers: Record<string, string | string[]>,
+      body: string,
+    ): Promise<{ status: number; text: string }> =>
+      new Promise((resolve, reject) => {
+        const req = http.request(
+          new URL(`http://127.0.0.1:${port}/mcp/agents`),
+          { method: "POST", headers },
+          async (res) => {
+            try {
+              let data = "";
+              for await (const chunk of res) data += chunk;
+              resolve({ status: res.statusCode ?? 0, text: data });
+            } catch (error) {
+              reject(error);
+            }
+          },
+        );
+        req.on("error", reject);
+        req.end(body);
+      });
+
+    try {
+      const initializeLeg = await post(
+        {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-protocol-version": ["2026-07-28", "2026-07-28"],
+        },
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2026-07-28",
+            capabilities: {},
+            clientInfo: { name: "dup-probe", version: "1" },
+          },
+        }),
+      );
+      expect(initializeLeg.status).toBe(200);
+
+      const listLeg = await post(
+        {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-protocol-version": ["2026-07-28", "2026-07-28"],
+        },
+        JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+      );
+      expect(listLeg.status).toBe(200);
+      // The stateless server streams tools/list as SSE; the payload's `data:`
+      // line is the JSON-RPC result — it must not be the protocol-version 400.
+      const dataLine = listLeg.text.split("\n").find((line) => line.startsWith("data:"));
+      const parsed = dataLine
+        ? (JSON.parse(dataLine.slice("data:".length).trim()) as {
+            error?: { message?: string };
+            result?: unknown;
+          })
+        : null;
+      expect(parsed).toBeTruthy();
+      expect(parsed?.error?.message).toBeUndefined();
+    } finally {
       await daemon.stop();
       await rm(paseoHome, { recursive: true, force: true });
       await rm(staticDir, { recursive: true, force: true });
