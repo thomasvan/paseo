@@ -123,7 +123,7 @@ breakage and is not. The patch table:
 | [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**                                      |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
 | [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
-| —                                                    | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                | to file — see section                                     |
+| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                | open                                                      |
 
 ## The five codex patches ride one PR
 
@@ -537,9 +537,10 @@ review-and-adjust (Claude `348b437`); plan and impact at
   duplicated raw headers collapsing to one effective value),
   red before the patch (the client's `notifications/initialized` gets the 400)
   and green after.
-- **Upstream status:** to file — a PR to
-  [getpaseo/paseo](https://github.com/getpaseo/paseo) with the marker stripped,
-  same pattern as #4434/#3094/#3455. Expected to be **superseded when the
+- **Upstream status:** filed — [#4570](https://github.com/getpaseo/paseo/pull/4570),
+  branch `fix/mcp-protocol-version-clip-upstream` off `upstream/main`
+  (`fdf3b4b47`), marker and SLP wording stripped (same pattern as
+  #4434/#3094/#3455). Expected to be **superseded when the
   bundled `@modelcontextprotocol/sdk` learns `2026-07-28`** (`npm view
 @modelcontextprotocol/sdk version` is 1.30.0 as of 2026-09-09 and its dist
   still carries only `2025-11-25`/`DRAFT-2026-v1`); when that lands, the next
