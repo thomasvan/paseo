@@ -47,9 +47,10 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Two have landed upstream and their sections are gone. **Eleven patches remain
+Two have landed upstream and their sections are gone. **Twelve patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
-and `archived-live-list` arrived without it being updated, which is why the
+and `archived-live-list` arrived without it being updated, and
+`mcp-protocol-version-clip` made it twelve on 2026-09-09, which is why the
 `Sync procedure` below now derives its file manifest with a command instead of
 restating a total.
 Last upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
@@ -122,6 +123,7 @@ breakage and is not. The patch table:
 | [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**                                      |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
 | [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
+| —                                                    | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                | to file — see section                                     |
 
 ## The five codex patches ride one PR
 
@@ -494,6 +496,50 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   the hidden legacy `relationship` fallback this patch's canonical path already bypasses, and
   may just mean rebasing the explanation above.
 
+### mcp-protocol-version-clip
+
+Added 2026-09-09 after a two-Lead review (Codex `327815ba`, Claude `ec43aec0`,
+both `needs-change` with the same must-fixes, folded in) and a third Lead
+review-and-adjust (Claude `348b437`); plan and impact at
+`plans/omp-mcp-protocol-skew-fix.md` / `plans/IMPACT-omp-mcp-protocol-skew.md`
+(branch `plan/omp-mcp-protocol-skew-review`).
+
+- **What:** `runAgentMcpRequest` in `packages/server/src/server/bootstrap.ts`
+  normalises the `mcp-protocol-version` request header to
+  `SUPPORTED_PROTOCOL_VERSIONS[0]` (`2025-11-25`) whenever it is present but
+  unsupported — rewriting both `req.headers` and every
+  `req.rawHeaders[i + 1]` pair whose name matches case-insensitively (Node
+  preserves wire case in `rawHeaders`; `@hono/node-server` builds the Web
+  Request from `incoming.rawHeaders`, so mutating only `req.headers` is a
+  silent no-op).
+- **Why it matters here:** seat CLIs bundle MCP clients that negotiate protocol
+  versions newer than the bundled `@modelcontextprotocol/sdk` server supports —
+  the Claude CLI 2.1.266 speaks `2026-07-28` (26 literal hits; it implements it
+  as a live revision). The streamable-HTTP transport hard-gates every
+  _non-initialize_ request on the header (`webStandardStreamableHttp.js`
+  wraps the check in `if (!isInitializationRequest)`), so a seat's injected
+  `paseo` MCP mount fails on its first post-initialize request with
+  `Bad Request: Unsupported protocol version` and the daemon logs a level-50
+  `Agent MCP transport error` after every claude seat creation. `initialize`
+  itself is exempt and its body-param negotiation is already soft
+  (`server/index.js`), so clipping only the header leaves the response honest.
+  The clip lets the seat's injected mount complete its post-initialize
+  requests; peers never mount the endpoint (`claude-room:169`,
+  `omp-room:174-176`), so this only reaches non-peer seats.
+- **Scope:** `bootstrap.ts` `runAgentMcpRequest` only; no SDK
+  (`node_modules/@modelcontextprotocol/sdk`, hoisted, not vendored) and no
+  other file. Three e2e cases in `agent-mcp.e2e.test.ts` prove it
+  (`2026-07-28`, `DRAFT-2026-v1`, and the `2025-11-25` untouched control),
+  red before the patch (the client's `notifications/initialized` gets the 400)
+  and green after.
+- **Upstream status:** to file — a PR to
+  [getpaseo/paseo](https://github.com/getpaseo/paseo) with the marker stripped,
+  same pattern as #4434/#3094/#3455. Expected to be **superseded when the
+  bundled `@modelcontextprotocol/sdk` learns `2026-07-28`** (`npm view
+@modelcontextprotocol/sdk version` is 1.30.0 as of 2026-09-09 and its dist
+  still carries only `2025-11-25`/`DRAFT-2026-v1`); when that lands, the next
+  `upstream/main` sync drops the markers and this section per the convention.
+
 ### native-tools-injection-independent
 
 Opened the same day the 2026-09-07 sync retired `native-tools-optin`, after a
@@ -734,13 +780,14 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # prefixes each match with its path, so sort -u would dedupe path:name pairs
 # and return one line per file, not per name.
 rg -c "SLP-PATCH\(" --glob '!PATCHES.md' | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 10
+rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 11
 rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
 #    6 native-tools-injection-independent   2 force-cancel-releases-foreground
 #    4 wakeup-each                          2 detached-arg
 #    3 replace-awaits-teardown              3 interrupt-releases-foreground
 #    3 detached-wakeup                      1 dispose-releases-foreground
 #    2 question-answer-required             1 dead-run-settles
+#    2 mcp-protocol-version-clip
 # archived-live-list is absent from this manifest by design -- it carries no
 # marker, so its survival check is behavioural (see its section below).
 

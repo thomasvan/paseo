@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { hostname as getHostname } from "node:os";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
@@ -1512,6 +1513,34 @@ export async function createPaseoDaemon(
             id: null,
           });
           return;
+        }
+        // SLP-PATCH(mcp-protocol-version-clip): seat CLIs bundle MCP clients
+        // that negotiate protocol versions newer than the bundled
+        // @modelcontextprotocol/sdk server supports (e.g. 2026-07-28,
+        // DRAFT-2026-v1). The streamable-HTTP transport hard-gates every
+        // non-initialize request on the `mcp-protocol-version` header
+        // (webStandardStreamableHttp.js `if (!isInitializationRequest)`) and
+        // rejects unknown versions before the JSON-RPC body is handled, so a
+        // seat's injected "paseo" MCP mount fails on its first post-initialize
+        // request. Normalize the header to the server's newest supported
+        // version; initialize's body-param negotiation already falls back
+        // gracefully for the response. Node preserves wire case in
+        // `req.rawHeaders` (it lowercases only `req.headers`), so scan the
+        // whole array case-insensitively — and `@hono/node-server` builds the
+        // Web Request from `incoming.rawHeaders`, so both representations must
+        // be rewritten.
+        const mcpProtocolVersionHeader = req.header("mcp-protocol-version");
+        if (
+          mcpProtocolVersionHeader &&
+          !SUPPORTED_PROTOCOL_VERSIONS.includes(mcpProtocolVersionHeader)
+        ) {
+          const clipped = SUPPORTED_PROTOCOL_VERSIONS[0];
+          req.headers["mcp-protocol-version"] = clipped;
+          for (let i = 0; i < req.rawHeaders.length - 1; i += 2) {
+            if (req.rawHeaders[i].toLowerCase() === "mcp-protocol-version") {
+              req.rawHeaders[i + 1] = clipped;
+            }
+          }
         }
         const callerAgentIdRaw = req.query.callerAgentId;
         let callerAgentId: string | undefined;
