@@ -4181,9 +4181,18 @@ export class CodexAppServerAgentSession implements AgentSession {
   private async waitForForegroundTurnClear(timeoutMs: number): Promise<void> {
     if (!this.activeForegroundTurnId) return;
     await new Promise<void>((resolve) => {
+      // Settle exactly once: the flush path and the timeout path can both
+      // observe the waiter in the window between the timer firing and the
+      // list filter, and no waiter may resolve a second time.
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
       const waiter = () => {
         clearTimeout(timer);
-        resolve();
+        settle();
       };
       // A timed-out waiter drops itself: a turn that never clears would
       // otherwise retain one dead closure per retrying prompt until the
@@ -4192,7 +4201,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         this.foregroundTurnClearWaiters = this.foregroundTurnClearWaiters.filter(
           (entry) => entry !== waiter,
         );
-        resolve();
+        settle();
       }, timeoutMs);
       this.foregroundTurnClearWaiters.push(waiter);
     });
@@ -4815,33 +4824,56 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     if (!turnId || (foregroundTurnId && this.activeForegroundTurnId !== foregroundTurnId)) {
-      // SLP-PATCH(dead-run-settles): nothing identifiable to interrupt. Resolve
-      // rather than throw, matching
-      // the claude and acp providers: throwing leaves the manager reading the
-      // cancel as unacknowledged, so it refuses every later stop and replace
-      // for the rest of the session. Resolving lets the existing
-      // acknowledged-timeout force-cancel settle the orphaned run.
-      this.logger.warn(
-        {
-          agentId: this.agentId,
-          provider: CODEX_PROVIDER,
-          sessionId: this.currentThreadId,
-          turnId: this.activeForegroundTurnId ?? this.currentTurnId ?? undefined,
-        },
-        "provider.codex.interrupt.no_identified_turn_noop",
-      );
-      // SLP-PATCH(interrupt-releases-foreground): the turn was never identified,
-      // so no turn-end event will arrive to
-      // release the foreground slot, and every later startTurn would refuse
-      // with "A foreground turn is already active". Release only the slot this
-      // call sampled: a newer turn that raced into it is live and keeps it.
-      if (!turnId && foregroundTurnId) {
-        this.releaseForegroundTurn(foregroundTurnId);
-      }
+      this.interruptWithoutIdentifiedTurn(turnId, foregroundTurnId);
+      return;
+    }
+    await this.interruptIdentifiedTurn(turnId, foregroundTurnId);
+  }
+
+  // SLP-PATCH(dead-run-settles): extracted from `interrupt` so it stays under
+  // the complexity limit; behavior is unchanged. Nothing identifiable to
+  // interrupt — resolve rather than throw, matching the claude and acp
+  // providers: throwing leaves the manager reading the cancel as
+  // unacknowledged, so it refuses every later stop and replace for the rest of
+  // the session. Resolving lets the existing acknowledged-timeout force-cancel
+  // settle the orphaned run.
+  private interruptWithoutIdentifiedTurn(
+    turnId: string | null,
+    foregroundTurnId: string | null,
+  ): void {
+    this.logger.warn(
+      {
+        agentId: this.agentId,
+        provider: CODEX_PROVIDER,
+        sessionId: this.currentThreadId,
+        turnId: this.activeForegroundTurnId ?? this.currentTurnId ?? undefined,
+      },
+      "provider.codex.interrupt.no_identified_turn_noop",
+    );
+    // SLP-PATCH(interrupt-releases-foreground): the turn was never identified,
+    // so no turn-end event will arrive to
+    // release the foreground slot, and every later startTurn would refuse
+    // with "A foreground turn is already active". Release only the slot this
+    // call sampled: a newer turn that raced into it is live and keeps it.
+    if (!turnId && foregroundTurnId) {
+      this.releaseForegroundTurn(foregroundTurnId);
+    }
+  }
+
+  // SLP-PATCH(interrupt-releases-foreground): extracted from `interrupt` (see
+  // `interruptWithoutIdentifiedTurn`); behavior unchanged.
+  private async interruptIdentifiedTurn(
+    turnId: string,
+    foregroundTurnId: string | null,
+  ): Promise<void> {
+    // The caller guarantees a live client (the guard runs before dispatch);
+    // narrow here because the extracted helper cannot inherit the narrowing.
+    const client = this.client;
+    if (!client) {
       return;
     }
     try {
-      await this.client.request(
+      await client.request(
         "turn/interrupt",
         {
           threadId: this.currentThreadId,
@@ -4853,18 +4885,23 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (!isCodexAlreadyIdleInterrupt(error)) {
         throw error;
       }
-      // SLP-PATCH(interrupt-releases-foreground): Codex reports the interrupted
-      // turn as already idle — the turn ended, so release through the keyed
-      // path: it flushes startTurn waiters blocked on this slot (otherwise they
-      // sleep out FOREGROUND_TEARDOWN_WAIT_MS) and resolves any pending turn
+      // Codex reports the interrupted turn as already idle — the turn ended,
+      // so release through the keyed path: it flushes startTurn waiters
+      // blocked on this slot (otherwise they sleep out
+      // FOREGROUND_TEARDOWN_WAIT_MS) and resolves any pending turn
       // identification, and it refuses to touch a newer turn that raced in.
       if (foregroundTurnId) {
         this.releaseForegroundTurn(foregroundTurnId);
       } else {
         this.activeClientMessageId = null;
         this.currentTurnId = null;
-        this.pendingForegroundTurnIdentification?.resolve(null);
+        // Detach before resolving so the pending identification is settled
+        // through its captured local, never through the property that
+        // releaseForegroundTurn/close also touch (exclusive branches, one real
+        // resolve).
+        const pending = this.pendingForegroundTurnIdentification;
         this.pendingForegroundTurnIdentification = null;
+        pending?.resolve(null);
       }
     }
   }
