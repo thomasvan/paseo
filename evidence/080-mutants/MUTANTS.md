@@ -209,8 +209,8 @@ Stated so the population is not read as more than it is.
 - **Exact mutation diffs exist only for M12 and M26.** M05–M25 were applied and reverted without
   capturing a diff; their "Mutant" column is a prose statement of the edit, and cannot be
   re-derived from this directory. Re-deriving one requires re-applying the described edit.
-- **Restoration is captured collectively for most mutants, not per mutant; M12 and M26 are
-  exceptions with dedicated captures (`m12-qar-ordering-restored.log` and
+- **Restoration is captured collectively for most mutants, not per mutant; M12 and the M26 4301
+  site are exceptions with dedicated captures (`m12-qar-ordering-restored.log` and
   `m26-flush-site-4301-restored.log`).** The census asserts every mutant was
   reverted with `git checkout --`; the evidence for that is the four suite controls
   (`control-*.log`), `m12-qar-ordering-restored.log`, `control-codex-app-server-agent.log`, and
