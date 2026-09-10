@@ -1,0 +1,59 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚙️  override existing env vars with { override: true }
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (161 tests | 2 failed) 2018ms
+     × frees a startTurn queued behind a stuck slot when the slot is released 15ms
+     × flushes a queued startTurn when Codex reports the interrupted turn is already idle 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex foreground teardown wait (replace path) > frees a startTurn queued behind a stuck slot when the slot is released
+AssertionError: expected [ [Function waiter] ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:762:50
+    760|
+    761|     expect(releaser.releaseForegroundTurn(owning as string)).toBe(true…
+    762|     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+       |                                                  ^
+    763|     expect(internals.activeForegroundTurnId).toBeNull();
+    764|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex client disposal > flushes a queued startTurn when Codex reports the interrupted turn is already idle
+AssertionError: expected [ [Function waiter] ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:3801:50
+    3799|
+    3800|     expect(internals.activeForegroundTurnId).toBeNull();
+    3801|     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+       |                                                  ^
+    3802|   });
+    3803|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 159 passed (161)
+   Start at  00:48:51
+   Duration  4.38s (transform 1.53s, setup 51ms, import 2.15s, tests 2.02s, environment 0ms)
+

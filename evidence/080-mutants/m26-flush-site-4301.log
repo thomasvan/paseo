@@ -1,0 +1,36 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🛡️ auth for agents: https://vestauth.com
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (162 tests | 1 failed) 2415ms
+     × frees a startTurn queued behind a slot whose turn/start is refused by Codex 418ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex foreground teardown wait (replace path) > frees a startTurn queued behind a slot whose turn/start is refused by Codex
+AssertionError: expected 'stuck' to be 'settled' // Object.is equality
+
+Expected: "settled"
+Received: "stuck"
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:904:21
+    902|       new Promise((resolve) => setTimeout(() => resolve("stuck"), 400)…
+    903|     ]);
+    904|     expect(outcome).toBe("settled");
+       |                     ^
+    905|     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+    906|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 161 passed (162)
+   Start at  01:01:35
+   Duration  5.01s (transform 1.73s, setup 51ms, import 2.38s, tests 2.41s, environment 0ms)
+

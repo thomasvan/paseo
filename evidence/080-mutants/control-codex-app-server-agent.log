@@ -1,0 +1,11 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+
+ Test Files  1 passed (1)
+      Tests  162 passed (162)
+   Start at  01:01:21
+   Duration  4.49s (transform 1.61s, setup 49ms, import 2.24s, tests 2.04s, environment 0ms)
+

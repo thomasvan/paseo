@@ -35,11 +35,12 @@ instead of conflicting. Marker census on this branch, excluding `PATCHES.md` and
 | M25  | archived-live-list (filter)                       | make the combined-list archive filter a no-op                             | KILLED       | "defaults list_agents to caller cwd and excludes archived agents" (length 3 → 4)                                          |
 
 **Population: 21 mutants** (20 killed, 1 survived), one log each, all listed above. M12 survived
-the first run against the tree as merged (`m12-qar-ordering-SURVIVED.log`) and was killed on the
-re-run after this round added a test for the property (`m12-qar-ordering-KILLED.log`); both logs
-are kept, because the survival is the evidence that the test was missing. One further
+the first run against the tree as merged (`m12-qar-ordering-SURVIVED.log`); that survival is the
+evidence that the test was missing, and the log is kept for it. **The M12 kill is a re-run on a
+later revision, not the original measurement** — see "M12 re-run provenance" below. One further
 run — M23 — was made and discarded as mis-targeted; it is not a mutant of this population and is
-recorded below with its log.
+recorded below with its log. A sixth flush-site sub-population (M26) was measured after the audit;
+it is listed in "Flush-site sub-population (M26)" and is not counted in the 21.
 
 ## Id space
 
@@ -59,9 +60,9 @@ The ids are not dense, and nothing is missing.
 ## Constituent coverage
 
 - **replace-awaits-teardown** — M05 proves the bounded wait at the top of `startTurn`. It does
-  **not** prove the four `flushForegroundTurnClearWaiters()` call sites individually; M06a/M06b/M07
-  each exercise one of them (interrupt-unidentified, interrupt-already-idle, dispose). The
-  `close()` flush site is unproven by any mutant here.
+  **not** prove the `flushForegroundTurnClearWaiters()` call sites individually. M26 measures each
+  of the five call sites directly: four killed, one (line 4301, the `turn/start` failure path) not
+  killed. See "Flush-site sub-population (M26)".
 - **interrupt-releases-foreground** — two of its marker sites killed (M06a, M06b). The third
   marker (the extracted-helper comment at `interruptIdentifiedTurn`) is documentation of a
   refactor, not behaviour, and has no mutable content.
@@ -78,15 +79,89 @@ The ids are not dense, and nothing is missing.
   about call order. Positive control: with the check moved after the delete, exactly this test
   reds on an assertion (`promise rejected "Error: No pending permission request with…" instead of
 resolving`, `m12-qar-ordering-KILLED.log`); reverted, the file is 99/99 green
-  (`m12-qar-ordering-test-green.log`).
+  (`m12-qar-ordering-restored.log`). Both captures are re-runs — see "M12 re-run provenance".
 - **native-tools-injection-independent** — M18/M19 prove the gate function and the bootstrap
   source shape. M20 confirms what PATCHES.md already records: the live `mcp.enabled` /
   `mcp.injectIntoAgents` field-change handlers have **no booted-daemon coverage**; the only guard
   is a textual scan of `bootstrap.ts`, which a behaviour-equivalent rewrite walks past.
 - **archived-live-list** — M24 proves the storage merge at the MCP boundary (both the
   live-plus-stored exclusion and the reported timestamp); M25 proves the combined-list filter.
-  The patch carries no `SLP-PATCH(` marker by design, so "remove the marker and see" has no
+  The patch carries no `SLP-PATCH` marker by design, so "remove the marker and see" has no
   meaning for it; its survival check is behavioural, and these two mutants are that check.
 - **detached-arg / detached-wakeup / wakeup-each / mcp-protocol-version-clip** — every marker
   site in these four has a killed mutant above except the `paseo-tools.ts:1592` detached-arg
   comment site, which restates the schema rule proven by M14.
+
+## Flush-site sub-population (M26)
+
+Measured after the audit, against revision `e92e5d29434b925647b0c6f1e53322f6073d977a` plus the
+`codex-app-server-agent.test.ts` additions in this commit. Mutation: replace the single statement
+`this.flushForegroundTurnClearWaiters();` at the named line with a comment, one line at a time.
+Mutator: `m26-flush-site-mutator.py` (argument = line number). Exact diff per site:
+`m26-flush-site-<line>.diff`. Invocation, once per site, from `packages/server`:
+
+    npx vitest run src/server/agent/providers/codex-app-server-agent.test.ts
+
+| Site | Method                            | Result | Killing assertion                                                             |
+| ---- | --------------------------------- | ------ | ----------------------------------------------------------------------------- |
+| 3578 | `handleUnexpectedTermination`     | KILLED | "frees a startTurn queued behind the slot when the app-server dies"           |
+| 4301 | `startTurn` turn/start failure    | KILLED | "frees a startTurn queued behind a slot whose turn/start is refused by Codex" |
+| 4970 | `releaseForegroundTurn`           | KILLED | "frees a startTurn queued behind a stuck slot when the slot is released"      |
+| 4983 | `close()`                         | KILLED | "frees a startTurn queued behind a stuck slot when the session closes"        |
+| 6121 | `handleTurnCompletedNotification` | KILLED | "frees a startTurn queued behind the slot when the turn completes normally"   |
+
+Logs: `m26-flush-site-<line>.log`. Control on the same tree, all five reverted:
+`control-codex-app-server-agent.log`, 162/162.
+
+All five kills are measured. Four of them come from tests added in this commit (3578, 4301, 4983,
+6121); 4970 was already covered.
+
+4301 was recorded NOT KILLED in the first pass of this sub-population, on the stated grounds that
+the harness could not pair a rejecting `turn/start` with a second prompt queued behind the slot.
+That was wrong, and the correction is measured, not argued: `createFakeCodexAppServer` dispatches
+per method and rejects when its handler rejects, and a second `startTurn` against a live
+`CodexAppServerAgentSession` registers a waiter without any special support. The re-measured run
+is the one in the table; `m26-flush-site-4301.log` is that run.
+
+## M12 re-run provenance
+
+`m12-qar-ordering-KILLED.log` and `m12-qar-ordering-restored.log` are **re-runs produced after the
+audit**, not the original measurement. The originals were cited by this file but never committed
+and are unrecoverable.
+
+- Revision: `e92e5d29434b925647b0c6f1e53322f6073d977a`, working tree differing from it only in
+  `packages/server/src/server/agent/providers/codex-app-server-agent.test.ts` (unrelated file;
+  neither the mutated source nor the asserting test is in it).
+- Mutation: `m12-qar-ordering.diff` — move `this.pendingPermissions.delete(requestId)` above
+  `assertClaudeQuestionAnswerDeliverable(...)` in `providers/claude/agent.ts`.
+- Invocation, from `packages/server`:
+  `npx vitest run src/server/agent/providers/claude/agent.test.ts --bail=1`
+- Mutant result: 1 failed | 40 passed of 99 (bailed). Restored with `git checkout --`, re-run
+  without `--bail`: 99/99.
+
+The re-run confirms the property. It is not evidence about the tree the original census ran on
+(`4d1275495d92e92cec32e1ab6950c4601ccccf97`); no measurement of M12 on that tree survives except
+the SURVIVED log.
+
+## What is not captured
+
+Stated so the population is not read as more than it is.
+
+- **Exact mutation diffs exist only for M12 and M26.** M05–M25 were applied and reverted without
+  capturing a diff; their "Mutant" column is a prose statement of the edit, and cannot be
+  re-derived from this directory. Re-deriving one requires re-applying the described edit.
+- **Control and restoration runs are captured for four suites** (`control-*.log`) and, per
+  mutant, not at all. The census asserts every mutant was reverted with `git checkout --`; only
+  the four controls plus `m12-qar-ordering-restored.log` and
+  `control-codex-app-server-agent.log` are evidence for restoration, and they are end-state
+  evidence, not per-mutant cycles. Read "restore to green" as proved for the suites those logs
+  cover and NOT MEASURED per mutant.
+- **M20 is a survivor with no booted-daemon coverage.** It is recorded SURVIVED, not dispositioned
+  into a pass.
+
+Capture hazard: the repository's `.gitignore:21` ignores `*.log`, so every log in this directory
+was committed with `git add -f`. A log written here and committed without `-f` is silently not
+committed; that is consistent with how the originally cited M12 captures were lost.
+
+Status vocabulary used in this directory: KILLED, SURVIVED, NOT KILLED, NOT MEASURED,
+NOT_APPLICABLE. A non-pass is never renamed.
