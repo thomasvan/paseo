@@ -183,7 +183,7 @@ closed into it. Cut from `upstream/main` without the fork markers.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 one constant, one waiter field, two private methods, a bounded wait at the top
-of `startTurn`, and a flush at the four sites that clear
+of `startTurn`, and a flush at the five sites that clear
 `activeForegroundTurnId`. Tests sit in upstream's own
 `codex-app-server-agent.test.ts` (no marker, so the file converges if taken).
 
@@ -198,7 +198,7 @@ one engagement on the busiest seat (the Supervisor), each one turning a live
 wakeup into a lost prompt and an `error`-status seat until the next heartbeat
 sweep re-prompted it. The provider owns "when may a new turn start", so the
 repair is provider-local: `startTurn` waits up to `FOREGROUND_TEARDOWN_WAIT_MS`
-(10s) for the teardown to clear the id — the four clear sites flush the
+(10s) for the teardown to clear the id — the five clear sites flush the
 waiters — and refuses only a turn that genuinely will not end. A timed-out
 waiter removes itself, so a stuck turn plus retrying prompts retains no dead
 closures. Zero manager changes; the refusal semantics for a truly stuck turn
@@ -360,8 +360,11 @@ answerable by a corrected retry` proves that recoverability behaviour: it reject
 the non-deliverable answer, retries the same `requestId` with a corrected answer,
 and observes the normalized answer at the waiting caller. With the M12 mutation
 moving the deliverability check after `pendingPermissions.delete`, the test fails
-with `No pending permission request`; the suite reports 1 failed and 98 passed
-out of 99. Reverted, all 99 pass. The proof is behavioural rather than a call-order
+with `No pending permission request`. Both captures are re-runs at revision
+`e92e5d29434b925647b0c6f1e53322f6073d977a`, not at the census tree: under
+`--bail=1` the mutated file reports 1 failed and 40 passed of 99
+(`m12-qar-ordering-KILLED.log`); reverted and re-run without `--bail`, 99 pass
+(`m12-qar-ordering-restored.log`). The proof is behavioural rather than a call-order
 assertion, so the test guards the property the ordering exists to preserve.
 
 **Why it lives in the Claude provider.** The answer contract is per provider,

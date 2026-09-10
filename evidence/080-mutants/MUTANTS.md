@@ -10,29 +10,29 @@ upstream-owned file, and the convention keeps those files marker-free so upstrea
 instead of conflicting. Marker census on this branch, excluding `PATCHES.md` and `evidence/`:
 11 names, 30 sites, 12 files — unchanged from `683d6e776`.
 
-| #    | Patch                                             | Mutant                                                                    | Result       | Killing assertion                                                                                                         |
-| ---- | ------------------------------------------------- | ------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| M05  | replace-awaits-teardown                           | `FOREGROUND_TEARDOWN_WAIT_MS = 0` (codex-app-server-agent.ts)             | KILLED       | "waits out a clearing foreground turn instead of refusing" — expected `pending`, got rejection                            |
-| M06a | interrupt-releases-foreground                     | drop release on unidentified interrupt                                    | KILLED       | "releases the foreground slot when no turn was ever identified"                                                           |
-| M06b | interrupt-releases-foreground                     | drop keyed release on already-idle interrupt                              | KILLED       | "flushes a queued startTurn when Codex reports the interrupted turn is already idle"                                      |
-| M07  | dispose-releases-foreground                       | drop release in `disposeClient()`                                         | KILLED       | "releases the foreground slot when the client is disposed"                                                                |
-| M08  | dead-run-settles                                  | throw instead of no-op on unidentifiable interrupt                        | KILLED       | two tests: "releases … no turn was ever identified", "leaves the foreground slot to a newer turn that raced into it"      |
-| M09  | force-cancel-releases-foreground                  | drop `releaseForegroundTurn?.(runTurnId)` in agent-manager                | KILLED       | "cancelAgentRun force-cancel releases the session's foreground slot"                                                      |
-| M10  | force-cancel-releases-foreground (facade)         | `releaseForegroundTurn: undefined` in provider-registry                   | KILLED       | "forwards every optional AgentSession method" (compile-time exhaustiveness surrogate)                                     |
-| M11  | question-answer-required                          | make the deliverability helper always accept                              | KILLED       | 11 rejection tests in claude/agent.test.ts                                                                                |
-| M12  | question-answer-required (ordering)               | move the deliverability check after `pendingPermissions.delete`           | KILLED       | "a rejected question answer leaves the request answerable by a corrected retry" (added this round)                        |
-| M13  | detached-arg                                      | read `parsed.detached` as `false`                                         | KILLED       | "create_agent detached:true omits the parent agent label"                                                                 |
-| M14  | detached-arg (schema)                             | restore `.default(false)` on the schema field                             | KILLED       | "create_agent with detached relationship omits the parent agent label" + 6 more                                           |
-| M15  | detached-wakeup                                   | hardcode `requireParentOwnership: true`                                   | KILLED       | "a deliberately detached child does not have its wakeup gated on parent ownership"                                        |
-| M16  | wakeup-each                                       | disarm after first finish (`hasSeenRunning = false` → notify once)        | KILLED       | "the watcher re-arms: every finish of the child notifies the caller"                                                      |
-| M17  | wakeup-each (archived disarm)                     | drop the archived-caller disarm                                           | KILLED       | "an archived caller disarms the watcher instead of leaking it"                                                            |
-| M18  | native-tools-injection-independent                | gate default `(mcpEnabled ?? true) !== false` → `=== true`                | KILLED       | "absent mcp.enabled defaults to enabled (upstream default)"                                                               |
-| M19  | native-tools-injection-independent (bootstrap)    | re-couple native catalog to `mcp.injectIntoAgents` at a field-change site | KILLED       | source-level gate test: "bootstrap gates the native catalog on mcp.enabled alone, never on MCP injection"                 |
-| M20  | native-tools-injection-independent (live handler) | behaviour-equivalent re-couple through a boolean temp                     | **SURVIVED** | textual gate test only; no booted-daemon coverage — see disposition                                                       |
-| M21  | mcp-protocol-version-clip                         | skip the rawHeaders rewrite                                               | KILLED       | three e2e cases in agent-mcp.e2e.test.ts (`2026-07-28`, `DRAFT-2026-v1`, normalisation)                                   |
-| M22  | mcp-protocol-version-clip (duplicates)            | drop the duplicate-collapse loop                                          | KILLED       | "duplicate mcp-protocol-version raw headers collapse to one effective value" — expected 400 to be 200                     |
-| M24  | archived-live-list                                | drop `archivedAt` from `serializeSnapshotWithMetadata`                    | KILLED       | "excludes an archived agent that is also live from list_agents"; "reports the archive timestamp of a live archived agent" |
-| M25  | archived-live-list (filter)                       | make the combined-list archive filter a no-op                             | KILLED       | "defaults list_agents to caller cwd and excludes archived agents" (length 3 → 4)                                          |
+| #    | Patch                                             | Mutant                                                                    | Result       | Killing assertion                                                                                                                                                                            |
+| ---- | ------------------------------------------------- | ------------------------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M05  | replace-awaits-teardown                           | `FOREGROUND_TEARDOWN_WAIT_MS = 0` (codex-app-server-agent.ts)             | KILLED       | "waits out a clearing foreground turn instead of refusing" — expected `pending`, got rejection                                                                                               |
+| M06a | interrupt-releases-foreground                     | drop release on unidentified interrupt                                    | KILLED       | "releases the foreground slot when no turn was ever identified"                                                                                                                              |
+| M06b | interrupt-releases-foreground                     | drop keyed release on already-idle interrupt                              | KILLED       | "flushes a queued startTurn when Codex reports the interrupted turn is already idle"                                                                                                         |
+| M07  | dispose-releases-foreground                       | drop release in `disposeClient()`                                         | KILLED       | "releases the foreground slot when the client is disposed"                                                                                                                                   |
+| M08  | dead-run-settles                                  | throw instead of no-op on unidentifiable interrupt                        | KILLED       | two tests: "releases … no turn was ever identified", "leaves the foreground slot to a newer turn that raced into it"                                                                         |
+| M09  | force-cancel-releases-foreground                  | drop `releaseForegroundTurn?.(runTurnId)` in agent-manager                | KILLED       | "cancelAgentRun force-cancel releases the session's foreground slot"                                                                                                                         |
+| M10  | force-cancel-releases-foreground (facade)         | `releaseForegroundTurn: undefined` in provider-registry                   | KILLED       | "forwards every optional AgentSession method" — a runtime `recordedCalls` equality at provider-registry-wrap.test.ts:192                                                                     |
+| M11  | question-answer-required                          | make the deliverability helper always accept                              | KILLED       | 11 rejection tests in claude/agent.test.ts                                                                                                                                                   |
+| M12  | question-answer-required (ordering)               | move the deliverability check after `pendingPermissions.delete`           | KILLED       | "a rejected question answer leaves the request answerable by a corrected retry" (added this round)                                                                                           |
+| M13  | detached-arg                                      | read `parsed.detached` as `false`                                         | KILLED       | "create_agent detached:true omits the parent agent label"                                                                                                                                    |
+| M14  | detached-arg (schema)                             | restore `.default(false)` on the schema field                             | KILLED       | 3 new failures over a 4-failure control (7 failed / 26 passed of 33, vs 4 failed / 29 passed): `ZodError` from `createChildAgent` — `create_agent` never returns, so no label assertion runs |
+| M15  | detached-wakeup                                   | hardcode `requireParentOwnership: true`                                   | KILLED       | "a deliberately detached child does not have its wakeup gated on parent ownership"                                                                                                           |
+| M16  | wakeup-each                                       | disarm after first finish (`hasSeenRunning = false` → notify once)        | KILLED       | "the watcher re-arms: every finish of the child notifies the caller"                                                                                                                         |
+| M17  | wakeup-each (archived disarm)                     | drop the archived-caller disarm                                           | KILLED       | "an archived caller disarms the watcher instead of leaking it"                                                                                                                               |
+| M18  | native-tools-injection-independent                | gate default `(mcpEnabled ?? true) !== false` → `=== true`                | KILLED       | "absent mcp.enabled defaults to enabled (upstream default)"                                                                                                                                  |
+| M19  | native-tools-injection-independent (bootstrap)    | re-couple native catalog to `mcp.injectIntoAgents` at a field-change site | KILLED       | source-level gate test: "bootstrap gates the native catalog on mcp.enabled alone, never on MCP injection"                                                                                    |
+| M20  | native-tools-injection-independent (live handler) | behaviour-equivalent re-couple through a boolean temp                     | **SURVIVED** | textual gate test only; no booted-daemon coverage — see disposition                                                                                                                          |
+| M21  | mcp-protocol-version-clip                         | skip the rawHeaders rewrite                                               | KILLED       | three e2e cases in agent-mcp.e2e.test.ts (`2026-07-28`, `DRAFT-2026-v1`, normalisation)                                                                                                      |
+| M22  | mcp-protocol-version-clip (duplicates)            | drop the duplicate-collapse loop                                          | KILLED       | "duplicate mcp-protocol-version raw headers collapse to one effective value" — expected 400 to be 200                                                                                        |
+| M24  | archived-live-list                                | drop `archivedAt` from `serializeSnapshotWithMetadata`                    | KILLED       | "excludes an archived agent that is also live from list_agents"; "reports the archive timestamp of a live archived agent"                                                                    |
+| M25  | archived-live-list (filter)                       | make the combined-list archive filter a no-op                             | KILLED       | two tests: "defaults list_agents to caller cwd and excludes archived agents" (length 3 → 4), "excludes an archived agent that is also live from list_agents"                                 |
 
 **Population: 21 mutants** (20 killed, 1 survived), one log each, all listed above. M12 survived
 the first run against the tree as merged (`m12-qar-ordering-SURVIVED.log`); that survival is the
@@ -61,14 +61,21 @@ The ids are not dense, and nothing is missing.
 
 - **replace-awaits-teardown** — M05 proves the bounded wait at the top of `startTurn`. It does
   **not** prove the `flushForegroundTurnClearWaiters()` call sites individually. M26 measures each
-  of the five call sites directly: four killed, one (line 4301, the `turn/start` failure path) not
-  killed. See "Flush-site sub-population (M26)".
+  of the five call sites directly: all five killed, including line 4301 (the `turn/start` failure
+  path), corrected from NOT KILLED after the first pass. See "Flush-site sub-population (M26)".
 - **interrupt-releases-foreground** — two of its marker sites killed (M06a, M06b). The third
   marker (the extracted-helper comment at `interruptIdentifiedTurn`) is documentation of a
   refactor, not behaviour, and has no mutable content.
-- **force-cancel-releases-foreground** — M09 proves the manager call; M10 proves the registry
-  facade forward. The `agent-sdk-types.ts` declaration is type-only; its "test" is compilation,
-  which M10's exhaustiveness assertion stands in for.
+- **force-cancel-releases-foreground** — M09 proves the manager call. M10 proves the registry
+  facade forwards the call at runtime — `wrapSessionProvider` is invoked, `releaseForegroundTurn`
+  is called through the wrapper, and the recorded call list is compared — and nothing more. The
+  `agent-sdk-types.ts` declaration is a type-only site, exempt from mutation because erasing it
+  changes no emitted code, so M10 does not reach it. A compile-time guard for it does exist —
+  `_allOptionalAgentSessionMethodsAreCovered` plus the `satisfies` on
+  `OPTIONAL_AGENT_SESSION_METHOD_NAMES`, provider-registry-wrap.test.ts:12–39 — but M10 is a
+  value-level mutation and does not trip it, and no committed artifact here shows it firing.
+  Whether removing the declaration fails compilation is **NOT MEASURED**; closing it would take a
+  `npm run typecheck` capture with the declaration removed, which was not run this round.
 - **question-answer-required** — M11 proves the rejection rule. The _ordering_ half of the patch
   ("before the delete, so a rejected answer leaves the request pending and answerable") had no
   committed test: M12 survived the merged tree. It is now covered by "a rejected question answer
@@ -84,13 +91,19 @@ resolving`, `m12-qar-ordering-KILLED.log`); reverted, the file is 99/99 green
   source shape. M20 confirms what PATCHES.md already records: the live `mcp.enabled` /
   `mcp.injectIntoAgents` field-change handlers have **no booted-daemon coverage**; the only guard
   is a textual scan of `bootstrap.ts`, which a behaviour-equivalent rewrite walks past.
-- **archived-live-list** — M24 proves the storage merge at the MCP boundary (both the
-  live-plus-stored exclusion and the reported timestamp); M25 proves the combined-list filter.
+- **archived-live-list** — M24 and M25 each red two tests and share one of them. Both red
+  "excludes an archived agent that is also live from list_agents", so that test alone separates
+  neither mutant from the other; the discriminating failure is the second one in each case. M24's
+  is "reports the archive timestamp of a live archived agent" (`expected null to be
+'2026-09-10T16:57:51.480Z'`), which is what ties M24 to the stored `archivedAt` merge. M25's is
+  "defaults list_agents to caller cwd and excludes archived agents" (length 3 → 4), which is what
+  ties M25 to the combined-list filter.
   The patch carries no `SLP-PATCH` marker by design, so "remove the marker and see" has no
   meaning for it; its survival check is behavioural, and these two mutants are that check.
 - **detached-arg / detached-wakeup / wakeup-each / mcp-protocol-version-clip** — every marker
   site in these four has a killed mutant above except the `paseo-tools.ts:1592` detached-arg
-  comment site, which restates the schema rule proven by M14.
+  comment site, which restates the schema field M14 proves load-bearing — M14 kills by breaking
+  `create_agent` outright, not by the parent-label behaviour.
 
 ## Flush-site sub-population (M26)
 
@@ -110,11 +123,36 @@ Mutator: `m26-flush-site-mutator.py` (argument = line number). Exact diff per si
 | 4983 | `close()`                         | KILLED | "frees a startTurn queued behind a stuck slot when the session closes"        |
 | 6121 | `handleTurnCompletedNotification` | KILLED | "frees a startTurn queued behind the slot when the turn completes normally"   |
 
-Logs: `m26-flush-site-<line>.log`. Control on the same tree, all five reverted:
-`control-codex-app-server-agent.log`, 162/162.
+Logs: `m26-flush-site-<line>.log`. All five kills are measured. Four of them come from tests
+added in this commit (3578, 4301, 4983, 6121); 4970 was already covered.
 
-All five kills are measured. Four of them come from tests added in this commit (3578, 4301, 4983,
-6121); 4970 was already covered.
+**What the restoration evidence is.** Per site there is an exact mutation diff
+(`m26-flush-site-<line>.diff`) and an individual red capture (`m26-flush-site-<line>.log`). Green
+afterwards is thinner than that, and the logs' own start times say how much thinner:
+
+| Capture                              | Start at |
+| ------------------------------------ | -------- |
+| `m26-flush-site-3578.log`            | 00:48:40 |
+| `m26-flush-site-4970.log`            | 00:48:51 |
+| `m26-flush-site-4983.log`            | 00:48:56 |
+| `m26-flush-site-6121.log`            | 00:49:02 |
+| `control-codex-app-server-agent.log` | 01:01:21 |
+| `m26-flush-site-4301.log`            | 01:01:35 |
+
+`control-codex-app-server-agent.log` (162/162) ran after all four of the early mutations were
+reverted, so it is **one collective green capture covering those four sites together**. It is not
+four per-site restoration captures, and no such per-site captures were taken. Read with the four
+mutation diffs and the tree-identity check, it supports the claim that no residue from any
+individual early mutation remains; it does not support "each of the four sites was restored to
+green", which would be four measurements that do not exist.
+
+4301 ran at 01:01:35, after that control, so the control says nothing about it. Its restoration is
+`m26-flush-site-4301-restored.log`, captured separately at revision
+`512bdd0078e63a4f61f60d4693fa4b724f13da22` with a clean working tree, all five
+`flushForegroundTurnClearWaiters()` call sites present at their recorded lines and no `MUTANT:`
+residue anywhere under `packages/`: 162/162. That revision is later than the one the
+sub-population was mutated against; the mutated source and the asserting test file are unchanged
+between them, which is what makes the capture applicable.
 
 4301 was recorded NOT KILLED in the first pass of this sub-population, on the stated grounds that
 the harness could not pair a rejecting `turn/start` with a second prompt queued behind the slot.
@@ -150,12 +188,15 @@ Stated so the population is not read as more than it is.
 - **Exact mutation diffs exist only for M12 and M26.** M05–M25 were applied and reverted without
   capturing a diff; their "Mutant" column is a prose statement of the edit, and cannot be
   re-derived from this directory. Re-deriving one requires re-applying the described edit.
-- **Control and restoration runs are captured for four suites** (`control-*.log`) and, per
-  mutant, not at all. The census asserts every mutant was reverted with `git checkout --`; only
-  the four controls plus `m12-qar-ordering-restored.log` and
-  `control-codex-app-server-agent.log` are evidence for restoration, and they are end-state
-  evidence, not per-mutant cycles. Read "restore to green" as proved for the suites those logs
-  cover and NOT MEASURED per mutant.
+- **Restoration is captured collectively, not per mutant.** The census asserts every mutant was
+  reverted with `git checkout --`; the evidence for that is the four suite controls
+  (`control-*.log`), `m12-qar-ordering-restored.log`, `control-codex-app-server-agent.log`, and
+  `m26-flush-site-4301-restored.log`. Each is a green run of a whole suite at a moment after some
+  set of mutations was reverted — end-state evidence covering that set together, not a
+  per-mutant revert-and-re-run cycle. Read "restore to green" as proved for the suites those logs
+  cover at those moments, and NOT MEASURED per mutant.
+- **No compilation evidence exists for the type-only `agent-sdk-types.ts` site.** See
+  force-cancel-releases-foreground under "Constituent coverage".
 - **M20 is a survivor with no booted-daemon coverage.** It is recorded SURVIVED, not dispositioned
   into a pass.
 
