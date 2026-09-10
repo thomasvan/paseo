@@ -1361,7 +1361,7 @@ describe("normalizeClaudeAskUserQuestionUpdatedInput", () => {
   });
 
   test("a rejected question answer leaves the request answerable by a corrected retry", async () => {
-    // SLP-PATCH(question-answer-required) guards this: the deliverability check runs
+    // The question-answer-required rule guards this: the deliverability check runs
     // before the request is deleted, so a non-deliverable answer costs the caller a
     // retry rather than the request. Upstream consumed the request on entry and the
     // retry failed with "No pending permission request".

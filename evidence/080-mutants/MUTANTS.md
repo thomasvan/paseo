@@ -5,7 +5,10 @@ restore to green. Controls on the same tree: `control-*.log`. Every mutant rever
 `git checkout --`; the census ran against a tree byte-identical to
 `4d1275495d92e92cec32e1ab6950c4601ccccf97`. One test was added afterwards to close the M12
 coverage hole (`providers/claude/agent.test.ts`); it is the only non-`evidence/` change on this
-branch, and no production code moved.
+branch, and no production code moved. That test carries no patch marker: it lives in an
+upstream-owned file, and the convention keeps those files marker-free so upstream #3495 converges
+instead of conflicting. Marker census on this branch, excluding `PATCHES.md` and `evidence/`:
+11 names, 30 sites, 12 files — unchanged from `683d6e776`.
 
 | #    | Patch                                             | Mutant                                                                    | Result       | Killing assertion                                                                                                         |
 | ---- | ------------------------------------------------- | ------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
