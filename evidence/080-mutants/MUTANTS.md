@@ -98,8 +98,28 @@ resolving`, `m12-qar-ordering-KILLED.log`); reverted, the file is 99/99 green
 '2026-09-10T16:57:51.480Z'`), which is what ties M24 to the stored `archivedAt` merge. M25's is
   "defaults list_agents to caller cwd and excludes archived agents" (length 3 → 4), which is what
   ties M25 to the combined-list filter.
+
+  Both are **seeded-state boundary tests**. The live/archived overlap they depend on is asserted
+  into existence by fixtures, not produced: `spies.agentManager.listAgents.mockReturnValue([...])`
+  supplies the live agent and `spies.agentStorage.list/get` supply the archived record
+  (`mcp-server.test.ts:5510`, `:5544`). That exercises the real filter and the real serializer at
+  the MCP boundary, which is what the two mutants prove.
+
+  It is not the survival check PATCHES.md:661-662 specifies for this patch, which is that an
+  agent **hydrated by a history read** stays out of a default `list_agents` and reports a real
+  `archivedAt` under `includeArchived: true`. No test here performs that read:
+  `resumeAgentFromPersistence` and `hydrateTimelineFromProvider` are `vi.fn()` stubs
+  (`mcp-server.test.ts:217-218`) and the archived-live-list cases never invoke them — the
+  comment at `:5505-5508` states the hydration as the fixture's premise rather than running it.
+  **The history-hydration half of the survival check is NOT MEASURED.** Closing it takes a test
+  that resumes an archived agent through a real history read and then calls `list_agents` twice,
+  default and `includeArchived: true`; that test was not written this round.
+
+  This is the one patch with no `SLP-PATCH` marker by design, so the behavioural check is all
+  that stands between it and silent loss at a future sync. M24 and M25 are half of that check.
   The patch carries no `SLP-PATCH` marker by design, so "remove the marker and see" has no
   meaning for it; its survival check is behavioural, and these two mutants are that check.
+
 - **detached-arg / detached-wakeup / wakeup-each / mcp-protocol-version-clip** — every marker
   site in these four has a killed mutant above except the `paseo-tools.ts:1592` detached-arg
   comment site, which restates the schema field M14 proves load-bearing — M14 kills by breaking
@@ -197,11 +217,15 @@ Stated so the population is not read as more than it is.
   cover at those moments, and NOT MEASURED per mutant.
 - **No compilation evidence exists for the type-only `agent-sdk-types.ts` site.** See
   force-cancel-releases-foreground under "Constituent coverage".
+- **`archived-live-list`'s specified survival check is half unmeasured.** M24 and M25 are
+  seeded-state boundary tests; the history-hydration path PATCHES.md:661-662 names is NOT
+  MEASURED. See archived-live-list under "Constituent coverage". This is the patch with no
+  marker, so the gap is in the only guard it has.
 - **M20 is a survivor with no booted-daemon coverage.** It is recorded SURVIVED, not dispositioned
   into a pass.
 
-Capture hazard: the repository's `.gitignore:21` ignores `*.log`, so every log in this directory
-was committed with `git add -f`. A log written here and committed without `-f` is silently not
+Capture hazard — **read this before adding a capture here.** The repository's `.gitignore:21`
+ignores `*.log`, so every log in this directory was and must be committed with `git add -f`. A log written here and committed without `-f` is silently not
 committed; that is consistent with how the originally cited M12 captures were lost.
 
 Status vocabulary used in this directory: KILLED, SURVIVED, NOT KILLED, NOT MEASURED,
