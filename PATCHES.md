@@ -56,7 +56,12 @@ and `archived-live-list` arrived without it being updated, and
 `mcp-protocol-version-clip` made it twelve on 2026-09-09, which is why the
 `Sync procedure` below now derives its file manifest with a command instead of
 restating a total.
-Last upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
+Current upstream sync: **2026-09-11**, tag `v0.8.0` at
+`b8e24677e12b226c7c38c1c3a40649daa9f1152f`, merge
+`683d6e776e3aa29f213c925fe3bc6a21a261fb3c`. All twelve patches carried with
+no adaptation. The tag is pinned rather than `upstream/main`, which is one
+commit past it, so the merge is reproducible.
+Previous upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
 merge `9934a5a60`. One patch left in that merge: `native-tools-optin`. Its PR
 [#3449](https://github.com/getpaseo/paseo/pull/3449) was closed on 2026-09-03
 as superseded by the maintainer's own
@@ -615,8 +620,11 @@ scanning headings concluded it was gone.
 
 Scanning headings does not enumerate the patches anyway, and nothing in this file
 said so until now: five patches are documented as `##` sections _above_
-`## Patches`, and six as `###` sections under it, so neither level alone lists
-them all. The roster is the marker manifest in `Sync procedure`, plus
+`## Patches`, and seven as `###` sections under it. At
+`HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`,
+`sed -n '/^## Patches$/,/^## Sync procedure$/p' PATCHES.md | rg -c '^### '
+measured **7** lower-level patch sections, so neither level alone lists them
+all. The roster is the marker manifest in `Sync procedure`, plus
 `archived-live-list`, which carries no marker. That mattered more than a missing heading
 usually does: it is the patch nearest the region upstream rewrote in #3742, so
 it is the one most likely to need re-applying by hand, and it had the least
@@ -691,6 +699,13 @@ section.
 First, derive the patch-owned file manifest, then check whether upstream touched
 any of it since the last sync.
 
+The fork has a Supervisor-granted exception for `evidence/080-mutants/`: its
+durable mutation census artifact may be committed because the census needs
+citable evidence, and the audit found its provenance too thin. The directory
+is fork-only and never converges upstream. Carry it at the next merge; do not
+drop it as an apparent upstream addition. Its contents remain evidence rather
+than sync narrative.
+
 **The manifest is derived, never restated.** Every hand-kept total in this file
 has been wrong at least once — nine patches when there were eleven, five source
 files when there were far more, and a marker count that could not pass on a
@@ -734,14 +749,14 @@ grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 ```
 
-On the shipped merge `HEAD=683d6e776e3aa29f213c925fe3bc6a21a261fb3c`,
+On current tip `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, with
 `UPSTREAM_OID=b8e24677e12b226c7c38c1c3a40649daa9f1152f`, and
 `BASE=$(git merge-base HEAD "$UPSTREAM_OID")`, the documented
 `git diff --name-only "$BASE" HEAD -- packages/ | sort` invocation returned
 the same patch-owned file list as the pre-merge measurement: **23 files** for
 Set A; filtering `.slp.test.ts` returned **20** for Set B. The difference from Set A is the three
 fork-only `.slp.test.ts` files, which cannot appear in an upstream diff. Set B
-itself still contains one fork-only file, `native-tools-gate.ts`, so only **18**
+itself still contains one fork-only file, `native-tools-gate.ts`, so only **19**
 of its arguments can match an upstream diff. Both numbers are outputs of the
 that command, not claims: regenerate them, do not trust them.
 
@@ -808,7 +823,8 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. On integration tip `a3658d8f4`, measured 2026-09-11, expect
+# Marker gate. On `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, measured
+# 2026-09-11, the package-scoped command below summed to 30 sites; expect
 # 11 names across 30 code/test sites in 12 files, and use the per-name
 # manifest below -- a bare total hides a site moving from one patch to another.
 # This file is excluded because it quotes marker-shaped strings in its own
@@ -816,15 +832,17 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # gate can never pass on a healthy tree. Note -I (--no-filename): -o alone
 # prefixes each match with its path, so sort -u would dedupe path:name pairs
 # and return one line per file, not per name.
-rg -c "SLP-PATCH\(" --glob '!PATCHES.md' | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 11
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
+rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 11
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
 #    6 native-tools-injection-independent   2 force-cancel-releases-foreground
 #    4 wakeup-each                          2 detached-arg
 #    3 replace-awaits-teardown              3 interrupt-releases-foreground
 #    3 detached-wakeup                      1 dispose-releases-foreground
 #    2 question-answer-required             1 dead-run-settles
 #    3 mcp-protocol-version-clip
+# The census is scoped to packages/ because that is the measured code/test
+# population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list is absent from this manifest by design -- it carries no
 # marker, so its survival check is behavioural (see its section below).
 
@@ -832,8 +850,10 @@ npm ci --ignore-scripts       # the lockfile moves on any non-patch bump;
                               # building without it resolves the old graph
 
 # --ignore-scripts is deliberate -- a just-merged upstream should not get to run
-# arbitrary install scripts -- but this repo NEEDS its own postinstall. There
-# are six patches in patches/, applied by scripts/postinstall-patches.mjs, and
+# arbitrary install scripts -- but this repo NEEDS its own postinstall. At
+# `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, `find patches -maxdepth 1
+# -type f | wc -l` measured **8** dependency patch files, applied by
+# scripts/postinstall-patches.mjs, and
 # react-native-draggable-flatlist+4.0.3.patch adds the very prop that
 # sidebar-workspace-list.tsx passes down. Skip this and @getpaseo/app fails
 # typecheck with TS2322 on a prop that "does not exist". Read the script, then
