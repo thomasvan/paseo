@@ -1,0 +1,11 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/claude/agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+
+ Test Files  1 passed (1)
+      Tests  99 passed (99)
+   Start at  00:50:48
+   Duration  1.50s (transform 590ms, setup 49ms, import 932ms, tests 344ms, environment 0ms)
+

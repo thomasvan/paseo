@@ -1,0 +1,36 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/claude/agent.test.ts --bail=1
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+stdout | src/server/agent/providers/claude/agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+
+ ❯ src/server/agent/providers/claude/agent.test.ts (99 tests | 1 failed) 164ms
+     × a rejected question answer leaves the request answerable by a corrected retry 19ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/claude/agent.test.ts > normalizeClaudeAskUserQuestionUpdatedInput > a rejected question answer leaves the request answerable by a corrected retry
+AssertionError: promise rejected "Error: No pending permission request with…" instead of resolving
+ ❯ src/server/agent/providers/claude/agent.test.ts:1426:7
+    1424|           updatedInput: { answers: { Colour: "Viridian" } },
+    1425|         }),
+    1426|       ).resolves.toBeUndefined();
+       |       ^
+    1427|
+    1428|       await expect(resultPromise).resolves.toEqual({
+
+Caused by: Error: No pending permission request with id 'permission-question-retry'
+ ❯ ClaudeAgentSession.respondToPermission src/server/agent/providers/claude/agent.ts:2695:13
+ ❯ src/server/agent/providers/claude/agent.test.ts:1422:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 40 passed (99)
+   Start at  00:50:46
+   Duration  1.36s (transform 632ms, setup 52ms, import 980ms, tests 164ms, environment 0ms)
+

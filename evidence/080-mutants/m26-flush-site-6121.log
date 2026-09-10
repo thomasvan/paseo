@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (161 tests | 1 failed) 2091ms
+     × frees a startTurn queued behind the slot when the turn completes normally 15ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex foreground teardown wait (replace path) > frees a startTurn queued behind the slot when the turn completes normally
+AssertionError: expected [ [Function waiter] ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:818:50
+    816|
+    817|     expect(internals.activeForegroundTurnId).toBeNull();
+    818|     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+       |                                                  ^
+    819|     await expect(attempt).rejects.toThrow("Codex client not initialize…
+    820|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 160 passed (161)
+   Start at  00:49:02
+   Duration  4.57s (transform 1.59s, setup 66ms, import 2.19s, tests 2.09s, environment 0ms)
+
