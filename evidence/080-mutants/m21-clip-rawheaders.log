@@ -1,0 +1,75 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/agent-mcp.e2e.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/agent-mcp.e2e.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  suppress all logs with { quiet: true }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+ ❯ src/server/agent/agent-mcp.e2e.test.ts (11 tests | 3 failed) 5776ms
+     × a client speaking protocol 2026-07-28 completes post-initialize requests after the version clip 239ms
+     × a DRAFT-2026-v1 protocol header is normalised the same way 330ms
+     × duplicate mcp-protocol-version raw headers collapse to one effective value 287ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/agent-mcp.e2e.test.ts > agent MCP end-to-end (offline) > a client speaking protocol 2026-07-28 completes post-initialize requests after the version clip
+Error: Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Unsupported protocol version: 2026-07-28 (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"},"id":null}
+ ❯ StreamableHTTPClientTransport.send ../../node_modules/@modelcontextprotocol/sdk/src/client/streamableHttp.ts:551:22
+ ❯ DefaultMCPClient.notification ../../node_modules/ai/src/tool/mcp/mcp-client.ts:314:4
+ ❯ DefaultMCPClient.init ../../node_modules/ai/src/tool/mcp/mcp-client.ts:166:6
+ ❯ createMCPClient ../../node_modules/ai/src/tool/mcp/mcp-client.ts:56:2
+ ❯ createMcpClientWithProtocol src/server/agent/agent-mcp.e2e.test.ts:107:21
+    105|     requestInit: { headers: { "mcp-protocol-version": protocolVersion …
+    106|   });
+    107|   const rawClient = await experimental_createMCPClient({ transport });
+       |                     ^
+    108|   const boundCallTool: McpClient["callTool"] = Reflect.get(rawClient, …
+    109|   return { callTool: boundCallTool, close: () => rawClient.close() };
+ ❯ src/server/agent/agent-mcp.e2e.test.ts:880:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/server/agent/agent-mcp.e2e.test.ts > agent MCP end-to-end (offline) > a DRAFT-2026-v1 protocol header is normalised the same way
+Error: Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Unsupported protocol version: DRAFT-2026-v1 (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"},"id":null}
+ ❯ StreamableHTTPClientTransport.send ../../node_modules/@modelcontextprotocol/sdk/src/client/streamableHttp.ts:551:22
+ ❯ DefaultMCPClient.notification ../../node_modules/ai/src/tool/mcp/mcp-client.ts:314:4
+ ❯ DefaultMCPClient.init ../../node_modules/ai/src/tool/mcp/mcp-client.ts:166:6
+ ❯ createMCPClient ../../node_modules/ai/src/tool/mcp/mcp-client.ts:56:2
+ ❯ createMcpClientWithProtocol src/server/agent/agent-mcp.e2e.test.ts:107:21
+    105|     requestInit: { headers: { "mcp-protocol-version": protocolVersion …
+    106|   });
+    107|   const rawClient = await experimental_createMCPClient({ transport });
+       |                     ^
+    108|   const boundCallTool: McpClient["callTool"] = Reflect.get(rawClient, …
+    109|   return { callTool: boundCallTool, close: () => rawClient.close() };
+ ❯ src/server/agent/agent-mcp.e2e.test.ts:933:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/server/agent/agent-mcp.e2e.test.ts > agent MCP end-to-end (offline) > duplicate mcp-protocol-version raw headers collapse to one effective value
+AssertionError: expected 400 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 400
+
+ ❯ src/server/agent/agent-mcp.e2e.test.ts:1091:30
+    1089|         JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }…
+    1090|       );
+    1091|       expect(listLeg.status).toBe(200);
+       |                              ^
+    1092|       // The stateless server streams tools/list as SSE; the payload's…
+    1093|       // line is the JSON-RPC result — it must not be the protocol-ver…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 8 passed (11)
+   Start at  23:55:14
+   Duration  12.09s (transform 4.24s, setup 50ms, import 6.10s, tests 5.78s, environment 0ms)
+

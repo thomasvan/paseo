@@ -1,0 +1,41 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  write to custom object with { processEnv: myObject }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚙️  override existing env vars with { override: true }
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (158 tests | 1 failed) 1983ms
+     × waits out a clearing foreground turn instead of refusing 16ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex foreground teardown wait (replace path) > waits out a clearing foreground turn instead of refusing
+AssertionError: expected Error: A foreground turn is already active to be 'pending' // Object.is equality
+
+- Expected:
+"pending"
+
++ Received:
+Error {
+  "message": "A foreground turn is already active",
+}
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:709:19
+    707|       new Promise((resolve) => setTimeout(resolve, 25, "pending")),
+    708|     ]);
+    709|     expect(raced).toBe("pending");
+       |                   ^
+    710|     internals.activeForegroundTurnId = null;
+    711|     internals.flushForegroundTurnClearWaiters();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 157 passed (158)
+   Start at  23:45:39
+   Duration  4.45s (transform 1.62s, setup 48ms, import 2.26s, tests 1.98s, environment 0ms)
+

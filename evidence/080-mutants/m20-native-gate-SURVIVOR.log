@@ -1,0 +1,11 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/native-tools-gate.slp.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  23:54:32
+   Duration  225ms (transform 44ms, setup 46ms, import 23ms, tests 5ms, environment 0ms)
+

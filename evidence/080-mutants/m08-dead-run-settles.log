@@ -1,0 +1,54 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  suppress all logs with { quiet: true }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚙️  override existing env vars with { override: true }
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (158 tests | 2 failed) 2055ms
+     × releases the foreground slot when no turn was ever identified 37ms
+     × leaves the foreground slot to a newer turn that raced into it 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex client disposal > releases the foreground slot when no turn was ever identified
+AssertionError: promise rejected "Error: No active turn to interrupt" instead of resolving
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:3802:37
+    3800|     expect(internals.activeForegroundTurnId).toBe("test-turn");
+    3801|
+    3802|     await expect(session.interrupt()).resolves.toBeUndefined();
+       |                                     ^
+    3803|
+    3804|     expect(internals.activeForegroundTurnId).toBeNull();
+
+Caused by: Error: No active turn to interrupt
+ ❯ CodexAppServerAgentSession.interruptWithoutIdentifiedTurn src/server/agent/providers/codex-app-server-agent.ts:4904:11
+ ❯ CodexAppServerAgentSession.interrupt src/server/agent/providers/codex-app-server-agent.ts:4870:12
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:3802:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex client disposal > leaves the foreground slot to a newer turn that raced into it
+AssertionError: promise rejected "Error: No active turn to interrupt" instead of resolving
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:3859:29
+    3857|     identify(null);
+    3858|
+    3859|     await expect(interrupted).resolves.toBeUndefined();
+       |                             ^
+    3860|     expect(internals.activeForegroundTurnId).toBe("newer-turn");
+    3861|   });
+
+Caused by: Error: No active turn to interrupt
+ ❯ CodexAppServerAgentSession.interruptWithoutIdentifiedTurn src/server/agent/providers/codex-app-server-agent.ts:4904:11
+ ❯ CodexAppServerAgentSession.interrupt src/server/agent/providers/codex-app-server-agent.ts:4870:12
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 156 passed (158)
+   Start at  23:47:33
+   Duration  4.79s (transform 1.83s, setup 51ms, import 2.50s, tests 2.06s, environment 0ms)
+

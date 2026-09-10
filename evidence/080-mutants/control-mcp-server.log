@@ -1,0 +1,11 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/mcp-server.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+
+ Test Files  1 passed (1)
+      Tests  122 passed (122)
+   Start at  23:56:22
+   Duration  9.91s (transform 3.06s, setup 51ms, import 4.52s, tests 5.18s, environment 0ms)
+

@@ -1,0 +1,61 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/mcp-server.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/mcp-server.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+
+ ❯ src/server/agent/mcp-server.test.ts (122 tests | 2 failed) 5601ms
+     × excludes an archived agent that is also live from list_agents 22ms
+     × reports the archive timestamp of a live archived agent when archives are requested 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/mcp-server.test.ts > agent snapshot MCP serialization > excludes an archived agent that is also live from list_agents
+AssertionError: expected [ 'resumed-archived', 'in-cwd' ] to deeply equal [ 'in-cwd' ]
+
+- Expected
++ Received
+
+  [
++   "resumed-archived",
+    "in-cwd",
+  ]
+
+ ❯ src/server/agent/mcp-server.test.ts:5541:57
+    5539|     const response = await tool.handler({});
+    5540|
+    5541|     expect(agentsOf(response).map((agent) => agent.id)).toEqual(["in-c…
+       |                                                         ^
+    5542|   });
+    5543|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/server/agent/mcp-server.test.ts > agent snapshot MCP serialization > reports the archive timestamp of a live archived agent when archives are requested
+AssertionError: expected null to be '2026-09-10T16:57:51.480Z' // Object.is equality
+
+- Expected:
+"2026-09-10T16:57:51.480Z"
+
++ Received:
+null
+
+ ❯ src/server/agent/mcp-server.test.ts:5577:35
+    5575|     const agents = agentsOf(response);
+    5576|     expect(agents.map((agent) => agent.id)).toEqual(["resumed-archived…
+    5577|     expect(agents[0]?.archivedAt).toBe(now);
+       |                                   ^
+    5578|   });
+    5579|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 120 passed (122)
+   Start at  23:57:41
+   Duration  9.92s (transform 2.76s, setup 50ms, import 4.12s, tests 5.60s, environment 0ms)
+

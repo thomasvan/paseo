@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/agent-prompt.slp.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/agent-prompt.slp.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  enable debug logging with { debug: true }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+
+ ❯ src/server/agent/agent-prompt.slp.test.ts (2 tests | 1 failed) 1093ms
+   × the watcher re-arms: every finish of the child notifies the caller 1064ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/agent-prompt.slp.test.ts > the watcher re-arms: every finish of the child notifies the caller
+AssertionError: expected [ Array(1) ] to have a length of 2 but got 1
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ src/server/agent/agent-prompt.slp.test.ts:117:31
+    115|     async flush(parentPromptsLength: number) {
+    116|       await vi.waitFor(() => {
+    117|         expect(parentPrompts).toHaveLength(parentPromptsLength);
+       |                               ^
+    118|       });
+    119|     },
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  23:52:54
+   Duration  2.20s (transform 564ms, setup 47ms, import 905ms, tests 1.09s, environment 0ms)
+

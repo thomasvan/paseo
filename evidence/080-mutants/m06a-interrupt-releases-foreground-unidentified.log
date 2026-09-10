@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  enable debug logging with { debug: true }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (158 tests | 1 failed) 2008ms
+     × releases the foreground slot when no turn was ever identified 14ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex client disposal > releases the foreground slot when no turn was ever identified
+AssertionError: expected 'test-turn' to be null
+
+- Expected:
+null
+
++ Received:
+"test-turn"
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:3804:46
+    3802|     await expect(session.interrupt()).resolves.toBeUndefined();
+    3803|
+    3804|     expect(internals.activeForegroundTurnId).toBeNull();
+       |                                              ^
+    3805|   });
+    3806|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 157 passed (158)
+   Start at  23:46:36
+   Duration  4.46s (transform 1.61s, setup 50ms, import 2.25s, tests 2.01s, environment 0ms)
+

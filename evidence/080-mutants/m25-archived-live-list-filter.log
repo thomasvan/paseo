@@ -1,0 +1,61 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/mcp-server.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/mcp-server.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+
+ ❯ src/server/agent/mcp-server.test.ts (122 tests | 2 failed) 5767ms
+     × defaults list_agents to caller cwd and excludes archived agents 21ms
+     × excludes an archived agent that is also live from list_agents 10ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/mcp-server.test.ts > agent snapshot MCP serialization > defaults list_agents to caller cwd and excludes archived agents
+AssertionError: expected [ 'in-cwd', 'in-child-cwd', …(2) ] to have a length of 3 but got 4
+
+- Expected
++ Received
+
+- 3
++ 4
+
+ ❯ src/server/agent/mcp-server.test.ts:5501:22
+    5499|
+    5500|     const agentIds = agentsOf(response).map((agent) => agent.id);
+    5501|     expect(agentIds).toHaveLength(3);
+       |                      ^
+    5502|     expect(new Set(agentIds)).toEqual(new Set(["in-cwd", "in-child-cwd…
+    5503|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/server/agent/mcp-server.test.ts > agent snapshot MCP serialization > excludes an archived agent that is also live from list_agents
+AssertionError: expected [ 'resumed-archived', 'in-cwd' ] to deeply equal [ 'in-cwd' ]
+
+- Expected
++ Received
+
+  [
++   "resumed-archived",
+    "in-cwd",
+  ]
+
+ ❯ src/server/agent/mcp-server.test.ts:5541:57
+    5539|     const response = await tool.handler({});
+    5540|
+    5541|     expect(agentsOf(response).map((agent) => agent.id)).toEqual(["in-c…
+       |                                                         ^
+    5542|   });
+    5543|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 120 passed (122)
+   Start at  23:58:08
+   Duration  10.17s (transform 2.84s, setup 47ms, import 4.20s, tests 5.77s, environment 0ms)
+
