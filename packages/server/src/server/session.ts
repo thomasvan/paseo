@@ -1,3 +1,4 @@
+import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 import type { AgentRequests } from "./agent/requests/index.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
@@ -229,6 +230,7 @@ import {
 import type { ForgeService } from "../services/forge-service.js";
 import type { ProviderUsageService } from "../services/quota-fetcher/service.js";
 import {
+  resolveWorkspaceRootAgent,
   summarizeFetchWorkspacesEntries,
   workspaceIdsOnCheckout,
   WorkspaceDirectory,
@@ -479,6 +481,8 @@ export interface SessionOptions {
   workspaceAutoName: WorkspaceAutoName;
   daemonConfigStore: DaemonConfigStore;
   pluginRuntime?: {
+    before: import("./plugins/lifecycle/index.js").PluginLifecycle["before"];
+    emit: import("./plugins/lifecycle/index.js").PluginLifecycle["emit"];
     listPlugins(): import("@getpaseo/protocol/messages").PluginListItem[];
     getLogs(pluginId: string): import("@getpaseo/protocol/messages").PluginLogEntry[];
     installDirectory(input: {
@@ -713,6 +717,8 @@ export class Session {
     unsubscribe: () => void;
   } | null = null;
   private projectSyncEnabled = false;
+  private readonly defaultEventSubscriptionSource = {};
+  private readonly eventSubscriptions = new Map<object, Set<SessionEventSubscription>>();
   private readonly workspaceUpdateTails = new Map<string, Promise<void>>();
   private clientActivity: {
     deviceType: "web" | "mobile";
@@ -859,6 +865,7 @@ export class Session {
     });
     this.workspaceAutoName = workspaceAutoName;
     this.workspaceProvisioning = createWorkspaceProvisioningService({
+      lifecycle: this.pluginRuntime,
       serverId,
       workspaceRegistry: this.workspaceRegistry,
       projectRegistry: this.projectRegistry,
@@ -922,6 +929,7 @@ export class Session {
         isProviderVisibleToClient: (provider) => this.isProviderVisibleToClient(provider),
         supportsCustomModeIcons: () => this.supports(CLIENT_CAPS.customModeIcons),
         supportsCompactProviderSnapshots: () => this.supports(CLIENT_CAPS.compactProviderSnapshots),
+        wantsSnapshotChanges: () => this.wantsEvent("providers_snapshot_update"),
         supportsProviderSnapshotReferences: () =>
           this.supports(CLIENT_CAPS.providerSnapshotReferences),
         listProviderAvailability: () => this.agentManager.listProviderAvailability(),
@@ -1132,6 +1140,7 @@ export class Session {
   updateClientCapabilities(capabilities: Record<string, unknown> | null, source?: object): void {
     this.clientCapabilities = parseClientCapabilities(capabilities);
     if (source) {
+      this.eventSubscriptions.delete(source);
       this.clientCapabilitiesBySource.set(source, this.clientCapabilities);
     }
     if (!source && !this.supports(CLIENT_CAPS.selectiveAgentTimeline)) {
@@ -1142,6 +1151,7 @@ export class Session {
 
   clearAgentTimelineSubscription(source: object): void {
     this.clientCapabilitiesBySource.delete(source);
+    this.eventSubscriptions.delete(source);
     if (this.viewedTimelineAgentIdsBySource.delete(source)) {
       this.rebuildViewedTimelineAgentIds();
     }
@@ -1172,20 +1182,23 @@ export class Session {
     return true;
   }
 
-  private supportsTimelineNotifications(source?: object): boolean {
-    return source
-      ? this.supportsForSource(CLIENT_CAPS.timelineNotifications, source)
-      : this.supports(CLIENT_CAPS.timelineNotifications);
+  // COMPAT(timelineItemCapabilities): plugin items added in v0.8.0, notifications in v0.7.2.
+  // Remove after 2027-03-07 once the supported client floor is >= v0.8.0.
+  private supportsTimelineItem(item: { type: string }, source?: object): boolean {
+    let capability: ClientCapability;
+    if (item.type === "notification") capability = CLIENT_CAPS.timelineNotifications;
+    else if (item.type === "plugin") capability = CLIENT_CAPS.pluginTimelineItems;
+    else return true;
+    return source ? this.supportsForSource(capability, source) : this.supports(capability);
   }
 
   private forwardAgentStream(
     event: Extract<AgentManagerEvent, { type: "agent_stream" }>,
     serializedEvent: Extract<SessionOutboundMessage, { type: "agent_stream" }>["payload"]["event"],
   ): void {
-    const isNotification =
-      serializedEvent.type === "timeline" && serializedEvent.item.type === "notification";
     if (this.clientCapabilitiesBySource.size === 0 || !this.onMessageToSource) {
-      if (isNotification && !this.supportsTimelineNotifications()) return;
+      if (serializedEvent.type === "timeline" && !this.supportsTimelineItem(serializedEvent.item))
+        return;
       if (this.usesSelectiveTimelineDelivery() && serializedEvent.type === "attention_required") {
         this.emit({
           type: "agent_attention_required",
@@ -1210,9 +1223,14 @@ export class Session {
     }
 
     for (const [source, capabilities] of this.clientCapabilitiesBySource) {
-      if (isNotification && !capabilities.has(CLIENT_CAPS.timelineNotifications)) continue;
+      if (
+        serializedEvent.type === "timeline" &&
+        !this.supportsTimelineItem(serializedEvent.item, source)
+      )
+        continue;
       const supportsSelectiveDelivery = capabilities.has(CLIENT_CAPS.selectiveAgentTimeline);
       if (supportsSelectiveDelivery && serializedEvent.type === "attention_required") {
+        if (!this.wantsEvent("agent_attention_required", source)) continue;
         this.onMessageToSource(source, {
           type: "agent_attention_required",
           payload: {
@@ -1257,6 +1275,7 @@ export class Session {
   }
 
   private async publishProjectUpdate(update: ProjectUpdate): Promise<void> {
+    if (!this.wantsEvent("project.update")) return;
     const projectedPayload =
       update.kind === "upsert"
         ? { kind: "upsert" as const, project: await this.buildProjectDescriptor(update.project) }
@@ -1265,15 +1284,7 @@ export class Session {
       type: "project.update",
       payload: this.directorySync.sequenceProjectUpdate(projectedPayload, this.projectSyncEnabled),
     };
-    if (this.clientCapabilitiesBySource.size === 0 || !this.onMessageToSource) {
-      if (this.supports(CLIENT_CAPS.projectUpdates)) this.emit(message);
-      return;
-    }
-    for (const [source, capabilities] of this.clientCapabilitiesBySource) {
-      if (capabilities.has(CLIENT_CAPS.projectUpdates)) {
-        this.onMessageToSource(source, message);
-      }
-    }
+    this.emit(message);
   }
 
   async syncWorkspaceGitObserverForWorkspace(workspace: PersistedWorkspaceRecord): Promise<void> {
@@ -1676,11 +1687,10 @@ export class Session {
       };
     }
 
-    const isNotification = update.type === "timeline" && update.row.item.type === "notification";
     if (this.clientCapabilitiesBySource.size === 0 || !this.onMessageToSource) {
       if (
         this.supports(CLIENT_CAPS.providerSubagents) &&
-        (!isNotification || this.supportsTimelineNotifications())
+        (update.type !== "timeline" || this.supportsTimelineItem(update.row.item))
       ) {
         this.emit(message);
       }
@@ -1688,7 +1698,8 @@ export class Session {
     }
     for (const [source, capabilities] of this.clientCapabilitiesBySource) {
       if (!capabilities.has(CLIENT_CAPS.providerSubagents)) continue;
-      if (isNotification && !capabilities.has(CLIENT_CAPS.timelineNotifications)) continue;
+      if (update.type === "timeline" && !this.supportsTimelineItem(update.row.item, source))
+        continue;
       this.onMessageToSource(source, message);
     }
   }
@@ -2008,7 +2019,7 @@ export class Session {
 
   private dispatchWorkspaceLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     return (
-      this.dispatchWorkspaceRecoveryMessage(msg) ??
+      this.dispatchWorkspaceStateMessage(msg) ??
       this.dispatchWorkspaceLabelMessage(msg) ??
       this.dispatchWorkspaceSetupMessage(msg) ??
       this.dispatchWorkspaceAndProjectMessage(msg)
@@ -2323,6 +2334,20 @@ export class Session {
         return this.handleProviderSubagentListRequest(msg);
       case "agent.provider_subagents.timeline.get.request":
         return this.handleProviderSubagentTimelineRequest(msg, source);
+      case "session.events.set_subscription.request": {
+        this.eventSubscriptions.set(
+          source ?? this.defaultEventSubscriptionSource,
+          new Set(msg.events),
+        );
+        this.emitForSource(
+          {
+            type: "session.events.set_subscription.response",
+            payload: { requestId: msg.requestId },
+          },
+          source,
+        );
+        return undefined;
+      }
       case "agent.timeline.set_subscription.request": {
         const agentIds = [...new Set(msg.agentIds)].sort();
         if (
@@ -2558,8 +2583,6 @@ export class Session {
         return this.handleProjectRemoveRequest(msg);
       case "workspace.create.request":
         return this.handleWorkspaceCreateRequest(msg);
-      case "workspace.clear_attention.request":
-        return this.handleWorkspaceClearAttentionRequest(msg);
       case "workspace.title.set.request":
         return this.handleWorkspaceTitleSetRequest(msg.workspaceId, msg.title, msg.requestId);
       case "workspace.pin.set.request":
@@ -2632,12 +2655,16 @@ export class Session {
     }
   }
 
-  private dispatchWorkspaceRecoveryMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+  private dispatchWorkspaceStateMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "workspace.recovery.inspect.request":
         return this.handleWorkspaceRecoveryInspectRequest(msg);
       case "workspace.recovery.restore.request":
         return this.handleWorkspaceRecoveryRestoreRequest(msg);
+      case "workspace.clear_attention.request":
+        return this.handleWorkspaceClearAttentionRequest(msg);
+      case "workspace.mark_unread.request":
+        return this.handleWorkspaceMarkUnreadRequest(msg);
       default:
         return undefined;
     }
@@ -4125,7 +4152,7 @@ export class Session {
     source?: object,
   ): void {
     for (const row of rows) {
-      if (row.item.type === "notification" && !this.supportsTimelineNotifications(source)) {
+      if (!this.supportsTimelineItem(row.item, source)) {
         continue;
       }
       const event = serializeAgentStreamEvent({
@@ -6049,6 +6076,11 @@ export class Session {
     request: Extract<SessionInboundMessage, { type: "workspace.create.request" }>,
   ): Promise<void> {
     try {
+      if (this.pluginRuntime) {
+        const { type, requestId, ...input } = request;
+        const transformed = await this.pluginRuntime.before("workspace.create", input);
+        request = { ...transformed, type, requestId };
+      }
       if (request.source.kind === "directory") {
         await this.handleWorkspaceCreateLocal(request);
         return;
@@ -6997,6 +7029,64 @@ export class Session {
     });
   }
 
+  private async handleWorkspaceMarkUnreadRequest(
+    request: Extract<SessionInboundMessage, { type: "workspace.mark_unread.request" }>,
+  ): Promise<void> {
+    const { requestId, workspaceId } = request;
+    let markedAgentId: string | null = null;
+    try {
+      const workspace = await this.workspaceRegistry.get(workspaceId);
+      if (!workspace || workspace.archivedAt) {
+        throw new Error(`Workspace not found: ${workspaceId}`);
+      }
+
+      const agents = (await this.listAgentPayloads()).filter((agent) =>
+        this.isProviderVisibleToClient(agent.provider),
+      );
+      const agentsById = new Map(agents.map((agent) => [agent.id, agent] as const));
+      const candidates = agents
+        .filter((agent) => !agent.archivedAt && agent.workspaceId === workspace.workspaceId)
+        .filter((agent) => resolveWorkspaceRootAgent(agent, agentsById)?.id === agent.id)
+        .filter((agent) => agent.status === "idle" || agent.status === "closed")
+        .filter((agent) => agent.requiresAttention !== true)
+        .filter((agent) => (agent.pendingPermissions?.length ?? 0) === 0)
+        .sort(
+          (left, right) =>
+            right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id),
+        );
+      const candidate = candidates[0];
+      if (!candidate) {
+        throw new Error(`Workspace has no finished agent to mark unread: ${workspaceId}`);
+      }
+
+      await this.agentManager.markAgentUnread(candidate.id);
+      markedAgentId = candidate.id;
+      this.emit({
+        type: "workspace.mark_unread.response",
+        payload: {
+          requestId,
+          workspaceId,
+          markedAgentId,
+          success: true,
+          error: null,
+        },
+      });
+    } catch (error) {
+      const message = getErrorMessage(error);
+      this.sessionLogger.error({ err: error, workspaceId }, "Failed to mark workspace unread");
+      this.emit({
+        type: "workspace.mark_unread.response",
+        payload: {
+          requestId,
+          workspaceId,
+          markedAgentId,
+          success: false,
+          error: message,
+        },
+      });
+    }
+  }
+
   private async handleFetchAgent(agentIdOrIdentifier: string, requestId: string): Promise<void> {
     const resolved = await this.resolveAgentIdentifier(agentIdOrIdentifier);
     if (!resolved.ok) {
@@ -7167,9 +7257,9 @@ export class Session {
         selectedTimeline.endSeq !== null
           ? { epoch: selectedTimeline.timeline.epoch, seq: selectedTimeline.endSeq }
           : null;
-      const entries = this.supportsTimelineNotifications(source)
-        ? selectedTimeline.entries
-        : selectedTimeline.entries.filter((entry) => entry.item.type !== "notification");
+      const entries = selectedTimeline.entries.filter((entry) =>
+        this.supportsTimelineItem(entry.item, source),
+      );
 
       this.emitForSource(
         {
@@ -7368,9 +7458,7 @@ export class Session {
           limit: msg.limit ?? (direction === "after" ? 0 : 200),
         },
       );
-      const rows = this.supportsTimelineNotifications(source)
-        ? timeline.rows
-        : timeline.rows.filter((row) => row.item.type !== "notification");
+      const rows = timeline.rows.filter((row) => this.supportsTimelineItem(row.item, source));
       this.emitForSource(
         {
           type: "agent.provider_subagents.timeline.get.response",
@@ -7690,9 +7778,42 @@ export class Session {
   /**
    * Emit a message to the client
    */
+  // COMPAT(explicitEventSubscriptions): added in v0.8.0, remove legacy broadcasts after 2027-03-08.
+  private wantsEvent(event: SessionEventSubscription, source?: object): boolean {
+    if (!source && this.clientCapabilitiesBySource.size > 0) {
+      return [...this.clientCapabilitiesBySource.keys()].some((candidate) =>
+        this.wantsEvent(event, candidate),
+      );
+    }
+    const capabilities = source
+      ? this.clientCapabilitiesBySource.get(source)!
+      : this.clientCapabilities;
+    if (event === "project.update" && !capabilities.has(CLIENT_CAPS.projectUpdates)) return false;
+    return (
+      !capabilities.has(CLIENT_CAPS.explicitEventSubscriptions) ||
+      this.eventSubscriptions.get(source ?? this.defaultEventSubscriptionSource)?.has(event) ===
+        true
+    );
+  }
+
   private emit(msg: SessionOutboundMessage): void {
     if (!this.authorization.allowsOutbound(msg)) {
       return;
+    }
+    if (
+      msg.type === "project.update" ||
+      msg.type === "providers_snapshot_update" ||
+      msg.type === "agent_attention_required" ||
+      msg.type === "agent_permission_request" ||
+      msg.type === "agent_permission_resolved"
+    ) {
+      if (this.clientCapabilitiesBySource.size > 0 && this.onMessageToSource) {
+        for (const source of this.clientCapabilitiesBySource.keys()) {
+          if (this.wantsEvent(msg.type, source)) this.onMessageToSource(source, msg);
+        }
+        return;
+      }
+      if (!this.wantsEvent(msg.type)) return;
     }
     // JSON.stringify(msg) is only computed when trace is enabled — it runs for
     // every outbound message otherwise, and trace is disabled by default.
@@ -7706,7 +7827,41 @@ export class Session {
         "agent.session.outbound",
       );
     }
+    if (msg.type === "workspace_setup_progress" || msg.type === "workspace_setup_status_response") {
+      if (this.clientCapabilitiesBySource.size > 0 && this.onMessageToSource) {
+        for (const [source] of this.clientCapabilitiesBySource) {
+          this.onMessageToSource(source, this.workspaceSetupMessageForClient(msg, source));
+        }
+        return;
+      }
+      msg = this.workspaceSetupMessageForClient(msg);
+    }
     this.onMessage(msg);
+  }
+
+  // COMPAT(workspaceSetupBlocked): added in v0.8.0, remove after 2027-03-07 once client floor >= v0.8.0.
+  private workspaceSetupMessageForClient(
+    message: Extract<
+      SessionOutboundMessage,
+      { type: "workspace_setup_progress" | "workspace_setup_status_response" }
+    >,
+    source?: object,
+  ): SessionOutboundMessage {
+    const supportsBlocked = source
+      ? this.supportsForSource(CLIENT_CAPS.workspaceSetupBlocked, source)
+      : this.supports(CLIENT_CAPS.workspaceSetupBlocked);
+    const snapshot =
+      message.type === "workspace_setup_progress" ? message.payload : message.payload.snapshot;
+    if (supportsBlocked || snapshot?.status !== "blocked") return message;
+    const legacySnapshot = {
+      ...snapshot,
+      status: "failed" as const,
+      error:
+        "Workspace setup is blocked pending approval of code from a fork pull request. Update Paseo to review and run setup.",
+    };
+    return message.type === "workspace_setup_progress"
+      ? { ...message, payload: { ...message.payload, ...legacySnapshot } }
+      : { ...message, payload: { ...message.payload, snapshot: legacySnapshot } };
   }
 
   private emitBinary(frame: Uint8Array): void {
