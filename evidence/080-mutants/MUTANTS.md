@@ -28,6 +28,25 @@ restore to green. Controls on the same tree: `control-*.log`. Every mutant rever
 | M24  | archived-live-list                                | drop `archivedAt` from `serializeSnapshotWithMetadata`                    | KILLED       | "excludes an archived agent that is also live from list_agents"; "reports the archive timestamp of a live archived agent" |
 | M25  | archived-live-list (filter)                       | make the combined-list archive filter a no-op                             | KILLED       | "defaults list_agents to caller cwd and excludes archived agents" (length 3 → 4)                                          |
 
+**Population: 21 mutants** (19 killed, 2 survived), one log each, all listed above. One further
+run — M23 — was made and discarded as mis-targeted; it is not a mutant of this population and is
+recorded below with its log.
+
+## Id space
+
+The ids are not dense, and nothing is missing.
+
+- **M01–M04 were never run.** No mutation was ever assigned to those ids and no log exists for
+  them. The sequence began at M05 through an accident of numbering while surveying the codex
+  cluster; every mutation actually executed is in the table above. I record this rather than
+  renumbering, because renumbering after the fact would make the logs disagree with the report.
+- **M23 was run and discarded as mis-targeted, not survived.** It mutated the `record.archivedAt ?
+{ purpose: "history" } : undefined` line in `agent-loading.ts`, which is upstream-owned code the
+  `archived-live-list` patch does not touch. `mcp-server.test.ts` stayed green (122/122), which is
+  the correct outcome for mutating a non-patch site and proves nothing either way about the patch.
+  Re-targeting to the patch's real sites produced M24 and M25, both killed. Log:
+  `m23-mistargeted-agent-loading.log`.
+
 ## Constituent coverage
 
 - **replace-awaits-teardown** — M05 proves the bounded wait at the top of `startTurn`. It does
