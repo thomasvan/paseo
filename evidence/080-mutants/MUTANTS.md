@@ -118,7 +118,8 @@ resolving`, `m12-qar-ordering-KILLED.log`); reverted, the file is 99/99 green
   This is the one patch with no `SLP-PATCH` marker by design, so the behavioural check is all
   that stands between it and silent loss at a future sync. M24 and M25 are half of that check.
   The patch carries no `SLP-PATCH` marker by design, so "remove the marker and see" has no
-  meaning for it; its survival check is behavioural, and these two mutants are that check.
+  meaning for it; its survival check is behavioural, and these two mutants cover only the
+  seeded-state boundary checks.
 
 - **detached-arg / detached-wakeup / wakeup-each / mcp-protocol-version-clip** — every marker
   site in these four has a killed mutant above except the `paseo-tools.ts:1592` detached-arg
@@ -208,13 +209,15 @@ Stated so the population is not read as more than it is.
 - **Exact mutation diffs exist only for M12 and M26.** M05–M25 were applied and reverted without
   capturing a diff; their "Mutant" column is a prose statement of the edit, and cannot be
   re-derived from this directory. Re-deriving one requires re-applying the described edit.
-- **Restoration is captured collectively, not per mutant.** The census asserts every mutant was
+- **Restoration is captured collectively for most mutants, not per mutant; M12 and M26 are
+  exceptions with dedicated captures (`m12-qar-ordering-restored.log` and
+  `m26-flush-site-4301-restored.log`).** The census asserts every mutant was
   reverted with `git checkout --`; the evidence for that is the four suite controls
   (`control-*.log`), `m12-qar-ordering-restored.log`, `control-codex-app-server-agent.log`, and
   `m26-flush-site-4301-restored.log`. Each is a green run of a whole suite at a moment after some
   set of mutations was reverted — end-state evidence covering that set together, not a
   per-mutant revert-and-re-run cycle. Read "restore to green" as proved for the suites those logs
-  cover at those moments, and NOT MEASURED per mutant.
+  cover at those moments, and NOT MEASURED per mutant for the remaining mutants.
 - **No compilation evidence exists for the type-only `agent-sdk-types.ts` site.** See
   force-cancel-releases-foreground under "Constituent coverage".
 - **`archived-live-list`'s specified survival check is half unmeasured.** M24 and M25 are
