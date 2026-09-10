@@ -5,7 +5,7 @@ npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.te
 
 
  Test Files  1 passed (1)
-      Tests  161 passed (161)
-   Start at  00:51:02
-   Duration  4.55s (transform 1.70s, setup 51ms, import 2.32s, tests 1.99s, environment 0ms)
+      Tests  162 passed (162)
+   Start at  01:01:21
+   Duration  4.49s (transform 1.61s, setup 49ms, import 2.24s, tests 2.04s, environment 0ms)
 

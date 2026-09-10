@@ -102,21 +102,26 @@ Mutator: `m26-flush-site-mutator.py` (argument = line number). Exact diff per si
 
     npx vitest run src/server/agent/providers/codex-app-server-agent.test.ts
 
-| Site | Method                            | Result     | Killing assertion                                                           |
-| ---- | --------------------------------- | ---------- | --------------------------------------------------------------------------- |
-| 3578 | `handleUnexpectedTermination`     | KILLED     | "frees a startTurn queued behind the slot when the app-server dies"         |
-| 4301 | `startTurn` turn/start failure    | NOT KILLED | —                                                                           |
-| 4970 | `releaseForegroundTurn`           | KILLED     | "frees a startTurn queued behind a stuck slot when the slot is released"    |
-| 4983 | `close()`                         | KILLED     | "frees a startTurn queued behind a stuck slot when the session closes"      |
-| 6121 | `handleTurnCompletedNotification` | KILLED     | "frees a startTurn queued behind the slot when the turn completes normally" |
+| Site | Method                            | Result | Killing assertion                                                             |
+| ---- | --------------------------------- | ------ | ----------------------------------------------------------------------------- |
+| 3578 | `handleUnexpectedTermination`     | KILLED | "frees a startTurn queued behind the slot when the app-server dies"           |
+| 4301 | `startTurn` turn/start failure    | KILLED | "frees a startTurn queued behind a slot whose turn/start is refused by Codex" |
+| 4970 | `releaseForegroundTurn`           | KILLED | "frees a startTurn queued behind a stuck slot when the slot is released"      |
+| 4983 | `close()`                         | KILLED | "frees a startTurn queued behind a stuck slot when the session closes"        |
+| 6121 | `handleTurnCompletedNotification` | KILLED | "frees a startTurn queued behind the slot when the turn completes normally"   |
 
 Logs: `m26-flush-site-<line>.log`. Control on the same tree, all five reverted:
-`control-codex-app-server-agent.log`, 161/161.
+`control-codex-app-server-agent.log`, 162/162.
 
-Site 4301 is NOT KILLED, not "covered elsewhere". Reaching it needs a live app-server whose
-`turn/start` request rejects while a second prompt is already queued behind the slot; no test in
-the file pairs those two conditions. Three of the four kills come from tests added in this commit
-(3578, 4983, 6121); 4970 was already covered.
+All five kills are measured. Four of them come from tests added in this commit (3578, 4301, 4983,
+6121); 4970 was already covered.
+
+4301 was recorded NOT KILLED in the first pass of this sub-population, on the stated grounds that
+the harness could not pair a rejecting `turn/start` with a second prompt queued behind the slot.
+That was wrong, and the correction is measured, not argued: `createFakeCodexAppServer` dispatches
+per method and rejects when its handler rejects, and a second `startTurn` against a live
+`CodexAppServerAgentSession` registers a waiter without any special support. The re-measured run
+is the one in the table; `m26-flush-site-4301.log` is that run.
 
 ## M12 re-run provenance
 

@@ -859,6 +859,51 @@ describe("Codex foreground teardown wait (replace path)", () => {
       vi.useRealTimers();
     }
   });
+
+  test("frees a startTurn queued behind a slot whose turn/start is refused by Codex", async () => {
+    // The failure path of startTurn itself: Codex rejects turn/start while a second prompt is
+    // already queued behind the slot the failing turn took. Needs a live app-server, so this runs
+    // against the fake child process rather than the internals-only session used above.
+    let refuseStart!: (error: Error) => void;
+    const startGate = new Promise((_resolve, reject) => {
+      refuseStart = reject;
+    });
+    startGate.catch(() => {});
+    const appServer = createFakeCodexAppServer({ "turn/start": () => startGate as never });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    const internals = castInternals<{
+      activeForegroundTurnId: string | null;
+      foregroundTurnClearWaiters: Array<() => void>;
+    }>(session);
+
+    const refused = session.startTurn("held open by Codex");
+    refused.catch(() => {});
+    await appServer.waitForTurnStart();
+    expect(internals.activeForegroundTurnId).not.toBeNull();
+
+    const queued = session.startTurn("queued behind the refused start");
+    queued.catch(() => {});
+    await vi.waitUntil(() => internals.foregroundTurnClearWaiters.length === 1);
+
+    refuseStart(new Error("turn/start refused"));
+    await expect(refused).rejects.toThrow();
+    // Without the flush the queued prompt sleeps out FOREGROUND_TEARDOWN_WAIT_MS instead of
+    // waking as soon as the slot is released.
+    const outcome = await Promise.race([
+      queued.then(
+        () => "settled",
+        () => "settled",
+      ),
+      new Promise((resolve) => setTimeout(() => resolve("stuck"), 400)),
+    ]);
+    expect(outcome).toBe("settled");
+    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+  });
 });
 
 describe("Codex client disposal", () => {
