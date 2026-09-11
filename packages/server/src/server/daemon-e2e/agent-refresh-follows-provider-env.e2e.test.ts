@@ -1,4 +1,3 @@
-// SLP-PATCH(claude-history-follows-provider-env)
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,8 +54,8 @@ function timelineText(entries: ReadonlyArray<{ item: { type: string; text?: stri
     .join("\n");
 }
 
-// SLP-PATCH(claude-history-follows-provider-env): the discriminating shape. A decoy directory
-// sits at process.env.CLAUDE_CONFIG_DIR — the daemon's own launch environment — and contains no
+// The discriminating shape: a decoy directory sits at process.env.CLAUDE_CONFIG_DIR — the
+// daemon's own launch environment — and contains no
 // transcript. The real transcript lives under a second directory declared only through this
 // role provider's runtimeSettings.env, the same surface `daemon-config.json` uses per seat. A
 // test that read the transcript directory from process.env instead would pass whether or not

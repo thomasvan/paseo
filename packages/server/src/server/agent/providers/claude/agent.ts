@@ -1679,9 +1679,9 @@ export class ClaudeAgentClient implements AgentClient {
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
     }
-    // SLP-PATCH(claude-history-follows-provider-env): fill the configDir seam from this
-    // client's launch environment so a role provider's settings.json is read from the
-    // role's dir; an explicit options.configDir (the test seam) still wins.
+    // Fill the configDir seam from this client's launch environment so a custom provider's
+    // settings.json is read from its own dir; an explicit options.configDir (the test seam)
+    // still wins.
     const configDir =
       this.configDir ??
       createProviderEnv({ baseEnv: process.env, runtimeSettings: this.runtimeSettings })
@@ -1718,8 +1718,7 @@ export class ClaudeAgentClient implements AgentClient {
   async listImportableSessions(
     options?: ListImportableSessionsOptions,
   ): Promise<ImportableProviderSession[]> {
-    // SLP-PATCH(claude-history-follows-provider-env): resolve against this client's own
-    // launch environment, not the daemon's process.env.
+    // Resolve against this client's own launch environment, not the daemon's process.env.
     const configDir =
       createProviderEnv({ baseEnv: process.env, runtimeSettings: this.runtimeSettings })
         .CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
@@ -5134,9 +5133,9 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  // SLP-PATCH(claude-history-follows-provider-env): the daemon's own process.env is not this
-  // session's launch environment — a role provider layers CLAUDE_CONFIG_DIR through
-  // runtimeSettings.env/launchEnv, and buildSdkEnv() already composes exactly that.
+  // The daemon's own process.env is not necessarily this session's launch environment — a
+  // custom provider can layer CLAUDE_CONFIG_DIR through runtimeSettings.env/launchEnv, and
+  // buildSdkEnv() already composes exactly that for the SDK call itself.
   private resolveConfigDir(): string {
     return this.buildSdkEnv().CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
   }
@@ -5144,7 +5143,6 @@ class ClaudeAgentSession implements AgentSession {
   private resolveHistoryPath(sessionId: string): string | null {
     const cwd = this.config.cwd;
     if (!cwd) return null;
-    // SLP-PATCH(claude-history-follows-provider-env)
     const configDir = this.resolveConfigDir();
     const candidates = [cwd];
     try {
