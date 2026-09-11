@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  load multiple .env files with { path: ['.env.local', '.env'] }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (158 tests | 1 failed) 2115ms
+     × releases the foreground slot when the client is disposed 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex client disposal > releases the foreground slot when the client is disposed
+AssertionError: expected 'test-turn' to be null
+
+- Expected:
+null
+
++ Received:
+"test-turn"
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:796:46
+    794|     expect(internals.activeForegroundTurnId).toBe("test-turn");
+    795|     await internals.disposeClient();
+    796|     expect(internals.activeForegroundTurnId).toBeNull();
+       |                                              ^
+    797|   });
+    798|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 157 passed (158)
+   Start at  23:47:17
+   Duration  5.38s (transform 1.85s, setup 52ms, import 2.81s, tests 2.12s, environment 0ms)
+

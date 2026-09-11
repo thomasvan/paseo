@@ -33,8 +33,11 @@ Two other patches put their tests in upstream-owned files, for the same reason i
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
 shows through a live MCP tool call, so its two tests sit in `mcp-parity.e2e.test.ts` beside
 the legacy-shape test they mirror; `question-answer-required` guards a rule defined in the
-Claude provider, so its tests sit in `providers/claude/agent.test.ts` beside that rule. They
-carry no marker, so if upstream takes them the files converge instead of conflicting.
+Claude provider, so its tests sit in `providers/claude/agent.test.ts` beside that rule. The
+new `a rejected question answer leaves the request answerable by a corrected retry` test
+follows that upstream-owned-file convention and carries no marker: these tests are expected
+to converge if upstream takes the patch, and adding a marker would falsely change the patch
+census.
 
 ## Why these patches exist
 
@@ -53,7 +56,12 @@ and `archived-live-list` arrived without it being updated, and
 `mcp-protocol-version-clip` made it twelve on 2026-09-09, which is why the
 `Sync procedure` below now derives its file manifest with a command instead of
 restating a total.
-Last upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
+Current upstream sync: **2026-09-11**, tag `v0.8.0` at
+`b8e24677e12b226c7c38c1c3a40649daa9f1152f`, merge
+`683d6e776e3aa29f213c925fe3bc6a21a261fb3c`. All twelve patches carried with
+no adaptation. The tag is pinned rather than `upstream/main`, which is one
+commit past it, so the merge is reproducible.
+Previous upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
 merge `9934a5a60`. One patch left in that merge: `native-tools-optin`. Its PR
 [#3449](https://github.com/getpaseo/paseo/pull/3449) was closed on 2026-09-03
 as superseded by the maintainer's own
@@ -72,9 +80,8 @@ the merged dispatch internals (it now mirrors upstream's own harness, a real
 `sendPromptToAgent` walks `ensureAgentLoaded → startAgentRun`, which the old
 stub could not satisfy), and `force-cancel-releases-foreground` reads the
 canceled run's turn id from `this.runs.getTurnId(agentId)` now that upstream
-tracks runs in `AgentRunState`. Ten patches are retained in total — the nine
-above plus `native-tools-injection-independent`; the six upstream PRs are all
-still open and the new patch is filed as #4434.
+tracks runs in `AgentRunState`. Twelve patches are retained in total; the
+current PR states and the two merged PRs are recorded in the table below.
 
 A same-day review follow-up re-opened part of the retirement. A read-only Lead
 review (codex-lead, room review of the merge) found that #4277 alone does not
@@ -113,12 +120,12 @@ breakage and is not. The patch table:
 | PR                                                   | Patches                                                                                                                                           | Touches                                                                                       | Status                                                    |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                             | landed `cdb116314`, synced                                |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                             | open — **opt-in shape**                                   |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                             | closed 2026-09-08 — feature-PR sweep                      |
 | [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                      | open                                                      |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | open                                                      |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | closed 2026-09-08 — feature-PR sweep                      |
 | [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                | landed `53c960747`; closed #3449 as superseded 2026-09-03 |
-| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                        | open                                                      |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | open — **consolidated**, see below                        |
+| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                        | closed 2026-09-08 — feature-PR sweep                      |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | closed 2026-09-08 in favor of #4041 — follow-up remains   |
 | [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                               | open                                                      |
 | [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**                                      |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
@@ -176,7 +183,7 @@ closed into it. Cut from `upstream/main` without the fork markers.
 
 **Site:** `packages/server/src/server/agent/providers/codex-app-server-agent.ts` —
 one constant, one waiter field, two private methods, a bounded wait at the top
-of `startTurn`, and a flush at the four sites that clear
+of `startTurn`, and a flush at the five sites that clear
 `activeForegroundTurnId`. Tests sit in upstream's own
 `codex-app-server-agent.test.ts` (no marker, so the file converges if taken).
 
@@ -191,7 +198,7 @@ one engagement on the busiest seat (the Supervisor), each one turning a live
 wakeup into a lost prompt and an `error`-status seat until the next heartbeat
 sweep re-prompted it. The provider owns "when may a new turn start", so the
 repair is provider-local: `startTurn` waits up to `FOREGROUND_TEARDOWN_WAIT_MS`
-(10s) for the teardown to clear the id — the four clear sites flush the
+(10s) for the teardown to clear the id — the five clear sites flush the
 waiters — and refuses only a turn that genuinely will not end. A timed-out
 waiter removes itself, so a stuck turn plus retrying prompts retains no dead
 closures. Zero manager changes; the refusal semantics for a truly stuck turn
@@ -229,6 +236,13 @@ releases the slot with it: emit `turn_failed` so the manager's run settles,
 clear the foreground and client-message ids, flush the teardown waiters, and
 resolve any pending turn identification. Idempotent on the `close()` path,
 which already cleared the slot.
+
+PR #3640 was closed on 2026-09-08 in favor of the still-open runtime-
+reconciliation approach in [#4041](https://github.com/getpaseo/paseo/pull/4041):
+"The Codex-specific failed-reconnect and unidentified-turn cases remain
+follow-up work." This is a technical successor, not the feature-PR sweep that
+closed #3455, #3147, and #4434; deciding whether #4041 replaces these patches
+belongs to a later sync round.
 
 ## `interrupt-releases-foreground`
 
@@ -340,7 +354,18 @@ Worse, it was unrecoverable: `respondToPermission` deletes the request from
 `pendingPermissions` on entry, so the malformed answer consumed it and the retry
 failed with `No pending permission request`. The guard runs **before** that
 delete, and `AgentManager` drops its own copy only once the call resolves, so
-both maps survive the throw and the request stays answerable.
+both maps are intended to survive the throw and the request should stay
+answerable. The committed test `a rejected question answer leaves the request
+answerable by a corrected retry` proves that recoverability behaviour: it rejects
+the non-deliverable answer, retries the same `requestId` with a corrected answer,
+and observes the normalized answer at the waiting caller. With the M12 mutation
+moving the deliverability check after `pendingPermissions.delete`, the test fails
+with `No pending permission request`. Both captures are re-runs at revision
+`e92e5d29434b925647b0c6f1e53322f6073d977a`, not at the census tree: under
+`--bail=1` the mutated file reports 1 failed and 40 passed of 99
+(`m12-qar-ordering-KILLED.log`); reverted and re-run without `--bail`, 99 pass
+(`m12-qar-ordering-restored.log`). The proof is behavioural rather than a call-order
+assertion, so the test guards the property the ordering exists to preserve.
 
 **Why it lives in the Claude provider.** The answer contract is per provider,
 not shared. Claude keeps an answer only when its key is a question's full text
@@ -428,7 +453,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
   right artifact if upstream asks for this to be opt-in.
 - **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
-- **Upstream status:** open — [getpaseo/paseo#3455](https://github.com/getpaseo/paseo/pull/3455), branch `fix/finish-watcher-notify-mode` off `upstream/main`, **in the opt-in shape**. [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 answers that: `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, `"once"` the default and byte-identical to current upstream, `"each"` the re-arming mode, the archived-caller disarm scoped to `"each"` so the existing path is untouched, and the field `.optional()` with no `.default()` for the `.strict()` reason recorded under `detached-arg`. Four tests, each mutation-checked. **This branch keeps the derived form instead** — see the note above the patch list for why, and for what changes here if #3455 lands.
+- **Upstream status:** closed 2026-09-08 in the feature-PR sweep. [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 proposed `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, with `"once"` as the default and `"each"` as the re-arming mode. This branch keeps the derived form instead — see the note above the patch list.
 
 ### detached-wakeup
 
@@ -454,7 +479,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   and why upstream's guard semantics are left exactly as upstream tests them.
 - **Scope:** `create-agent/create.ts` is the only caller that passed `requireParentOwnership: true`.
   `paseo-tools.ts` omits it (defaults false), where the guard never ran.
-- **Upstream status:** submitted — [getpaseo/paseo#3094](https://github.com/getpaseo/paseo/pull/3094)
+- **Upstream status:** open — [getpaseo/paseo#3094](https://github.com/getpaseo/paseo/pull/3094)
   (branch `fix/detached-child-finish-notification`, off `upstream/main`, marker and SLP
   wording stripped). Independent of `wakeup-each`, which is entirely in `agent-prompt.ts`;
   the two can land in either order. The upstream branch puts its tests in `create.test.ts` rather
@@ -481,7 +506,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
 - **Relation to `detached-wakeup`:** that patch makes a detached child _notify_ its caller;
   this one makes a detached child _requestable_ from the canonical shape. Independent fixes,
   different files.
-- **Upstream status:** submitted — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, off `upstream/main`, marker and SLP wording stripped).
+- **Upstream status:** closed 2026-09-08 in the feature-PR sweep — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, off `upstream/main`, marker and SLP wording stripped).
 - **Retirement and revisit:** this patch retires when upstream owns canonical detached
   creation — either `#3147 lands first` or upstream ships a behaviorally equivalent advertised
   path some other way. In that case, drop the marker and this section during the incorporating
@@ -537,7 +562,7 @@ review-and-adjust (Claude `348b437`); plan and impact at
   duplicated raw headers collapsing to one effective value),
   red before the patch (the client's `notifications/initialized` gets the 400)
   and green after.
-- **Upstream status:** filed — [#4570](https://github.com/getpaseo/paseo/pull/4570),
+- **Upstream status:** open — [#4570](https://github.com/getpaseo/paseo/pull/4570),
   branch `fix/mcp-protocol-version-clip-upstream` off `upstream/main`
   (`fdf3b4b47`), marker and SLP wording stripped (same pattern as
   #4434/#3094/#3455). Expected to be **superseded when the
@@ -549,8 +574,9 @@ review-and-adjust (Claude `348b437`); plan and impact at
 ### native-tools-injection-independent
 
 Opened the same day the 2026-09-07 sync retired `native-tools-optin`, after a
-Lead review showed the retirement alone breaks the room. **No upstream PR yet**
-— filed upstream as [#4434](https://github.com/getpaseo/paseo/pull/4434).
+Lead review showed the retirement alone breaks the room. It was closed on
+2026-09-08 in the feature-PR sweep — see the table above and
+[#4434](https://github.com/getpaseo/paseo/pull/4434).
 
 - **What:** upstream #4277 kept `agentManager.setPaseoToolsEnabled` and the
   provider-runtime catalog switch tied to MCP injection
@@ -575,6 +601,13 @@ Lead review showed the retirement alone breaks the room. **No upstream PR yet**
   and never an injection expression. A booted-daemon regression for the live
   field-change handlers remains uncovered; activation verifies delivery on
   fresh omp seats.
+- **Counting note:** on upstream tag `v0.8.0` (`b8e24677e`),
+  `rg -n 'setAgentProviderToolsEnabled|setPaseoToolsEnabled' packages/server/src/server/bootstrap.ts`
+  returned eight hits at lines 1429, 1433, 1434, 1606, 1611, 1612, 1616, and 1617. Line 1429 is the helper definition, not a call, so there are seven
+  call sites. The earlier count of five missed a block; the count of eight
+  included the definition. All seven call sites remain coupled to
+  `mcpInjectIntoAgents`/`inject`/`value`, so the patch is still needed. When
+  recounting, state whether the grep includes the definition.
 - **Retirement and revisit:** if upstream decouples the native master from MCP
   injection on its own — or accepts this patch — delete the marker sites, this
   section, and the fork-owned gate module.
@@ -590,8 +623,11 @@ scanning headings concluded it was gone.
 
 Scanning headings does not enumerate the patches anyway, and nothing in this file
 said so until now: five patches are documented as `##` sections _above_
-`## Patches`, and six as `###` sections under it, so neither level alone lists
-them all. The roster is the marker manifest in `Sync procedure`, plus
+`## Patches`, and seven as `###` sections under it. At
+`HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`,
+`sed -n '/^## Patches$/,/^## Sync procedure$/p' PATCHES.md | rg -c '^### '
+measured **7** lower-level patch sections, so neither level alone lists them
+all. The roster is the marker manifest in `Sync procedure`, plus
 `archived-live-list`, which carries no marker. That mattered more than a missing heading
 usually does: it is the patch nearest the region upstream rewrote in #3742, so
 it is the one most likely to need re-applying by hand, and it had the least
@@ -666,6 +702,13 @@ section.
 First, derive the patch-owned file manifest, then check whether upstream touched
 any of it since the last sync.
 
+The fork has a Supervisor-granted exception for `evidence/080-mutants/`: its
+durable mutation census artifact may be committed because the census needs
+citable evidence, and the audit found its provenance too thin. The directory
+is fork-only and never converges upstream. Carry it at the next merge; do not
+drop it as an apparent upstream addition. Its contents remain evidence rather
+than sync narrative.
+
 **The manifest is derived, never restated.** Every hand-kept total in this file
 has been wrong at least once — nine patches when there were eleven, five source
 files when there were far more, and a marker count that could not pass on a
@@ -709,11 +752,16 @@ grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 ```
 
-Set A is **22 files**, Set B **19** — the difference from Set A is the three
+On current tip `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, with
+`UPSTREAM_OID=b8e24677e12b226c7c38c1c3a40649daa9f1152f`, and
+`BASE=$(git merge-base HEAD "$UPSTREAM_OID")`, the documented
+`git diff --name-only "$BASE" HEAD -- packages/ | sort` invocation returned
+the same patch-owned file list as the pre-merge measurement: **23 files** for
+Set A; filtering `.slp.test.ts` returned **20** for Set B. The difference from Set A is the three
 fork-only `.slp.test.ts` files, which cannot appear in an upstream diff. Set B
-itself still contains one fork-only file, `native-tools-gate.ts`, so only **18**
+itself still contains one fork-only file, `native-tools-gate.ts`, so only **19**
 of its arguments can match an upstream diff. Both numbers are outputs of the
-command above, not claims: regenerate them, do not trust them.
+that command, not claims: regenerate them, do not trust them.
 
 Set A is wider than the marker set on purpose, and by more than you would guess.
 Ask it, do not estimate it:
@@ -778,22 +826,26 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Expect 10 names across 27 code/test sites, and the per-name
+# Marker gate. On `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, measured
+# 2026-09-11, the package-scoped command below summed to 30 sites; expect
+# 11 names across 30 code/test sites in 12 files, and use the per-name
 # manifest below -- a bare total hides a site moving from one patch to another.
 # This file is excluded because it quotes marker-shaped strings in its own
 # prose, in a number that changes whenever the prose does; include it and the
 # gate can never pass on a healthy tree. Note -I (--no-filename): -o alone
 # prefixes each match with its path, so sort -u would dedupe path:name pairs
 # and return one line per file, not per name.
-rg -c "SLP-PATCH\(" --glob '!PATCHES.md' | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort -u | wc -l  # expect 11
-rg -oI "SLP-PATCH\([a-z-]+\)" --glob '!PATCHES.md' | sort | uniq -c | sort -rn
+rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 11
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
 #    6 native-tools-injection-independent   2 force-cancel-releases-foreground
 #    4 wakeup-each                          2 detached-arg
 #    3 replace-awaits-teardown              3 interrupt-releases-foreground
 #    3 detached-wakeup                      1 dispose-releases-foreground
 #    2 question-answer-required             1 dead-run-settles
 #    3 mcp-protocol-version-clip
+# The census is scoped to packages/ because that is the measured code/test
+# population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list is absent from this manifest by design -- it carries no
 # marker, so its survival check is behavioural (see its section below).
 
@@ -801,8 +853,10 @@ npm ci --ignore-scripts       # the lockfile moves on any non-patch bump;
                               # building without it resolves the old graph
 
 # --ignore-scripts is deliberate -- a just-merged upstream should not get to run
-# arbitrary install scripts -- but this repo NEEDS its own postinstall. There
-# are six patches in patches/, applied by scripts/postinstall-patches.mjs, and
+# arbitrary install scripts -- but this repo NEEDS its own postinstall. At
+# `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, `find patches -maxdepth 1
+# -type f | wc -l` measured **8** dependency patch files, applied by
+# scripts/postinstall-patches.mjs, and
 # react-native-draggable-flatlist+4.0.3.patch adds the very prop that
 # sidebar-workspace-list.tsx passes down. Skip this and @getpaseo/app fails
 # typecheck with TS2322 on a prop that "does not exist". Read the script, then
@@ -839,21 +893,15 @@ npx vitest run packages/server/src/server/agent/providers/claude/agent.test.ts
 npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
 npx vitest run packages/server/src/server/agent/agent-manager.test.ts
 npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts   # diff vs baseline
+npx vitest run packages/server/src/server/agent/agent-mcp.e2e.test.ts     # mcp-protocol-version-clip
 
 npm run format:check
 
-# lint is NOT a pass/fail gate on this branch, and pretending it is stops the
-# sync. Last recorded lint baseline: two errors are carried, all in patched
-# code, all pre-existing:
-#   complexity 24 > 20   interrupt()               codex-app-server-agent.ts
-#   no-multiple-resolved                            codex-app-server-agent.ts
-# (A third, complexity in `pickSupportedPatchFields` (daemon-config-store.ts),
-# left with the native-tools-optin patch in the 2026-09-07 sync.)
-# Compare against that, the way you compare mcp-parity against its baseline:
-# a third error, or a different one, is the merge's. Measure both sides if you
-# want certainty -- `git worktree add --detach <dir> <pre-merge-oid>`, symlink
-# node_modules in, run lint there. The 0.6.1 sync did exactly that and got
-# 3 errors / 0 warnings on both sides.
+# Lint was measured on HEAD with `npm run lint`: Found 0 warnings and 0 errors.
+# The former two-error baseline was stale; commit
+# `06ac487da8bc1b2398eaedba11da4d3fff958938` fixed the `complexity 24 > 20`
+# error in `interrupt()` and `no-multiple-resolved`, both in
+# `codex-app-server-agent.ts`. Measure lint again after each merge.
 npm run lint
 git push origin slp/patches
 ```

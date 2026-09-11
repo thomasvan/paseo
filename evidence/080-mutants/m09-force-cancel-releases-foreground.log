@@ -1,0 +1,32 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/agent-manager.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/agent-manager.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+ ❯ src/server/agent/agent-manager.test.ts (186 tests | 1 failed) 9642ms
+   × cancelAgentRun force-cancel releases the session's foreground slot 2027ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/agent-manager.test.ts > cancelAgentRun force-cancel releases the session's foreground slot
+AssertionError: expected [] to include 'stuck-turn'
+ ❯ src/server/agent/agent-manager.test.ts:2620:55
+    2618|     await fixture.manager.cancelAgentRun(fixture.agentId);
+    2619|
+    2620|     expect(fixture.session.releasedForegroundTurnIds).toContain("stuck…
+       |                                                       ^
+    2621|     expect(fixture.session.heldForegroundTurnId).toBeNull();
+    2622|   } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 185 passed (186)
+   Start at  23:48:30
+   Duration  11.20s (transform 1.00s, setup 53ms, import 1.35s, tests 9.64s, environment 0ms)
+

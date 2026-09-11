@@ -1,0 +1,11 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/claude/agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+
+ Test Files  1 passed (1)
+      Tests  98 passed (98)
+   Start at  23:50:15
+   Duration  1.56s (transform 648ms, setup 51ms, import 1.03s, tests 317ms, environment 0ms)
+

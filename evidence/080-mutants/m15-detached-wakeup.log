@@ -1,0 +1,44 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/create-agent/create.slp.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/create-agent/create.slp.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+
+ ❯ src/server/agent/create-agent/create.slp.test.ts (2 tests | 1 failed) 18ms
+   × a deliberately detached child does not have its wakeup gated on parent ownership 15ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/create-agent/create.slp.test.ts > a deliberately detached child does not have its wakeup gated on parent ownership
+AssertionError: expected { agentManager: { …(2) }, …(5) } to match object { childAgentId: 'child-agent', …(2) }
+(37 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "callerAgentId": "caller-agent",
+    "childAgentId": "child-agent",
+-   "requireParentOwnership": false,
++   "requireParentOwnership": true,
+  }
+
+ ❯ src/server/agent/create-agent/create.slp.test.ts:82:60
+     80|
+     81|   expect(mocks.setupFinishNotification).toHaveBeenCalledTimes(1);
+     82|   expect(mocks.setupFinishNotification.mock.calls[0]?.[0]).toMatchObje…
+       |                                                            ^
+     83|     childAgentId: "child-agent",
+     84|     callerAgentId: "caller-agent",
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  23:52:32
+   Duration  1.09s (transform 532ms, setup 47ms, import 850ms, tests 18ms, environment 0ms)
+

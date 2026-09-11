@@ -1,0 +1,74 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/claude/agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/providers/claude/agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+
+ ❯ src/server/agent/providers/claude/agent.test.ts (98 tests | 11 failed) 323ms
+     × rejects selectedActionId instead of answers 10ms
+     × rejects updatedInput without answers 1ms
+     × rejects an empty answers map 1ms
+     × rejects an answers array 0ms
+     × rejects a key matching no question 0ms
+     × rejects a blank answer 0ms
+     × rejects a non-string answer 0ms
+     × rejects a trimmed key for a padded question 0ms
+     × rejects an empty echoed question list 0ms
+     × names the keys the request accepts, padding included 1ms
+     × names the echoed keys when the caller supplied their own questions 1ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 11 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects selectedActionId instead of answers
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects updatedInput without answers
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects an empty answers map
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects an answers array
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects a key matching no question
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects a blank answer
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects a non-string answer
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects a trimmed key for a padded question
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > rejects an empty echoed question list
+AssertionError: the given combination of arguments (null and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
+ ❯ src/server/agent/providers/claude/agent.test.ts:3336:90
+    3334|   for (const [label, request, response] of rejected) {
+    3335|     test(`rejects ${label}`, () => {
+    3336|       expect(claudeQuestionAnswerRejection(request, { behavior: "allow…
+       |                                                                                          ^
+    3337|         "still pending",
+    3338|       );
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/11]⎯
+
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > names the keys the request accepts, padding included
+AssertionError: the given combination of arguments (null and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
+ ❯ src/server/agent/providers/claude/agent.test.ts:3403:21
+    3401|   test("names the keys the request accepts, padding included", () => {
+    3402|     const message = claudeQuestionAnswerRejection(paddedRequest, { beh…
+    3403|     expect(message).toContain('" Which colour? "');
+       |                     ^
+    3404|     expect(message).toContain('" Colour "');
+    3405|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/11]⎯
+
+ FAIL  src/server/agent/providers/claude/agent.test.ts > claudeQuestionAnswerRejection > names the echoed keys when the caller supplied their own questions
+AssertionError: the given combination of arguments (null and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
+ ❯ src/server/agent/providers/claude/agent.test.ts:3412:21
+    3410|       updatedInput: { questions: [{ question: "Ship it?", header: "Shi…
+    3411|     });
+    3412|     expect(message).toContain("Ship it?");
+       |                     ^
+    3413|     expect(message).not.toContain("Which colour?");
+    3414|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/11]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  11 failed | 87 passed (98)
+   Start at  23:49:47
+   Duration  1.47s (transform 567ms, setup 49ms, import 887ms, tests 323ms, environment 0ms)
+

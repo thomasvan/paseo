@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-evidence-remediation/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (161 tests | 1 failed) 2029ms
+     × frees a startTurn queued behind a stuck slot when the session closes 15ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex foreground teardown wait (replace path) > frees a startTurn queued behind a stuck slot when the session closes
+AssertionError: expected [ [Function waiter] ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:783:50
+    781|     await session.close();
+    782|
+    783|     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+       |                                                  ^
+    784|     expect(internals.activeForegroundTurnId).toBeNull();
+    785|     // Woken, not refused: the queued prompt gets past the foreground …
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 160 passed (161)
+   Start at  00:48:56
+   Duration  4.56s (transform 1.67s, setup 51ms, import 2.32s, tests 2.03s, environment 0ms)
+

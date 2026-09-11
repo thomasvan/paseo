@@ -1,0 +1,22 @@
+# Provenance (not vitest output)
+Purpose: post-restoration green capture for M26 site 4301.
+Revision: 512bdd0078e63a4f61f60d4693fa4b724f13da22
+Working tree vs revision: clean (git status --porcelain empty)
+Site 4301 state: `this.flushForegroundTurnClearWaiters();` present at line 4301; `grep -rn "MUTANT: flush call removed" packages/` returns no match.
+All five call sites present: 3578,4301,4970,4983,6121
+Invocation, from `packages/server`:
+    npx vitest run src/server/agent/providers/codex-app-server-agent.test.ts
+Captured 2026-09-11 by peer/080-record-truth.
+--- vitest output follows ---
+
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-record-truth/packages/server
+
+
+ Test Files  1 passed (1)
+      Tests  162 passed (162)
+   Start at  05:42:09
+   Duration  4.80s (transform 1.70s, setup 52ms, import 2.46s, tests 2.05s, environment 0ms)
+

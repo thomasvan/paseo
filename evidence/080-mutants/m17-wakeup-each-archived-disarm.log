@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/agent-prompt.slp.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/agent-prompt.slp.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+
+ ❯ src/server/agent/agent-prompt.slp.test.ts (2 tests | 1 failed) 143ms
+   × an archived caller disarms the watcher instead of leaking it 33ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/agent-prompt.slp.test.ts > an archived caller disarms the watcher instead of leaking it
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/server/agent/agent-prompt.slp.test.ts:153:35
+    151|
+    152|   expect(scenario.parentPrompts()).toHaveLength(0);
+    153|   expect(scenario.isSubscribed()).toBe(false);
+       |                                   ^
+    154| });
+    155|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  23:53:09
+   Duration  1.24s (transform 572ms, setup 46ms, import 889ms, tests 143ms, environment 0ms)
+

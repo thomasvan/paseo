@@ -1,0 +1,16 @@
+diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
+index 6d7af990b..dd521d75d 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.ts
+@@ -2699,9 +2699,9 @@ class ClaudeAgentSession implements AgentSession {
+     // rejected answer leaves the request pending
+     // and answerable rather than consuming it for nothing. AgentManager only
+     // drops its own copy once this resolves, so both maps survive the throw.
+-    assertClaudeQuestionAnswerDeliverable(pending.request, response);
+-
+     this.pendingPermissions.delete(requestId);
++
++    assertClaudeQuestionAnswerDeliverable(pending.request, response);
+     pending.cleanup?.();
+ 
+     if (response.behavior === "allow") {

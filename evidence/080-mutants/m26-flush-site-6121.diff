@@ -1,0 +1,9 @@
+diff --git a/packages/server/src/server/agent/providers/codex-app-server-agent.ts b/packages/server/src/server/agent/providers/codex-app-server-agent.ts
+index 44e4aaf3f..f02c7561c 100644
+--- a/packages/server/src/server/agent/providers/codex-app-server-agent.ts
++++ b/packages/server/src/server/agent/providers/codex-app-server-agent.ts
+@@ -6120,3 +6120,3 @@ export class CodexAppServerAgentSession implements AgentSession {
+     this.activeClientMessageId = null;
+-    this.flushForegroundTurnClearWaiters();
++    // MUTANT: flush call removed
+     this.currentTurnId = null;

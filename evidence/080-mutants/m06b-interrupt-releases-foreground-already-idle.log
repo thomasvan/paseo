@@ -1,0 +1,39 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/providers/codex-app-server-agent.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/providers/codex-app-server-agent.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts (158 tests | 1 failed) 2019ms
+     × flushes a queued startTurn when Codex reports the interrupted turn is already idle 15ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/providers/codex-app-server-agent.test.ts > Codex client disposal > flushes a queued startTurn when Codex reports the interrupted turn is already idle
+AssertionError: expected 'test-turn' to be null
+
+- Expected:
+null
+
++ Received:
+"test-turn"
+
+ ❯ src/server/agent/providers/codex-app-server-agent.test.ts:3720:46
+    3718|     await session.interrupt();
+    3719|
+    3720|     expect(internals.activeForegroundTurnId).toBeNull();
+       |                                              ^
+    3721|     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
+    3722|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 157 passed (158)
+   Start at  23:46:53
+   Duration  4.66s (transform 1.77s, setup 48ms, import 2.43s, tests 2.02s, environment 0ms)
+

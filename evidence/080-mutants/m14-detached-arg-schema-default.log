@@ -1,0 +1,168 @@
+npm notice run paseo@0.8.0 npx
+npm notice run 'vitest' run src/server/agent/mcp-parity.e2e.test.ts
+
+ RUN  v4.1.6 /home/ubuntu/.paseo/worktrees/1uvgaean/peer-080-mutants/packages/server
+
+stdout | src/server/agent/mcp-parity.e2e.test.ts
+[dotenv@17.3.1] injecting env (0) from .env.test -- tip: ⚙️  enable debug logging with { debug: true }
+[dotenv@17.3.1] injecting env (0) from ../.env -- tip: 🔐 prevent committing .env to code: https://dotenvx.com/precommit
+
+ ❯ src/server/agent/mcp-parity.e2e.test.ts (33 tests | 7 failed) 12897ms
+     × create_agent with callerAgentId sets the parent agent label 22ms
+     × create_agent with detached relationship omits the parent agent label 17ms
+     × agent-scoped create_agent accepts provider features over MCP 14ms
+     × list_worktrees on empty repo 23ms
+     × create_worktree and list_worktrees 17ms
+     × archive_worktree removes worktree 21ms
+     × archive_worktree succeeds when caller cwd is inside the archived worktree 22ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite A: Core Fixes > create_agent with callerAgentId sets the parent agent label
+ZodError: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [],
+    "message": "Invalid input: expected string, received undefined"
+  }
+]
+ ❯ str src/server/agent/mcp-parity.e2e.test.ts:32:21
+     30|
+     31| function str(val: unknown): string {
+     32|   return z.string().parse(val);
+       |                     ^
+     33| }
+     34|
+ ❯ createChildAgent src/server/agent/mcp-parity.e2e.test.ts:234:10
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:358:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite A: Core Fixes > create_agent with detached relationship omits the parent agent label
+ZodError: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [],
+    "message": "Invalid input: expected string, received undefined"
+  }
+]
+ ❯ str src/server/agent/mcp-parity.e2e.test.ts:32:21
+     30|
+     31| function str(val: unknown): string {
+     32|   return z.string().parse(val);
+       |                     ^
+     33| }
+     34|
+ ❯ createChildAgent src/server/agent/mcp-parity.e2e.test.ts:234:10
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:371:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite A: Core Fixes > agent-scoped create_agent accepts provider features over MCP
+ZodError: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [],
+    "message": "Invalid input: expected string, received undefined"
+  }
+]
+ ❯ str src/server/agent/mcp-parity.e2e.test.ts:32:21
+     30|
+     31| function str(val: unknown): string {
+     32|   return z.string().parse(val);
+       |                     ^
+     33| }
+     34|
+ ❯ createChildAgent src/server/agent/mcp-parity.e2e.test.ts:234:10
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:477:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite E: Worktree Tools > list_worktrees on empty repo
+AssertionError: expected undefined to deeply equal []
+
+- Expected:
+[]
+
++ Received:
+undefined
+
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:892:31
+    890|       cwd: worktreeRepoCwd,
+    891|     });
+    892|     expect(payload.worktrees).toEqual([]);
+       |                               ^
+    893|   });
+    894|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite E: Worktree Tools > create_worktree and list_worktrees
+ZodError: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [],
+    "message": "Invalid input: expected string, received undefined"
+  }
+]
+ ❯ str src/server/agent/mcp-parity.e2e.test.ts:32:21
+     30|
+     31| function str(val: unknown): string {
+     32|   return z.string().parse(val);
+       |                     ^
+     33| }
+     34|
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:907:22
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite E: Worktree Tools > archive_worktree removes worktree
+ZodError: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [],
+    "message": "Invalid input: expected string, received undefined"
+  }
+]
+ ❯ str src/server/agent/mcp-parity.e2e.test.ts:32:21
+     30|
+     31| function str(val: unknown): string {
+     32|   return z.string().parse(val);
+       |                     ^
+     33| }
+     34|
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:938:22
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  src/server/agent/mcp-parity.e2e.test.ts > Suite E: Worktree Tools > archive_worktree succeeds when caller cwd is inside the archived worktree
+ZodError: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [],
+    "message": "Invalid input: expected string, received undefined"
+  }
+]
+ ❯ str src/server/agent/mcp-parity.e2e.test.ts:32:21
+     30|
+     31| function str(val: unknown): string {
+     32|   return z.string().parse(val);
+       |                     ^
+     33| }
+     34|
+ ❯ src/server/agent/mcp-parity.e2e.test.ts:971:22
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 26 passed (33)
+   Start at  23:51:45
+   Duration  18.97s (transform 4.07s, setup 48ms, import 5.87s, tests 12.90s, environment 0ms)
+
