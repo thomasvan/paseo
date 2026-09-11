@@ -136,6 +136,13 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
   return message.includes(`no archived rollout found for thread id ${threadId}`);
 }
 
+// How long an incoming turn waits for the previous foreground turn's teardown
+// before refusing. A replace path can reach startTurn while the interrupted
+// turn is still tearing down: the manager's force-cancel settles its run
+// record before this provider clears activeForegroundTurnId, and refusing
+// immediately loses the incoming prompt and marks the agent errored.
+const FOREGROUND_TEARDOWN_WAIT_MS = 10_000;
+
 const TURN_START_TIMEOUT_MS = 90 * 1000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const CODEX_PROVIDER = "codex" as const;
@@ -3323,6 +3330,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
+  // Resolved whenever the foreground turn clears, so an incoming startTurn can
+  // wait out a teardown instead of refusing a milliseconds-wide race.
+  private foregroundTurnClearWaiters: Array<() => void> = [];
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
   private serviceTier: "fast" | null = null;
@@ -3562,6 +3572,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     this.activeForegroundTurnId = null;
     this.activeClientMessageId = null;
+    this.flushForegroundTurnClearWaiters();
     this.currentTurnId = null;
     this.pendingForegroundTurnIdentification?.resolve(null);
     this.pendingForegroundTurnIdentification = null;
@@ -4168,12 +4179,64 @@ export class CodexAppServerAgentSession implements AgentSession {
     });
   }
 
+  private flushForegroundTurnClearWaiters(): void {
+    if (this.foregroundTurnClearWaiters.length === 0) return;
+    const waiters = this.foregroundTurnClearWaiters;
+    this.foregroundTurnClearWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  private async waitForForegroundTurnClear(timeoutMs: number): Promise<void> {
+    if (!this.activeForegroundTurnId) return;
+    let notifyClear: () => void = () => {};
+    const cleared = new Promise<void>((resolve) => {
+      notifyClear = resolve;
+    });
+    const waiter = () => notifyClear();
+    // A timed-out waiter drops itself: a turn that never clears would
+    // otherwise retain one dead closure per retrying prompt until the
+    // session closes.
+    const timer = setTimeout(() => {
+      this.foregroundTurnClearWaiters = this.foregroundTurnClearWaiters.filter(
+        (entry) => entry !== waiter,
+      );
+      notifyClear();
+    }, timeoutMs);
+    this.foregroundTurnClearWaiters.push(waiter);
+    await cleared;
+    clearTimeout(timer);
+  }
+
+  // Releases the slot only if it still belongs to the given turnId, so a
+  // newer turn that raced in keeps the slot. Used by the already-idle
+  // interrupt path, which needs a release that flushes startTurn waiters and
+  // resolves any pending turn identification.
+  private releaseForegroundTurn(turnId: string): boolean {
+    if (!turnId || this.activeForegroundTurnId !== turnId) {
+      return false;
+    }
+    this.activeForegroundTurnId = null;
+    this.activeClientMessageId = null;
+    this.currentTurnId = null;
+    this.flushForegroundTurnClearWaiters();
+    this.pendingForegroundTurnIdentification?.resolve(null);
+    this.pendingForegroundTurnIdentification = null;
+    return true;
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
     if (this.activeForegroundTurnId || this.pendingForegroundStart) {
-      throw new Error("A foreground turn is already active");
+      // Wait bounded for the previous turn's teardown; only a turn that
+      // genuinely will not end is refused. The wait tracks
+      // activeForegroundTurnId only, so a concurrent in-flight start returns
+      // from it immediately and still refuses.
+      await this.waitForForegroundTurnClear(FOREGROUND_TEARDOWN_WAIT_MS);
+      if (this.activeForegroundTurnId || this.pendingForegroundStart) {
+        throw new Error("A foreground turn is already active");
+      }
     }
 
     let resolveStart!: () => void;
@@ -4240,6 +4303,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.pendingForegroundTurnIdentification = null;
       this.activeForegroundTurnId = null;
       this.activeClientMessageId = null;
+      this.flushForegroundTurnClearWaiters();
       throw error;
     } finally {
       if (this.pendingForegroundStart === pendingStart) {
@@ -4823,12 +4887,24 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (!isCodexAlreadyIdleInterrupt(error)) {
         throw error;
       }
-      this.activeForegroundTurnId = null;
-      this.activeClientMessageId = null;
-      this.currentTurnId = null;
-      this.pendingForegroundTurnIdentification?.resolve(null);
-      this.pendingForegroundTurnIdentification = null;
+      // Codex reports the interrupted turn as already idle - the turn ended,
+      // so release through the keyed path: it flushes startTurn waiters
+      // blocked on this slot (otherwise they sleep out
+      // FOREGROUND_TEARDOWN_WAIT_MS) and resolves any pending turn
+      // identification, and it refuses to touch a newer turn that raced in.
+      this.releaseAlreadyIdleForegroundTurn(foregroundTurnId);
     }
+  }
+
+  private releaseAlreadyIdleForegroundTurn(foregroundTurnId: string | null): void {
+    if (foregroundTurnId) {
+      this.releaseForegroundTurn(foregroundTurnId);
+      return;
+    }
+    this.activeClientMessageId = null;
+    this.currentTurnId = null;
+    this.pendingForegroundTurnIdentification?.resolve(null);
+    this.pendingForegroundTurnIdentification = null;
   }
 
   async close(): Promise<void> {
@@ -4838,6 +4914,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.subscribers.clear();
     this.activeForegroundTurnId = null;
     this.activeClientMessageId = null;
+    this.flushForegroundTurnClearWaiters();
     this.pendingForegroundTurnIdentification?.resolve(null);
     this.pendingForegroundTurnIdentification = null;
     await this.disposeClient();
@@ -5960,6 +6037,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     this.activeForegroundTurnId = null;
     this.activeClientMessageId = null;
+    this.flushForegroundTurnClearWaiters();
     this.currentTurnId = null;
     this.pendingForegroundTurnIdentification?.resolve(null);
     this.pendingForegroundTurnIdentification = null;
