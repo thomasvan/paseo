@@ -4207,10 +4207,10 @@ export class CodexAppServerAgentSession implements AgentSession {
     clearTimeout(timer);
   }
 
-  // A force-canceled or unidentified turn releases the slot only it owns, so
-  // a newer turn that raced in keeps the slot. Shared by interrupt() and
-  // disposeClient(), which both need a release that flushes startTurn waiters
-  // and resolves any pending turn identification.
+  // Releases the slot only if it still belongs to the given turnId, so a
+  // newer turn that raced in keeps the slot. Used by the already-idle
+  // interrupt path, which needs a release that flushes startTurn waiters and
+  // resolves any pending turn identification.
   private releaseForegroundTurn(turnId: string): boolean {
     if (!turnId || this.activeForegroundTurnId !== turnId) {
       return false;
@@ -4872,14 +4872,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     if (!turnId || (foregroundTurnId && this.activeForegroundTurnId !== foregroundTurnId)) {
-      // Nothing identifiable to interrupt. Resolve rather than throw: no
-      // turn-end event is ever coming to release the slot for a turn Codex
-      // never reported the start of, so throwing here would leave the caller
-      // treating the cancel as unacknowledged and every later startTurn
-      // permanently refused. Release only the slot this call sampled — a
-      // newer turn that raced identification keeps the slot it owns.
-      this.noteUnidentifiableInterrupt(turnId, foregroundTurnId);
-      return;
+      throw new Error("Cannot interrupt Codex before turn/started identifies the active turn");
     }
     try {
       await this.client.request(
@@ -4900,24 +4893,6 @@ export class CodexAppServerAgentSession implements AgentSession {
       // FOREGROUND_TEARDOWN_WAIT_MS) and resolves any pending turn
       // identification, and it refuses to touch a newer turn that raced in.
       this.releaseAlreadyIdleForegroundTurn(foregroundTurnId);
-    }
-  }
-
-  private noteUnidentifiableInterrupt(
-    turnId: string | null,
-    foregroundTurnId: string | null,
-  ): void {
-    this.logger.warn(
-      {
-        agentId: this.agentId,
-        provider: CODEX_PROVIDER,
-        sessionId: this.currentThreadId,
-        turnId: this.activeForegroundTurnId ?? this.currentTurnId ?? undefined,
-      },
-      "provider.codex.interrupt.no_identified_turn_noop",
-    );
-    if (!turnId && foregroundTurnId) {
-      this.releaseForegroundTurn(foregroundTurnId);
     }
   }
 
@@ -4962,20 +4937,6 @@ export class CodexAppServerAgentSession implements AgentSession {
   private async disposeClient(): Promise<void> {
     const client = this.client;
     this.connected = false;
-    // A disposed client cannot own a live turn, so release the foreground slot
-    // with it. Without this, a failed reconnect clears the native turn id and
-    // leaves activeForegroundTurnId held forever, and every later startTurn
-    // refuses with "A foreground turn is already active". close() already
-    // clears the slot before disposing, so this is a no-op on that path.
-    const disposedForegroundTurnId = this.activeForegroundTurnId;
-    if (disposedForegroundTurnId) {
-      this.emitEvent({
-        type: "turn_failed",
-        provider: CODEX_PROVIDER,
-        error: "Codex client was disposed while a foreground turn was active",
-      });
-      this.releaseForegroundTurn(disposedForegroundTurnId);
-    }
     this.currentTurnId = null;
     if (client) {
       await client.dispose();
