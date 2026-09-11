@@ -618,6 +618,12 @@ activity, while Codex and OMP seats were unaffected.
   `new ClaudeAgentClient({ runtimeSettings: { env: { CLAUDE_CONFIG_DIR: realDir } } })`,
   and the test asserts the imported and refreshed timeline carries the real
   directory's entries. Before the fix this failed with
+  `listImportableSessions` and `fetchCatalog` are also changed by this patch, but
+  have no discriminating tests in this round; that was accepted because the
+  refresh path is the user-visible high-impact regression and both sites reuse
+  the same provider-environment composition. A future round should exercise
+  session discovery and settings-model loading with a decoy process environment
+  and a provider-declared config directory.
   `AssertionError: expected '' to contain 'real dir hello'` — the decoy
   directory's empty transcript, not the real one. A test that instead pointed
   `process.env.CLAUDE_CONFIG_DIR` at the real directory would pass on both
