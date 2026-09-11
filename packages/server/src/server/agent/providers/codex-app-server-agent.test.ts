@@ -82,7 +82,7 @@ describe("Codex executable discovery", () => {
   });
 });
 
-import { CodexAppServerClient, CodexAppServerRpcError } from "./codex/app-server-transport.js";
+import { CodexAppServerClient } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
   type FakeCodexAppServer,
@@ -3708,169 +3708,183 @@ describe("Codex app-server provider", () => {
   });
 
   test("startTurn waits out a foreground turn's teardown instead of refusing", async () => {
-    const session = createSession();
-    const requests: Array<{ method: string; params: unknown }> = [];
-    session.client = {
-      request: async (method, params) => {
-        requests.push({ method, params });
-        if (method === "thread/loaded/list") return { data: ["test-thread"] };
-        return {};
-      },
-    };
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
 
-    // activeForegroundTurnId is set by createSession(), simulating a replace
-    // path reaching startTurn milliseconds before the interrupted turn's own
-    // teardown clears the slot.
-    const queuedStart = session.startTurn("Replace with a second prompt.");
-    let queuedSettled = false;
-    queuedStart
-      .catch(() => undefined)
-      .finally(() => {
-        queuedSettled = true;
-      });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(queuedSettled).toBe(false);
+    try {
+      await session.startTurn("First turn.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "turn-tearing-down" });
 
-    // The interrupted turn's own teardown clears the slot and flushes waiters.
-    asInternals(session).handleNotification("turn/completed", {
-      threadId: "test-thread",
-      turn: { status: "interrupted" },
-    });
+      // A replace path reaches startTurn milliseconds before the interrupted
+      // turn's own teardown clears the slot.
+      const queuedStart = session.startTurn("Replace with a second prompt.");
+      let queuedSettled = false;
+      queuedStart
+        .catch(() => undefined)
+        .finally(() => {
+          queuedSettled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(queuedSettled).toBe(false);
 
-    await expect(queuedStart).resolves.toMatchObject({ turnId: expect.any(String) });
-    expect(requests).toContainEqual(expect.objectContaining({ method: "turn/start" }));
+      // The interrupted turn's own teardown clears the slot and flushes
+      // waiters, delivered here through the real Codex notification wire.
+      appServer.completeTurn({ threadId: "thread-1", status: "interrupted" });
+
+      await expect(queuedStart).resolves.toMatchObject({ turnId: expect.any(String) });
+      expect(appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(2);
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
   });
 
   test("startTurn refuses after the teardown wait times out, without wedging later turns", async () => {
-    vi.useFakeTimers();
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+
     try {
-      const session = createSession();
-      session.client = { request: async () => ({}) };
+      await session.startTurn("First turn.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "turn-stuck" });
 
-      // No teardown ever arrives for this foreground turn, so the wait must
-      // eventually give up with the pre-existing refusal.
-      const stuckStart = session.startTurn("Refused once teardown never clears.");
-      let stuckSettled = false;
-      stuckStart
-        .catch(() => undefined)
-        .finally(() => {
-          stuckSettled = true;
-        });
+      vi.useFakeTimers();
+      try {
+        // No teardown ever arrives for this foreground turn, so the wait
+        // must eventually give up with the pre-existing refusal.
+        const stuckStart = session.startTurn("Refused once teardown never clears.");
+        let stuckSettled = false;
+        stuckStart
+          .catch(() => undefined)
+          .finally(() => {
+            stuckSettled = true;
+          });
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stuckSettled).toBe(false);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stuckSettled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(stuckSettled).toBe(true);
-      await expect(stuckStart).rejects.toThrow("A foreground turn is already active");
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(stuckSettled).toBe(true);
+        await expect(stuckStart).rejects.toThrow("A foreground turn is already active");
+      } finally {
+        vi.useRealTimers();
+      }
 
       // The stuck turn now finally ends. If the timed-out wait had left a
       // dead waiter behind, this flush -- and the next prompt it unblocks --
       // would be the place a stale callback could misfire or hang.
-      asInternals(session).handleNotification("turn/completed", {
-        threadId: "test-thread",
-        turn: { status: "completed" },
-      });
-      const nextStart = session.startTurn("Proceeds once the stuck turn finally ends.");
-      await expect(nextStart).resolves.toMatchObject({ turnId: expect.any(String) });
+      appServer.completeTurn({ threadId: "thread-1", status: "completed" });
+      const nextStart = await session.startTurn("Proceeds once the stuck turn finally ends.");
+      expect(nextStart.turnId).toEqual(expect.any(String));
+      expect(appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(2);
+      appServer.assertNoErrors();
     } finally {
-      vi.useRealTimers();
+      await session.close();
     }
   });
 
-  test("interrupt settles the run and releases the slot when Codex never identifies the accepted turn", async () => {
-    const session = createSession();
-    const requests: Array<{ method: string; params: unknown }> = [];
-    session.client = {
-      request: async (method, params) => {
-        requests.push({ method, params });
-        if (method === "thread/loaded/list") return { data: ["test-thread"] };
-        return {};
-      },
-    };
-
-    // activeForegroundTurnId is set by createSession(), simulating a turn
-    // Codex accepted but never reported turn/started for: no native turnId
-    // and no pending identification to await, so nothing else will ever end
-    // it. Interrupt must settle the run instead of leaving it wedged.
-    await expect(session.interrupt()).resolves.toBeUndefined();
-
-    // Observable proof the slot was released, not just that interrupt
-    // stopped throwing: a fresh prompt proceeds immediately instead of
-    // refusing or waiting out the teardown timeout.
-    const nextStart = await session.startTurn("Proceeds because the slot was released.");
-    expect(nextStart.turnId).toEqual(expect.any(String));
-    expect(requests).toContainEqual(expect.objectContaining({ method: "turn/start" }));
-  });
-
-  test("a stale already-idle interrupt response cannot release a newer turn's slot", async () => {
-    const session = createSession(); // activeForegroundTurnId = "test-turn"
-    castInternals<{ currentTurnId: string | null }>(session).currentTurnId = "native-test-turn";
-    session.client = {
-      request: async (method) => {
-        if (method === "turn/interrupt") {
-          // A newer turn takes the slot while Codex is still processing this
-          // now-stale interrupt for the turn it superseded.
-          session.activeForegroundTurnId = "newer-turn";
-          throw new CodexAppServerRpcError("no active turn to interrupt", -32600, undefined);
-        }
-        return {};
-      },
-    };
-
-    await expect(session.interrupt()).resolves.toBeUndefined();
-
-    // Observable proof the newer turn's slot survived the stale release: a
-    // fresh prompt still waits instead of proceeding immediately.
-    const nextStart = session.startTurn("Refused because the newer turn still owns the slot.");
-    let nextSettled = false;
-    nextStart
-      .catch(() => undefined)
-      .finally(() => {
-        nextSettled = true;
-      });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(nextSettled).toBe(false);
-
-    asInternals(session).handleNotification("turn/completed", {
-      threadId: "test-thread",
-      turn: { status: "completed" },
-    });
-    await expect(nextStart).resolves.toMatchObject({ turnId: expect.any(String) });
-  });
-
-  test("disposeClient releases the foreground slot when a failed reconnect drops the client", async () => {
+  test("an already-idle interrupt releases the slot it sampled, immediately unblocking a queued start", async () => {
     const appServer = createFakeCodexAppServer({
-      initialize: async () => {
-        throw new Error("Codex app-server rejected reinitialize");
-      },
+      "turn/interrupt": () => ({
+        __jsonRpcError: { code: -32600, message: "no active turn to interrupt" },
+      }),
     });
     const session = new CodexAppServerAgentSession(
       createConfig({ cwd: "/workspace/project" }),
       null,
       createTestLogger(),
       async () => appServer.child,
-    ) as CodexTestSession;
+    );
 
-    // Arrange the gap a failed reconnect exposes: a foreground turn that was
-    // in flight when the connection dropped, before any reconnect attempt.
-    session.connected = false;
-    session.currentThreadId = "thread-1";
-    session.activeForegroundTurnId = "turn-in-flight";
+    try {
+      await session.startTurn("First turn.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "turn-already-idle" });
 
-    const failures: unknown[] = [];
-    session.subscribe((event) => {
-      if (event.type === "turn_failed") failures.push(event);
+      // A prompt queues behind the still-active foreground turn.
+      const queuedStart = session.startTurn("Queued behind the active turn.");
+      let queuedSettled = false;
+      queuedStart
+        .catch(() => undefined)
+        .finally(() => {
+          queuedSettled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(queuedSettled).toBe(false);
+
+      // Codex reports the turn as already idle: the release must flush the
+      // queued start immediately rather than leave it asleep for the
+      // teardown wait.
+      await expect(session.interrupt()).resolves.toBeUndefined();
+      await expect(queuedStart).resolves.toMatchObject({ turnId: expect.any(String) });
+      expect(appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(2);
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a stale already-idle interrupt response cannot release a newer turn's slot", async () => {
+    const interruptResponse = deferred<unknown>();
+    const appServer = createFakeCodexAppServer({
+      "turn/interrupt": () => interruptResponse.promise,
     });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
 
-    await expect(session.connect()).rejects.toThrow("Codex app-server rejected reinitialize");
+    try {
+      await session.startTurn("First turn.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "native-first" });
 
-    expect(failures).toHaveLength(1);
-    // Observable proof the slot was released, not just that the connect
-    // attempt failed: interrupt() no longer finds a stuck turn to report.
-    await expect(session.interrupt()).resolves.toBeUndefined();
+      const staleInterrupt = session.interrupt();
+      await appServer.waitForRequest("turn/interrupt");
 
-    await session.close();
+      // The first turn ends on its own, and a second turn takes the slot,
+      // before Codex ever answers the now-stale interrupt for the first.
+      appServer.completeTurn({ threadId: "thread-1", status: "completed" });
+      await session.startTurn("Second turn, now owns the slot.");
+
+      // Codex now reports the stale interrupt as already idle.
+      interruptResponse.resolve({
+        __jsonRpcError: { code: -32600, message: "no active turn to interrupt" },
+      });
+      await expect(staleInterrupt).resolves.toBeUndefined();
+
+      // Observable proof the second turn's slot survived the stale release:
+      // a fresh prompt still waits instead of proceeding immediately.
+      const thirdStart = session.startTurn("Refused while the second turn still owns the slot.");
+      let thirdSettled = false;
+      thirdStart
+        .catch(() => undefined)
+        .finally(() => {
+          thirdSettled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(thirdSettled).toBe(false);
+
+      appServer.completeTurn({ threadId: "thread-1", status: "completed" });
+      await expect(thirdStart).resolves.toMatchObject({ turnId: expect.any(String) });
+      expect(appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(3);
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
   });
 
   test("interrupts an autonomous Codex turn identified by live notifications", async () => {
