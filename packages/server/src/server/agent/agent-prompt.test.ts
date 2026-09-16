@@ -12,8 +12,10 @@ import {
   formatSystemNotificationPrompt,
   isSystemInjectedEnvelope,
   setupFinishNotification,
+  startAgentRun,
   waitForAgentRunStartWithTimeout,
 } from "./agent-prompt.js";
+import { StaleProviderSessionError } from "./stale-provider-session-error.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 import type {
   AgentClient,
@@ -761,4 +763,270 @@ test("waiting for a run start still gives up at the run start budget", async () 
     vi.useRealTimers();
     await scenario.cleanup();
   }
+});
+
+// SLP-PATCH(wakeup-defers): §3.1 — a busy caller is answered, never replaced.
+// These drive `startAgentRun` against an explicit controller stub so the
+// dispatch surface is exercised on its own, independent of AgentManager.
+
+interface BusyFallbackStubOptions {
+  hasInFlightRun?: boolean;
+  isRunReserved?: boolean;
+  lifecycle?: ManagedAgent["lifecycle"];
+  /** Flip the agent's lifecycle to "error" the moment `getAgent` is read again. */
+  lifecycleAfterDispatchAwaits?: ManagedAgent["lifecycle"];
+  steerStatus?: "inactive" | "steered" | "busy" | "replaced";
+  /** Throw a stale-session error from the synchronous admission. */
+  staleAtStart?: boolean;
+  /** Throw a stale-session error from the detached drain instead. */
+  staleDuringDrain?: boolean;
+  guardedReloadBusy?: boolean;
+}
+
+interface BusyFallbackStub {
+  controller: StartAgentRunController;
+  calls: {
+    streamAgent: string[];
+    replaceAgentRun: string[];
+    reloadAgentSession: number;
+    reloadAgentSessionUnlessBusy: number;
+    steer: Array<Record<string, unknown> | undefined>;
+  };
+  drained: Promise<void>;
+}
+
+type StartAgentRunController = Parameters<typeof startAgentRun>[0];
+
+function createBusyFallbackStub(options: BusyFallbackStubOptions = {}): BusyFallbackStub {
+  const calls: BusyFallbackStub["calls"] = {
+    streamAgent: [],
+    replaceAgentRun: [],
+    reloadAgentSession: 0,
+    reloadAgentSessionUnlessBusy: 0,
+    steer: [],
+  };
+  let staleRemaining = options.staleAtStart ? 1 : 0;
+  let staleDrainRemaining = options.staleDuringDrain ? 1 : 0;
+  let reads = 0;
+  let resolveDrained!: () => void;
+  const drained = new Promise<void>((resolve) => {
+    resolveDrained = resolve;
+  });
+
+  const snapshot = {
+    id: "agent-1",
+    provider: "codex",
+    lifecycle: options.lifecycle ?? "idle",
+  } as unknown as ManagedAgent;
+
+  function makeStream(): AsyncGenerator<AgentStreamEvent> {
+    return (async function* run() {
+      if (staleDrainRemaining > 0) {
+        staleDrainRemaining -= 1;
+        resolveDrained();
+        throw new StaleProviderSessionError("codex", "session gone");
+      }
+      resolveDrained();
+      yield* [] as AgentStreamEvent[];
+    })();
+  }
+
+  const controller = {
+    getAgent: () => {
+      reads += 1;
+      if (reads > 1 && options.lifecycleAfterDispatchAwaits) {
+        Reflect.set(snapshot, "lifecycle", options.lifecycleAfterDispatchAwaits);
+      }
+      return snapshot;
+    },
+    tryRunOutOfBand: () => false,
+    hasInFlightRun: () => Boolean(options.hasInFlightRun),
+    isRunReserved: () => Boolean(options.isRunReserved),
+    getRunStartHandle: () => ({ startSettled: Promise.resolve({ status: "started" as const }) }),
+    steerOrReplaceActiveTurn: async (
+      _agentId: string,
+      _prompt: unknown,
+      steerOptions?: Record<string, unknown>,
+    ) => {
+      calls.steer.push(steerOptions);
+      const status = options.steerStatus ?? "inactive";
+      if (status === "replaced") {
+        return { status: "replaced" as const, iterator: makeStream() };
+      }
+      return { status } as { status: "inactive" | "steered" | "busy" };
+    },
+    streamAgent: (_agentId: string, prompt: string) => {
+      if (staleRemaining > 0) {
+        staleRemaining -= 1;
+        throw new StaleProviderSessionError("codex", "session gone");
+      }
+      calls.streamAgent.push(prompt);
+      return makeStream();
+    },
+    replaceAgentRun: async (_agentId: string, prompt: string) => {
+      calls.replaceAgentRun.push(prompt);
+      return makeStream();
+    },
+    reloadAgentSession: async () => {
+      calls.reloadAgentSession += 1;
+      return snapshot;
+    },
+    reloadAgentSessionUnlessBusy: async () => {
+      calls.reloadAgentSessionUnlessBusy += 1;
+      return options.guardedReloadBusy
+        ? ({ reloaded: false, reason: "busy" } as const)
+        : ({ reloaded: true, agent: snapshot } as const);
+    },
+  } as unknown as StartAgentRunController;
+
+  return { controller, calls, drained };
+}
+
+test("P1: without busyFallback a busy caller is replaced (upstream default)", async () => {
+  const stub = createBusyFallbackStub({ hasInFlightRun: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+  });
+  expect(result.disposition).toBe("turn_started");
+  expect(stub.calls.replaceAgentRun).toEqual(["hello"]);
+  expect(stub.calls.streamAgent).toEqual([]);
+});
+
+test("P1: busyFallback refuse answers busy and never replaces the caller's run", async () => {
+  const stub = createBusyFallbackStub({ hasInFlightRun: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+    busyFallback: "refuse",
+  });
+  expect(result.disposition).toBe("busy");
+  expect(result.run).toBeUndefined();
+  expect(stub.calls.replaceAgentRun).toEqual([]);
+  expect(stub.calls.streamAgent).toEqual([]);
+});
+
+test("an idle caller under refuse starts one run and hands back its start handle", async () => {
+  const stub = createBusyFallbackStub();
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+    busyFallback: "refuse",
+  });
+  expect(result.disposition).toBe("turn_started");
+  await expect(result.run?.startSettled).resolves.toEqual({ status: "started" });
+  expect(stub.calls.streamAgent).toEqual(["hello"]);
+});
+
+test("refuse carries steerOnly to the manager; replace does not", async () => {
+  const refusing = createBusyFallbackStub({ steerStatus: "busy" });
+  const refused = await startAgentRun(refusing.controller, "agent-1", "hi", createTestLogger(), {
+    activeTurnBehavior: "steer",
+    busyFallback: "refuse",
+  });
+  expect(refused.disposition).toBe("busy");
+  expect(refusing.calls.steer[0]).toMatchObject({ steerOnly: true });
+  expect(refusing.calls.streamAgent).toEqual([]);
+
+  const replacing = createBusyFallbackStub({ steerStatus: "replaced" });
+  const replaced = await startAgentRun(replacing.controller, "agent-1", "hi", createTestLogger(), {
+    activeTurnBehavior: "steer",
+  });
+  expect(replaced.disposition).toBe("turn_started");
+  expect(replacing.calls.steer[0] ?? {}).not.toHaveProperty("steerOnly");
+});
+
+test("M6: a caller that failed during dispatch's awaits is refused at admission", async () => {
+  const stub = createBusyFallbackStub({ lifecycleAfterDispatchAwaits: "error" });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+    busyFallback: "refuse",
+  });
+  expect(result.disposition).toBe("busy");
+  expect(stub.calls.streamAgent).toEqual([]);
+  expect(stub.calls.replaceAgentRun).toEqual([]);
+});
+
+test("M6: the same sequence without busyFallback still starts a run", async () => {
+  const stub = createBusyFallbackStub({ lifecycleAfterDispatchAwaits: "error" });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+  });
+  expect(result.disposition).toBe("turn_started");
+  expect(stub.calls.streamAgent).toEqual(["hello"]);
+});
+
+test("M14: a stale session at startup under refuse maps to one guarded reload and one run", async () => {
+  const stub = createBusyFallbackStub({ staleAtStart: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+    busyFallback: "refuse",
+  });
+  expect(result.disposition).toBe("turn_started");
+  expect(stub.calls.reloadAgentSessionUnlessBusy).toBe(1);
+  expect(stub.calls.reloadAgentSession).toBe(0);
+  expect(stub.calls.streamAgent).toEqual(["hello"]);
+});
+
+test("a stale session at startup is answered busy when the guarded reload refuses", async () => {
+  const stub = createBusyFallbackStub({ staleAtStart: true, guardedReloadBusy: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+    busyFallback: "refuse",
+  });
+  expect(result.disposition).toBe("busy");
+  expect(stub.calls.streamAgent).toEqual([]);
+  expect(stub.calls.reloadAgentSession).toBe(0);
+});
+
+test("a stale session at startup without busyFallback keeps the unconditional reload", async () => {
+  const stub = createBusyFallbackStub({ staleAtStart: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+  });
+  expect(result.disposition).toBe("turn_started");
+  expect(stub.calls.reloadAgentSession).toBe(1);
+  expect(stub.calls.reloadAgentSessionUnlessBusy).toBe(0);
+});
+
+test("M9: a stale session during the drain under refuse neither reloads nor retries", async () => {
+  const stub = createBusyFallbackStub({ staleDuringDrain: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+    busyFallback: "refuse",
+  });
+  expect(result.disposition).toBe("turn_started");
+  await stub.drained;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(stub.calls.reloadAgentSession).toBe(0);
+  expect(stub.calls.reloadAgentSessionUnlessBusy).toBe(0);
+  expect(stub.calls.streamAgent).toEqual(["hello"]);
+});
+
+test("M9: a stale session during the drain without busyFallback still reloads and retries", async () => {
+  const stub = createBusyFallbackStub({ staleDuringDrain: true });
+  const result = await startAgentRun(stub.controller, "agent-1", "hello", createTestLogger(), {
+    replaceRunning: true,
+  });
+  expect(result.disposition).toBe("turn_started");
+  await stub.drained;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(stub.calls.reloadAgentSession).toBe(1);
+  expect(stub.calls.streamAgent).toEqual(["hello", "hello"]);
+});
+
+test("a reserved agent is refused at the prompt layer before hasInFlightRun is consulted", async () => {
+  const refused = createBusyFallbackStub({ isRunReserved: true });
+  await expect(
+    startAgentRun(refused.controller, "agent-1", "hello", createTestLogger(), {
+      replaceRunning: true,
+      busyFallback: "refuse",
+    }),
+  ).resolves.toEqual({ disposition: "busy" });
+  expect(refused.calls.streamAgent).toEqual([]);
+
+  const thrown = createBusyFallbackStub({ isRunReserved: true });
+  await expect(
+    startAgentRun(thrown.controller, "agent-1", "hello", createTestLogger(), {
+      replaceRunning: true,
+    }),
+  ).rejects.toThrow("already has an active run");
+  expect(thrown.calls.streamAgent).toEqual([]);
 });

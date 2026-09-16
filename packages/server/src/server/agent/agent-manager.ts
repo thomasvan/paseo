@@ -72,6 +72,7 @@ import {
 import { limitAgentTimelineItemContent } from "./agent-timeline-content.js";
 import {
   AgentRunState,
+  type AgentRunStartHandle,
   type ForegroundTurnWaiter,
   type PendingForegroundRun,
 } from "./agent-run-state.js";
@@ -315,14 +316,41 @@ export interface AgentManagerOptions {
 }
 
 export type ActiveTurnSteerDispatchResult =
-  | { status: "inactive" | "steered" }
+  // SLP-PATCH(wakeup-defers): `busy` is the answer a steer-only caller gets when
+  // the provider refuses the steer or the turn changed under the admission.
+  // Both mean "this caller is busy" — neither is a delivery failure, and neither
+  // may be escalated into a replacement.
+  | { status: "inactive" | "steered" | "busy" }
   | { status: "replaced"; iterator: AsyncGenerator<AgentStreamEvent> };
 
+// SLP-PATCH(wakeup-defers): `steerOnly` is this manager's dispatch policy, not a
+// run option and not a provider option, so it is stripped from both.
 function stripSteerOptions(options?: AgentSteerOptions): AgentRunOptions | undefined {
   if (!options) return undefined;
-  const { clearPendingPermissions: _, ...runOptions } = options;
+  const { clearPendingPermissions: _, steerOnly: __, ...runOptions } = options;
   return runOptions;
 }
+
+// SLP-PATCH(wakeup-defers): named so a steer-only dispatch can map exactly this
+// condition to `busy` without matching on a message string.
+export class ActiveTurnChangedError extends Error {
+  constructor() {
+    super("Active turn changed before steering could be delivered");
+    this.name = "ActiveTurnChangedError";
+  }
+}
+
+/** Reject an admission while a guarded session reload holds this agent. */
+export class AgentRunReservedError extends Error {
+  constructor(agentId: string) {
+    super(`Agent ${agentId} already has an active run`);
+    this.name = "AgentRunReservedError";
+  }
+}
+
+export type ReloadAgentSessionUnlessBusyResult =
+  | { reloaded: true; agent: ManagedAgent }
+  | { reloaded: false; reason: "busy" };
 
 export interface WaitForAgentOptions {
   signal?: AbortSignal;
@@ -918,6 +946,31 @@ export class AgentManager {
     );
   }
 
+  /**
+   * SLP-PATCH(wakeup-defers): a reservation is deliberately NOT part of
+   * `hasInFlightRun` — it is not a run, nothing can cancel it, and the guarded
+   * reload that holds one must not see its own claim as a run.
+   */
+  isRunReserved(agentId: string): boolean {
+    return this.runs.isReserved(agentId);
+  }
+
+  /**
+   * SLP-PATCH(wakeup-defers): the start acknowledgement for the agent's current
+   * pending run. Read it synchronously after admitting a run — it is the run
+   * just admitted, not whichever run is current later.
+   */
+  getRunStartHandle(agentId: string): AgentRunStartHandle | null {
+    return this.runs.getPendingRun(agentId);
+  }
+
+  // SLP-PATCH(wakeup-defers)
+  private assertNotReserved(agentId: string): void {
+    if (this.runs.isReserved(agentId)) {
+      throw new AgentRunReservedError(agentId);
+    }
+  }
+
   subscribe(callback: AgentSubscriber, options?: SubscribeOptions): () => void {
     const targetAgentId =
       options?.agentId == null ? null : validateAgentId(options.agentId, "subscribe");
@@ -1450,14 +1503,65 @@ export class AgentManager {
     );
   }
 
+  /**
+   * SLP-PATCH(wakeup-defers): reload the session only if this agent is not
+   * busy, and hold the admission slot for the duration so a run cannot start
+   * between the read and the swap.
+   *
+   * A `hasInFlightRun` check at the call site is not enough: a run can start
+   * between that check and the reload's own. The guard therefore lives here, in
+   * the same lane `reloadAgentSession` already runs in — competing lifecycle
+   * mutations (archive, close, another reload) serialize behind it exactly as
+   * they do behind a reload today. It never enters `runForegroundMutation`: the
+   * only path from a reload into that lane is `cancelAgentRunBefore`, and this
+   * variant skips that branch by construction (`cancelInFlightRun: false`), so
+   * it holds one lane and nests nothing.
+   */
+  reloadAgentSessionUnlessBusy(agentId: string): Promise<ReloadAgentSessionUnlessBusyResult> {
+    return this.trackAgentRegistrationOperation(
+      this.runLifecycleMutation(agentId, async () => {
+        // Read, then reserve, in one synchronous step at the top of the lane's
+        // mutation. Nothing may await between them.
+        if (this.hasInFlightRun(agentId)) {
+          return { reloaded: false, reason: "busy" };
+        }
+        this.runs.reserve(agentId);
+        try {
+          const agent = await this.reloadAgentSessionInternal(agentId, undefined, {
+            cancelInFlightRun: false,
+          });
+          return { reloaded: true, agent };
+        } finally {
+          this.runs.release(agentId);
+        }
+      }),
+    );
+  }
+
+  /**
+   * SLP-PATCH(wakeup-defers): extracted so the guarded reload's opt-out is one
+   * named decision rather than another clause inside an already dense reload.
+   */
+  private shouldCancelBeforeReload(
+    agentId: string,
+    options?: { cancelInFlightRun?: boolean },
+  ): boolean {
+    if (options?.cancelInFlightRun === false) return false;
+    return this.hasInFlightRun(agentId);
+  }
+
   private async reloadAgentSessionInternal(
     agentId: string,
     overrides?: Partial<AgentSessionConfig>,
-    options?: { rehydrateFromDisk?: boolean },
+    options?: { rehydrateFromDisk?: boolean; cancelInFlightRun?: boolean },
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     let existing = this.requireSessionAgent(agentId);
-    if (this.hasInFlightRun(agentId)) {
+    // SLP-PATCH(wakeup-defers): the guarded reload observed this agent idle and
+    // holds its admission slot, so this branch cannot apply to it. Skipping it
+    // by construction is what keeps the guarded reload out of the foreground
+    // mutation lane entirely.
+    if (this.shouldCancelBeforeReload(agentId, options)) {
       await this.cancelAgentRunBefore(agentId, "reload");
       existing = this.requireSessionAgent(agentId);
     }
@@ -2375,7 +2479,8 @@ export class AgentManager {
         throw error;
       }
       if (isStaleProviderSessionError(error)) {
-        pendingRun.start = { status: "failed", error: error.message };
+        // SLP-PATCH(wakeup-defers): settle the start acknowledgement with the failure.
+        this.runs.markRunStartFailed(pendingRun, error.message);
         agent.pendingReplacement = false;
         if (!agent.activeForegroundTurnId) agent.lifecycle = "idle";
         this.runs.settleForegroundRun(agentId, pendingRun.token);
@@ -2383,7 +2488,8 @@ export class AgentManager {
       }
       agent.pendingReplacement = false;
       const errorMsg = error instanceof Error ? error.message : "Failed to start turn";
-      pendingRun.start = { status: "failed", error: errorMsg };
+      // SLP-PATCH(wakeup-defers): settle the start acknowledgement with the failure.
+      this.runs.markRunStartFailed(pendingRun, errorMsg);
       await this.handleStreamEvent(agent, {
         type: "turn_failed",
         provider: agent.provider,
@@ -2400,6 +2506,11 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): AsyncGenerator<AgentStreamEvent> {
+    // SLP-PATCH(wakeup-defers): first statement, ahead of `requireSessionAgent`,
+    // so a guarded session reload refuses every admission with one answer for
+    // the whole window rather than whatever the half-swapped session happens to
+    // raise. Nothing above or below this gate has mutated yet.
+    this.assertNotReserved(agentId);
     const existingAgent = this.requireSessionAgent(agentId);
     this.logger.trace(
       {
@@ -2415,7 +2526,13 @@ export class AgentManager {
       },
       "agent.manager.stream.request",
     );
-    if (existingAgent.activeForegroundTurnId || this.runs.hasRun(agentId)) {
+    // SLP-PATCH(wakeup-defers): the reservation is repeated in the gate so a
+    // future reorder that loses the first statement still refuses here.
+    if (
+      existingAgent.activeForegroundTurnId ||
+      this.runs.hasRun(agentId) ||
+      this.runs.isReserved(agentId)
+    ) {
       this.logger.trace(
         {
           agentId,
@@ -2451,7 +2568,8 @@ export class AgentManager {
         agent.pendingReplacement = false;
       }
       const turnStartedAt = new Date();
-      pendingRun.start = { status: "started", turnId };
+      // SLP-PATCH(wakeup-defers): settle the start acknowledgement with the start.
+      this.runs.markRunStarted(pendingRun, turnId);
       agent.activeForegroundTurnId = turnId;
       this.openActiveTurn(agent, turnId, turnStartedAt);
       agent.lifecycle = "running";
@@ -2597,6 +2715,10 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
+    // SLP-PATCH(wakeup-defers): first statement, before `pendingReplacement`,
+    // the lifecycle write, `emitState` and `cancelAgentRunBefore`. A reserved
+    // agent is mid-reload; refusing here mutates nothing.
+    this.assertNotReserved(agentId);
     const snapshot = this.requireAgent(agentId);
     if (
       snapshot.lifecycle !== "running" &&
@@ -2647,7 +2769,7 @@ export class AgentManager {
     // An unavailable answer is only safe to fall back from while this admission
     // still owns the active turn. Never let an A admission replace a later B.
     if (result.status === "unavailable" && agent.activeTurnId !== expectedTurnId) {
-      throw new Error("Active turn changed before steering could be delivered");
+      throw new ActiveTurnChangedError();
     }
     return result;
   }
@@ -2657,24 +2779,52 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentSteerOptions,
   ): Promise<ActiveTurnSteerDispatchResult> {
+    // SLP-PATCH(wakeup-defers): `steerOnly` never reaches the provider.
+    const steerOnly = options?.steerOnly === true;
+    const steerOptions: AgentSteerOptions | undefined = options
+      ? (({ steerOnly: _, ...rest }) => rest)(options)
+      : undefined;
     const agent = this.requireSessionAgent(agentId);
+    // SLP-PATCH(wakeup-defers): reservation read first, before any mutation.
+    if (this.runs.isReserved(agentId)) {
+      if (steerOnly) {
+        return { status: "busy" };
+      }
+      throw new AgentRunReservedError(agentId);
+    }
     const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
     if (!expectedTurnId) {
       return { status: "inactive" };
     }
 
-    const result = agent.session.steerActiveTurn
-      ? await this.runSteerAdmission(agent, expectedTurnId, async () => {
-          const admission = await agent.session.steerActiveTurn!(prompt, {
-            ...options,
-            expectedTurnId,
-          });
-          if (admission.status === "accepted") {
-            await this.recordAcceptedSteer(agent, prompt, options?.clientMessageId, expectedTurnId);
-          }
-          return admission;
-        })
-      : { status: "unavailable" as const };
+    let result: SteerResult;
+    try {
+      result = agent.session.steerActiveTurn
+        ? await this.runSteerAdmission(agent, expectedTurnId, async () => {
+            const admission = await agent.session.steerActiveTurn!(prompt, {
+              ...steerOptions,
+              expectedTurnId,
+            });
+            if (admission.status === "accepted") {
+              await this.recordAcceptedSteer(
+                agent,
+                prompt,
+                steerOptions?.clientMessageId,
+                expectedTurnId,
+              );
+            }
+            return admission;
+          })
+        : { status: "unavailable" as const };
+    } catch (error) {
+      // SLP-PATCH(wakeup-defers): a turn that changed under the admission is a
+      // caller that is busy, not a delivery failure. Only steer-only callers see
+      // it that way; every existing caller still gets the throw.
+      if (steerOnly && error instanceof ActiveTurnChangedError) {
+        return { status: "busy" };
+      }
+      throw error;
+    }
     if (result.status === "accepted") {
       return { status: "steered" };
     }
@@ -2686,6 +2836,11 @@ export class AgentManager {
     }
 
     await this.beforeSteerUnavailableFallback?.({ agentId, expectedTurnId });
+    // SLP-PATCH(wakeup-defers): a refused steer under `steerOnly` is a busy
+    // caller. Return before the fallback so nothing is interrupted or replaced.
+    if (steerOnly) {
+      return { status: "busy" };
+    }
     this.assertSteerAdmissionOwnsTurn(agent, expectedTurnId);
     return {
       status: "replaced",
@@ -2693,14 +2848,14 @@ export class AgentManager {
         agent,
         expectedTurnId,
         prompt,
-        stripSteerOptions(options),
+        stripSteerOptions(steerOptions),
       ),
     };
   }
 
   private assertSteerAdmissionOwnsTurn(agent: ActiveManagedAgent, expectedTurnId: string): void {
     if (agent.activeTurnId !== expectedTurnId) {
-      throw new Error("Active turn changed before steering could be delivered");
+      throw new ActiveTurnChangedError();
     }
   }
 
@@ -2752,6 +2907,8 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
+    // SLP-PATCH(wakeup-defers): first statement, before any mutation.
+    this.assertNotReserved(agent.id);
     this.assertSteerAdmissionOwnsTurn(agent, expectedTurnId);
     agent.pendingReplacement = true;
     agent.lifecycle = "running";
@@ -3079,6 +3236,12 @@ export class AgentManager {
   }
 
   async rewind(agentId: string, messageId: string, mode: RewindMode): Promise<void> {
+    // SLP-PATCH(wakeup-defers): `rewind` installs a pending run as a lock and
+    // cancels whatever is in flight first, so it is an admission point even
+    // though it never starts a turn. It is not in the plan's list; it is here
+    // because the registry's own installers were enumerated. Refusing before
+    // `requireSessionAgent` mutates nothing.
+    this.assertNotReserved(agentId);
     const agent = this.requireSessionAgent(agentId);
     const submittedRow = this.timelineStore
       .getRows(agentId)

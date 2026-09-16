@@ -219,6 +219,13 @@ export interface AgentRunOptions {
 export interface AgentSteerOptions extends AgentRunOptions {
   /** Deny permissions that block this steer. An accepted steer must honor this contract. */
   clearPendingPermissions?: boolean;
+  /**
+   * SLP-PATCH(wakeup-defers): dispatch policy read by AgentManager and stripped
+   * before the options reach a provider or a run. When set, a steer that is not
+   * accepted answers `busy` instead of falling back to a replacement, and a turn
+   * that changed under the admission answers `busy` instead of throwing.
+   */
+  steerOnly?: boolean;
 }
 
 export type SteerResult = { status: "accepted" } | { status: "unavailable" };
