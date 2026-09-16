@@ -36,6 +36,17 @@ class FakePermissionAgentManager {
     return this.outOfBandHandled;
   }
 
+  // SLP-PATCH(wakeup-defers): §3.1's admission guard reads this before every
+  // dispatch. Neither test here drives a reservation, so the guard must see
+  // one clear to exercise the follow-up-run behaviour these tests assert.
+  isRunReserved(): boolean {
+    return false;
+  }
+
+  getRunStartHandle(): { startSettled: Promise<{ status: "started" }> } {
+    return { startSettled: Promise.resolve({ status: "started" }) };
+  }
+
   getAgent() {
     return undefined;
   }

@@ -490,6 +490,22 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   60 s, `error` from the third attempt) and only a closed or archived caller drops one; the
   acknowledgement the pump awaits is the run it started, not whichever run is current. The
   marker density here is deliberate — most of these are invisible at the site without it.
+- **§3.3, same day:** the §3.1 admission guard's `isRunReserved` read broke three
+  upstream-owned suites whose `AgentRunController`/`AgentManager` stubs predated it —
+  `create-agent/create.test.ts`, `permission-response.test.ts`, `mcp-server.test.ts` — each
+  crashing with `agentManager.isRunReserved is not a function`. The repair extends each
+  stub with `isRunReserved` (and, where the dispatch path reaches it, `getRunStartHandle`);
+  every stub returns `false`/a settled handle because none of the three drives a scenario
+  where a reservation is actually held. The call itself was never made optional — a
+  `?.()` or `typeof` guard would make the admission check silently no-op under any stub
+  that omits the method, which is the regression risk this repair exists to close, not a
+  fix for it. Once unblocked, `mcp-server.test.ts`'s `defaults agent-scoped prompts to
+background finish notifications` test hit a second, unrelated fault: it asserted
+  `agentManager.subscribe` was called once, but §3.2's watcher/caller split calls it twice
+  by design (see **What** above), a stale assertion §3.1's crash had been masking. Fixed by
+  asserting the two call targets (child agentId, caller agentId) rather than widening the
+  count, so the assertion stays exactly as strong as before against everything but the
+  now-two-subscriptions shape.
 - **Re-applying:** the dispatch half conflicts textually with any upstream change to
   `startAgentRun` / `steerOrReplaceActiveTurn`; re-apply as options threaded through, not
   as a new code path. The watcher half is a semantic conflict like `wakeup-each`'s: if
@@ -873,8 +889,12 @@ Set A; filtering `.slp.test.ts` returned **20** for Set B. The difference from S
 fork-only `.slp.test.ts` files, which cannot appear in an upstream diff. Set B
 itself still contains one fork-only file, `native-tools-gate.ts`, so only **19**
 of its arguments can match an upstream diff. After `wakeup-defers` (2026-09-17)
-the same invocation returns **27** and **24**. Every one of these is an output of
-that command, not a claim: regenerate them, do not trust them.
+the same invocation returns **27** and **24**. After `wakeup-defers`'s §3.3 stub
+repair, same day, it returns **29** and **26**: `create-agent/create.test.ts` and
+`permission-response.test.ts` join Set A (their `AgentRunController` stubs now
+carry `isRunReserved`/`getRunStartHandle`, so they are patch-owned); `mcp-server.test.ts`
+was already in Set A from `archived-live-list` and does not add a file. Every one
+of these is an output of that command, not a claim: regenerate them, do not trust them.
 
 Set A is wider than the marker set on purpose, and by more than you would guess.
 Ask it, do not estimate it:
@@ -890,17 +910,22 @@ At the 2026-08-26 sync that was **11 of 27** — five source files
 A marker gate is blind to all eleven, which is why the diff runs on Set A and not
 on the marker set.
 
-It is also _narrower_ than the watch list you might reach for. `create-agent/create.test.ts`
-is upstream's own suite for a patched source file, and this fork has never touched it, so
+It is also _narrower_ than the watch list you might reach for. `schedule/service.test.ts`
+is upstream's own suite for `schedule/service.ts` — patched, its `ScheduleAgentManager` type
+picking up `isRunReserved`/`getRunStartHandle`/`reloadAgentSessionUnlessBusy` alongside
+`wakeup-defers`'s dispatch surface — and this fork has never touched the test file itself, so
 it is not patch-owned and does not belong in a set that answers "what does a patch own".
-It is still run after every merge — see the test list below. Coverage comes from the test
-list; the manifest only answers ownership. Conflating the two is what put them in a curated
-list nothing could regenerate.
+Coverage comes from the test list; the manifest only answers ownership. Conflating the two
+is what put them in a curated list nothing could regenerate.
 
 `agent-prompt.test.ts` was in that category until `wakeup-defers` (2026-09-17), which put
 its prompt-layer tests there rather than in a `.slp.` file — the dispatch behaviour they
 check is upstream's, and the fork only adds an option to it. So that file is now
-patch-owned, is in Set A, and _can_ conflict on merge. Derive the set; do not carry this
+patch-owned, is in Set A, and _can_ conflict on merge. `create-agent/create.test.ts` and
+`permission-response.test.ts` followed the same day, for a narrower reason: `wakeup-defers`'s
+§3.1 admission guard broke their `AgentRunController` stubs (`isRunReserved` unimplemented),
+and the repair — the stub gaining the method, not the guard changing — is a patch-owned edit
+even though the suite's own tests stay upstream's. Derive the set; do not carry this
 paragraph's list in your head.
 
 Empty output means a conflict-free merge for the patches. Non-empty output is the normal
@@ -957,10 +982,19 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # include it and the gate can never pass on a healthy tree. Note -I
 # (--no-filename): -o alone prefixes each match with its path, so sort -u
 # would dedupe path:name pairs and return one line per file, not per name.
+#
+# Same day, after `wakeup-defers`'s §3.3 stub repair (the admission guard's
+# regression in three upstream-owned test suites -- see that section): 117
+# sites, still 12 names, 20 files. The four new sites are markers on the
+# `isRunReserved`/`getRunStartHandle` stub additions themselves, one apiece in
+# `create-agent/create.test.ts` and `permission-response.test.ts`, two in
+# `mcp-server.test.ts` (the stub, and the two-subscription assertion §3.2 made
+# stale). All four land on `wakeup-defers`, so its count moves from 82 to 86;
+# no other name changes.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 12
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
-#   82 wakeup-defers                        3 detached-wakeup
+#   86 wakeup-defers                        3 detached-wakeup
 #    6 native-tools-injection-independent   2 question-answer-required
 #    5 wakeup-each                          2 force-cancel-releases-foreground
 #    3 replace-awaits-teardown              2 detached-arg
