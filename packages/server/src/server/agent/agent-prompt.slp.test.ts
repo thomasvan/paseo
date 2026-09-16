@@ -1,16 +1,28 @@
 import pino from "pino";
 import { describe, expect, test, vi } from "vitest";
 
+import { createTestLogger } from "../../test-utils/test-logger.js";
 import { setupFinishNotification } from "./agent-prompt.js";
-import type { AgentManager, AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
-import type { AgentRunStartHandle, AgentRunStartSettlement } from "./agent-run-state.js";
-import type { AgentStorage } from "./agent-storage.js";
+import { AgentManager } from "./agent-manager.js";
+import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
+import type { AgentRunStartHandle } from "./agent-run-state.js";
+import { AgentStorage } from "./agent-storage.js";
 import type { AgentStreamEvent } from "./agent-sdk-types.js";
 
 /**
- * SLP-PATCH(wakeup-defers): watcher-level tests (§3.2). Fork-only file.
+ * SLP-PATCH coverage (wakeup-each, wakeup-defers).
  *
- * These drive the real `setupFinishNotification` against a real dispatch path
+ * Lives in its own file so `agent-prompt.test.ts` stays byte-identical with
+ * upstream and can never conflict on merge — see PATCHES.md. Two patches share
+ * it: `wakeup-each` (the re-arming watcher, at the bottom, on a real
+ * `AgentManager`) and `wakeup-defers` (§3.2, everything above it).
+ *
+ * closed-wakeup and response-cap used to be covered here. They landed upstream
+ * as #3192; upstream's own "closing a watched child notifies the caller" and
+ * "finish notifications truncate oversized child responses" own them now.
+ *
+ * SLP-PATCH(wakeup-defers): the §3.2 tests below drive the real
+ * `setupFinishNotification` against a real dispatch path
  * (`sendPromptToAgent` -> `startAgentRun`) with a stubbed manager, so `busy` is
  * produced the way production produces it: `busyFallback: "refuse"` meeting an
  * in-flight caller run. The queue is what is under test, not the manager.
@@ -46,6 +58,14 @@ interface Harness {
     callerBusy: boolean;
     callerLifecycle: ManagedAgent["lifecycle"];
     steerScript: SteerStatus[];
+    /**
+     * Scripted answers for `hasInFlightRun`, one per call, before falling back
+     * to `callerBusy`. The pump reads it twice per refused attempt — once in
+     * the drain, once before releasing ownership — and the two reads are
+     * separated by a promise resolution, so this is how a caller that settles
+     * *between* them is expressed without emitting an event.
+     */
+    hasInFlightRunScript: boolean[];
     steerThrows: Error | null;
     runHandle: AgentRunStartHandle | null;
     /** Runs while the pump's `sendPromptToAgent` is in flight. */
@@ -57,6 +77,8 @@ interface Harness {
   emitCaller(lifecycle: ManagedAgent["lifecycle"]): void;
   emitChild(lifecycle: ManagedAgent["lifecycle"]): void;
   emitChildPermission(requestId: string): void;
+  /** True while the caller-delivery subscription is still armed. */
+  callerSubscribed(): boolean;
   childAgent: ManagedAgent;
   callerAgent: ManagedAgent;
 }
@@ -88,6 +110,7 @@ function createHarness(options: { childLabels?: Record<string, string | null> } 
     callerBusy: false,
     callerLifecycle: "idle",
     steerScript: [],
+    hasInFlightRunScript: [],
     steerThrows: null,
     runHandle: null,
     onDispatch: null,
@@ -139,18 +162,22 @@ function createHarness(options: { childLabels?: Record<string, string | null> } 
     }
     return null;
   });
-  Reflect.set(agentManager, "subscribe", (
-    callback: (event: AgentManagerEvent) => void,
-    subscribeOptions?: { agentId?: string },
-  ) => {
-    const key = subscribeOptions?.agentId ?? "*";
-    subscribers.set(key, callback);
-    return () => {
-      subscribers.delete(key);
-    };
-  });
+  Reflect.set(
+    agentManager,
+    "subscribe",
+    (callback: (event: AgentManagerEvent) => void, subscribeOptions?: { agentId?: string }) => {
+      const key = subscribeOptions?.agentId ?? "*";
+      subscribers.set(key, callback);
+      return () => {
+        subscribers.delete(key);
+      };
+    },
+  );
   Reflect.set(agentManager, "getLastAssistantMessage", async () => "done.");
-  Reflect.set(agentManager, "hasInFlightRun", () => state.callerBusy);
+  Reflect.set(agentManager, "hasInFlightRun", () => {
+    const scripted = state.hasInFlightRunScript.shift();
+    return scripted ?? state.callerBusy;
+  });
   Reflect.set(agentManager, "isRunReserved", () => false);
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
   Reflect.set(agentManager, "getRunStartHandle", () => state.runHandle);
@@ -211,6 +238,9 @@ function createHarness(options: { childLabels?: Record<string, string | null> } 
         },
       } as unknown as AgentManagerEvent);
     },
+    callerSubscribed() {
+      return subscribers.has(CALLER);
+    },
   };
 }
 
@@ -236,10 +266,6 @@ async function settle(times = 6): Promise<void> {
 function finishChild(harness: Harness): void {
   harness.emitChild("running");
   harness.emitChild("idle");
-}
-
-function settlementHandle(settlement: Promise<AgentRunStartSettlement>): AgentRunStartHandle {
-  return { startSettled: settlement } as AgentRunStartHandle;
 }
 
 describe("wakeup-defers: the watcher defers, delivery outlives observation", () => {
@@ -414,6 +440,29 @@ describe("wakeup-defers: the watcher defers, delivery outlives observation", () 
     ]);
   });
 
+  test("W6b an accepted reason that never becomes an entry still settles the counter", async () => {
+    // Ownership is required and the child carries no parent label, so every
+    // reason is accepted — and owed — and then refused while its body is being
+    // prepared. Nothing is ever enqueued and nothing is ever delivered, so the
+    // only observable is the counter: if `accept()` is not paired with
+    // `abandon()` on this path, owed never reaches 0 and the caller
+    // subscription is held for the child's whole life.
+    const harness = createHarness();
+    watch(harness, { requireParentOwnership: true });
+    harness.state.callerBusy = true;
+
+    finishChild(harness);
+    await settle();
+    expect(harness.callerSubscribed()).toBe(true);
+
+    harness.emitChild("closed");
+    await settle();
+
+    expect(harness.logs("wakeup delivered")).toHaveLength(0);
+    expect(harness.logs("wakeup dropped")).toHaveLength(0);
+    expect(harness.callerSubscribed()).toBe(false);
+  });
+
   test("W7 `needs permission` is never dropped and drains before later entries", async () => {
     const harness = createHarness();
     watch(harness);
@@ -480,6 +529,27 @@ describe("wakeup-defers: the watcher defers, delivery outlives observation", () 
     await settle(10);
 
     expect(harness.logs("wakeup delivered")).toHaveLength(2);
+  });
+
+  test("W9b the caller settles between the drain's read and the pump's last one", async () => {
+    const harness = createHarness();
+    watch(harness);
+
+    // Two reads of `hasInFlightRun` per refused attempt: the drain's, then the
+    // pump's before it releases ownership. Scripting them `true` then `false`
+    // is a caller that settled in between, with **no event of any kind** — the
+    // only thing that can still deliver is the pump's own last re-check. If it
+    // is gone, the entry waits forever for an event that was never coming.
+    harness.state.callerBusy = false;
+    harness.state.steerScript = ["busy"];
+    harness.state.hasInFlightRunScript = [true, false];
+
+    finishChild(harness);
+    await settle(10);
+
+    expect(harness.logs("wakeup deferred")).toHaveLength(1);
+    expect(harness.logs("wakeup delivered")).toHaveLength(1);
+    expect(harness.state.hasInFlightRunScript).toEqual([]);
   });
 });
 
@@ -744,4 +814,160 @@ describe("wakeup-defers: every accepted reason reaches exactly one outcome", () 
     expect(delivered).toBe(1);
     expect(delivered + dropped).toBe(3);
   });
+});
+
+// ---------------------------------------------------------------------------
+// SLP-PATCH(wakeup-each): the re-arming watcher. These two predate §3.2 and are
+// kept on their own harness — a real `AgentManager` with only the dispatch
+// surface stubbed — because what they prove is that the merged notify path
+// (`ensureAgentLoaded` -> `startAgentRun` -> `streamAgent`) runs again after the
+// first finish. The `wakeup-defers` harness above stubs that path out by design,
+// so it cannot make this claim.
+// ---------------------------------------------------------------------------
+
+interface SlpScenarioOptions {
+  childLastAssistantMessage?: string | null;
+  callerArchivedAt?: string | null;
+}
+
+interface SlpScenario {
+  startWatchingChild(): void;
+  finishChild(): void;
+  flush(parentPromptsLength: number): Promise<void>;
+  parentPrompts(): string[];
+  isSubscribed(): boolean;
+}
+
+function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
+  let childSubscriber: ((event: AgentManagerEvent) => void) | null = null;
+  const parentPrompts: string[] = [];
+
+  const childAgent: ManagedAgent = Object.create(null);
+  Reflect.set(childAgent, "id", "child-agent");
+  Reflect.set(childAgent, "lifecycle", "idle");
+  Reflect.set(childAgent, "config", { title: "Child Agent" });
+  Reflect.set(childAgent, "pendingPermissions", new Map());
+
+  const callerAgent: ManagedAgent = Object.create(null);
+  Reflect.set(callerAgent, "id", "caller-agent");
+  Reflect.set(callerAgent, "lifecycle", "idle");
+  Reflect.set(callerAgent, "config", { title: "Caller Agent" });
+
+  const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
+  Reflect.set(agentManager, "getAgent", (agentId: string) => {
+    if (agentId === "child-agent") {
+      return childAgent;
+    }
+    if (agentId === "caller-agent") {
+      return callerAgent;
+    }
+    return null;
+  });
+  // SLP-PATCH(wakeup-defers): the watcher now subscribes twice — child
+  // observation and caller delivery. Key by agentId so `isSubscribed()` still
+  // means "the child is still watched", which is what `wakeup-each` asserts.
+  Reflect.set(
+    agentManager,
+    "subscribe",
+    (callback: (event: AgentManagerEvent) => void, subscribeOptions?: { agentId?: string }) => {
+      if (subscribeOptions?.agentId === "caller-agent") {
+        return () => {};
+      }
+      childSubscriber = callback;
+      return () => {
+        childSubscriber = null;
+      };
+    },
+  );
+  Reflect.set(agentManager, "getLastAssistantMessage", async () => {
+    return options?.childLastAssistantMessage ?? "turn done";
+  });
+  Reflect.set(agentManager, "tryRunOutOfBand", () => false);
+  Reflect.set(agentManager, "hasInFlightRun", () => false);
+  Reflect.set(agentManager, "isRunReserved", () => false);
+  Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => ({ status: "inactive" }));
+  Reflect.set(agentManager, "streamAgent", (_agentId: string, prompt: string) => {
+    parentPrompts.push(prompt);
+    return (async function* noop() {})();
+  });
+  Reflect.set(agentManager, "replaceAgentRun", async (_agentId: string, prompt: string) => {
+    parentPrompts.push(prompt);
+  });
+
+  const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
+  Reflect.set(agentStorage, "get", async (agentId: string) => {
+    if (agentId === "child-agent") {
+      return {
+        title: "Child Agent",
+        labels: { "paseo.parent-agent-id": "caller-agent" },
+      };
+    }
+    if (agentId === "caller-agent" && options?.callerArchivedAt) {
+      return { title: "Caller Agent", archivedAt: options.callerArchivedAt, labels: {} };
+    }
+    return null;
+  });
+
+  function emitLifecycle(lifecycle: "running" | "idle" | "closed" | "error"): void {
+    childAgent.lifecycle = lifecycle;
+    childSubscriber?.({
+      type: "agent_state",
+      agent: childAgent,
+    });
+  }
+
+  return {
+    startWatchingChild() {
+      setupFinishNotification({
+        agentManager,
+        agentStorage,
+        childAgentId: "child-agent",
+        callerAgentId: "caller-agent",
+        requireParentOwnership: true,
+        logger: createTestLogger(),
+      });
+    },
+    finishChild() {
+      emitLifecycle("running");
+      emitLifecycle("idle");
+    },
+    async flush(parentPromptsLength: number) {
+      await vi.waitFor(() => {
+        expect(parentPrompts).toHaveLength(parentPromptsLength);
+      });
+    },
+    parentPrompts() {
+      return parentPrompts;
+    },
+    isSubscribed() {
+      return childSubscriber !== null;
+    },
+  };
+}
+
+// SLP-PATCH(wakeup-each)
+test("the watcher re-arms: every finish of the child notifies the caller", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  scenario.finishChild();
+  await scenario.flush(2);
+
+  expect(scenario.isSubscribed()).toBe(true);
+});
+
+// SLP-PATCH(wakeup-each)
+test("an archived caller disarms the watcher instead of leaking it", async () => {
+  const scenario = createSlpScenario({
+    callerArchivedAt: new Date().toISOString(),
+  });
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  expect(scenario.parentPrompts()).toHaveLength(0);
+  expect(scenario.isSubscribed()).toBe(false);
 });

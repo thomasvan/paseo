@@ -107,8 +107,8 @@ function createFinishNotificationScenario(
   Reflect.set(
     agentManager,
     "subscribe",
-    (callback: (event: AgentManagerEvent) => void, options?: { agentId?: string }) => {
-      if (options?.agentId === "caller-agent") {
+    (callback: (event: AgentManagerEvent) => void, subscribeOptions?: { agentId?: string }) => {
+      if (subscribeOptions?.agentId === "caller-agent") {
         return () => {};
       }
       subscriber = callback;

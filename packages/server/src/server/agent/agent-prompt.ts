@@ -672,7 +672,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   let stopped = false;
   const notifiedPermissionRequestIds = new Set<string>();
   let unsubscribe: (() => void) | null = null;
-  let notificationQueue = Promise.resolve();
+  let notificationQueue: Promise<boolean> = Promise.resolve(false);
 
   // SLP-PATCH(wakeup-defers): observation of the child and delivery to the
   // caller are two lifecycles. `stop()` ends observation only; everything below
@@ -982,20 +982,24 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     queue.accept();
     if (options.terminal ?? true) stop();
     notificationQueue = notificationQueue
-      .then(async () => {
-        const enqueued = await notify(reason, options.permissionRequest);
-        if (!enqueued) {
-          queue.abandon();
-          releaseCallerIfSettled();
-        }
-      })
+      .then(() => notify(reason, options.permissionRequest))
       .catch((error) => {
-        queue.abandon();
         logger.error(
           { err: error, childAgentId, callerAgentId, reason },
           "Failed to notify caller agent",
         );
-        releaseCallerIfSettled();
+        return false;
+      })
+      // SLP-PATCH(wakeup-defers): exactly one place settles the counter for an
+      // accepted reason that never became an entry — dedupe, ownership, a gone
+      // caller, or a failed body. Both branches above land here, so `accept()`
+      // and `abandon()` stay paired however the body preparation ended.
+      .then((enqueued) => {
+        if (!enqueued) {
+          queue.abandon();
+          releaseCallerIfSettled();
+        }
+        return enqueued;
       });
   }
 

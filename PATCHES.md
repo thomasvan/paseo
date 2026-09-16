@@ -50,13 +50,14 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Two have landed upstream and their sections are gone. **Thirteen patches remain
-here** — the count was nine for a while after `force-cancel-releases-foreground`
-and `archived-live-list` arrived without it being updated,
-`mcp-protocol-version-clip` made it twelve on 2026-09-09, and
-`claude-history-follows-provider-env` made it twelve on 2026-09-11, which is
-why the `Sync procedure` below now derives its file manifest with a command
-instead of restating a total.
+Two have landed upstream and their sections are gone. **How many remain is
+derived, not stated here**: it is the name count from the marker gate in
+`Sync procedure` below, plus one for `archived-live-list`, which carries no
+marker by design. Run the gate; do not trust a sentence. The standing total in
+this paragraph was wrong for most of its life — nine while there were eleven,
+then "twelve" written twice for two different counts, then thirteen while the
+gate read eleven names — which is why it is gone.
+`wakeup-defers` is the most recent addition (2026-09-17).
 Current upstream sync: **2026-09-11**, tag `v0.8.0` at
 `b8e24677e12b226c7c38c1c3a40649daa9f1152f`, merge
 `683d6e776e3aa29f213c925fe3bc6a21a261fb3c`. All twelve patches carried with
@@ -133,6 +134,7 @@ breakage and is not. The patch table:
 | [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
 | [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                | open                                                      |
 | —                                                    | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                   | [#4694](https://github.com/getpaseo/paseo/pull/4694)      |
+| —                                                    | `wakeup-defers`                                                                                                                                   | `agent-prompt.ts`, `agent-manager.ts`, `agent-run-state.ts`                                   | not filed — issue first, per the plan's Phase 4           |
 
 ## The five codex patches ride one PR
 
@@ -456,6 +458,49 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   right artifact if upstream asks for this to be opt-in.
 - **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
 - **Upstream status:** closed 2026-09-08 in the feature-PR sweep. [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 proposed `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, with `"once"` as the default and `"each"` as the re-arming mode. This branch keeps the derived form instead — see the note above the patch list.
+
+### wakeup-defers
+
+- **What:** a child's wakeup never interrupts its caller's turn, and is never lost for
+  waiting. Two halves. In dispatch (`agent-prompt.ts`, `agent-manager.ts`,
+  `agent-run-state.ts`), `StartAgentRunOptions` gains `busyFallback: "replace" | "refuse"`,
+  defaulting to `"replace"` so every existing caller is unchanged; under `"refuse"` a busy
+  caller is answered with the `"busy"` disposition and its run is left alone — no steer
+  escalated into a replacement, no `cancelAgentRunNow`, no throw. The run reservation
+  (`isRunReserved`, separate from `hasInFlightRun`) is read explicitly and first at every
+  admission point, so the window where a guarded session reload has half-swapped
+  `agent.session` answers `busy` instead of raising whatever the half-swapped agent
+  happens to raise. In the watcher (`setupFinishNotification`), observation of the child
+  and delivery to the caller become two lifecycles: a refused wakeup is queued, the caller
+  subscription is armed at watcher creation, and the queue drains on the caller's next
+  idle. `stop()` ends observation only; delivery outlives it.
+- **Why:** this is the room's "wakeup to a busy parent" defect, measured. Across four
+  daemon logs on 2026-09-14: 138 `Failed to notify caller agent` (100 `finished`, 37
+  `was closed`, 1 `needs permission`), 58 force-cancels, 8 distinct callers. Every wakeup
+  arriving while its caller was mid-tool-call either interrupted that call — the caller's
+  tool use is rejected, its turn is cut — or was dropped with `already has an active run`.
+  `archive_agent` is the visible case, where the interrupted call and the wakeup's cause
+  are the same act. The design and its W1–W14 contract are the plan in `airoom` at
+  `plans/2026-09-16-wakeup-defers.md`; the log counts are in
+  `memory/journal/evidence/2026-09-16-wakeup-defers/`.
+- **What the invariants are, since the compiler does not hold them:** a reason is owed the
+  moment it is accepted and before its body is prepared; `accept()` and `abandon()` pair on
+  every path; one queue, one consumer, one in-flight `sendPromptToAgent` per watcher; a
+  dispatch failure retains the entry and retries with backoff (5 s doubling, capped at
+  60 s, `error` from the third attempt) and only a closed or archived caller drops one; the
+  acknowledgement the pump awaits is the run it started, not whichever run is current. The
+  marker density here is deliberate — most of these are invisible at the site without it.
+- **Re-applying:** the dispatch half conflicts textually with any upstream change to
+  `startAgentRun` / `steerOrReplaceActiveTurn`; re-apply as options threaded through, not
+  as a new code path. The watcher half is a semantic conflict like `wakeup-each`'s: if
+  upstream rewrites `setupFinishNotification` again, keep upstream's shape and re-add the
+  queue plus the caller subscription around it. Its tests share
+  `agent-prompt.slp.test.ts` with `wakeup-each` — that file is fork-only, so a merge never
+  touches it, and a rewrite of it can silently delete the other patch's tests. It did once;
+  the per-name manifest in the marker gate is what caught it.
+- **Upstream status:** not yet filed. The plan's Phase 4 opens the issue on
+  `getpaseo/paseo` with the §1 evidence chain; whether the patch itself goes upstream is
+  the Human's call, and this table gets the row either way.
 
 ### detached-wakeup
 
@@ -819,7 +864,7 @@ grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 ```
 
-On current tip `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, with
+At the 2026-09-11 sync tip `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`, with
 `UPSTREAM_OID=b8e24677e12b226c7c38c1c3a40649daa9f1152f`, and
 `BASE=$(git merge-base HEAD "$UPSTREAM_OID")`, the documented
 `git diff --name-only "$BASE" HEAD -- packages/ | sort` invocation returned
@@ -827,8 +872,9 @@ the same patch-owned file list as the pre-merge measurement: **23 files** for
 Set A; filtering `.slp.test.ts` returned **20** for Set B. The difference from Set A is the three
 fork-only `.slp.test.ts` files, which cannot appear in an upstream diff. Set B
 itself still contains one fork-only file, `native-tools-gate.ts`, so only **19**
-of its arguments can match an upstream diff. Both numbers are outputs of the
-that command, not claims: regenerate them, do not trust them.
+of its arguments can match an upstream diff. After `wakeup-defers` (2026-09-17)
+the same invocation returns **27** and **24**. Every one of these is an output of
+that command, not a claim: regenerate them, do not trust them.
 
 Set A is wider than the marker set on purpose, and by more than you would guess.
 Ask it, do not estimate it:
@@ -844,13 +890,18 @@ At the 2026-08-26 sync that was **11 of 27** — five source files
 A marker gate is blind to all eleven, which is why the diff runs on Set A and not
 on the marker set.
 
-It is also _narrower_ than the watch list you might reach for. `agent-prompt.test.ts`
-and `create-agent/create.test.ts` are upstream's own suites for two patched source
-files, and this fork has never touched either, so they are not patch-owned and do
-not belong in a set that answers "what does a patch own". They are still run after
-every merge — see the test list below. Coverage comes from the test list; the
-manifest only answers ownership. Conflating the two is what put them in a curated
+It is also _narrower_ than the watch list you might reach for. `create-agent/create.test.ts`
+is upstream's own suite for a patched source file, and this fork has never touched it, so
+it is not patch-owned and does not belong in a set that answers "what does a patch own".
+It is still run after every merge — see the test list below. Coverage comes from the test
+list; the manifest only answers ownership. Conflating the two is what put them in a curated
 list nothing could regenerate.
+
+`agent-prompt.test.ts` was in that category until `wakeup-defers` (2026-09-17), which put
+its prompt-layer tests there rather than in a `.slp.` file — the dispatch behaviour they
+check is upstream's, and the fork only adds an option to it. So that file is now
+patch-owned, is in Set A, and _can_ conflict on merge. Derive the set; do not carry this
+paragraph's list in your head.
 
 Empty output means a conflict-free merge for the patches. Non-empty output is the normal
 case once patches start landing, and it means read the upstream commits before merging —
@@ -893,26 +944,31 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured 2026-09-11 after `claude-history-follows-provider-env`
-# landed on top of the `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a` sync
-# baseline (30 sites, 11 names, 12 files): the package-scoped command below
-# now sums to 30 sites; expect 11 names across 30 code/test sites in 12 files,
-# and use the per-name manifest below -- a bare total hides a site moving from
-# one patch to another. This file is excluded because it quotes marker-shaped
+# Marker gate. Measured 2026-09-17 after `wakeup-defers` landed on top of the
+# `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a` sync baseline (the previous
+# measurement, 2026-09-11 after `claude-history-follows-provider-env`, read 30
+# sites, 11 names, 12 files): the package-scoped command below now sums to 113
+# sites; expect 12 names across 113 code/test sites in 17 files, and use the
+# per-name manifest below -- a bare total hides a site moving from one patch to
+# another. It hid one: the §3.2 rewrite of `agent-prompt.slp.test.ts` deleted
+# `wakeup-each`'s two tests while the total went up, which only the per-name
+# line showed. This file is excluded because it quotes marker-shaped
 # strings in its own prose, in a number that changes whenever the prose does;
 # include it and the gate can never pass on a healthy tree. Note -I
 # (--no-filename): -o alone prefixes each match with its path, so sort -u
 # would dedupe path:name pairs and return one line per file, not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 11
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 12
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
-#    6 native-tools-injection-independent   2 force-cancel-releases-foreground
-#    6 native-tools-injection-independent  2 detached-arg
-#    4 wakeup-each                          3 interrupt-releases-foreground
-#    3 replace-awaits-teardown              1 dispose-releases-foreground
-#    3 detached-wakeup                      1 dead-run-settles
-#    2 question-answer-required
-#    3 mcp-protocol-version-clip
+#   82 wakeup-defers                        3 detached-wakeup
+#    6 native-tools-injection-independent   2 question-answer-required
+#    5 wakeup-each                          2 force-cancel-releases-foreground
+#    3 replace-awaits-teardown              2 detached-arg
+#    3 mcp-protocol-version-clip            1 dispose-releases-foreground
+#    3 interrupt-releases-foreground        1 dead-run-settles
+# `wakeup-defers` dwarfs the rest because its invariants are unenforceable by
+# the compiler -- the comment at a site is the only thing that says why the
+# read is where it is. Treat a drop in its count as a lost invariant, not noise.
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list is absent from this manifest by design -- it carries no
