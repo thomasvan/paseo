@@ -52,7 +52,8 @@ interface FinishNotificationScenarioOptions {
   childLastAssistantMessage?: string | null;
   childParentAgentId?: string | null;
   requireParentOwnership?: boolean;
-  parentPromptError?: Error;
+  /** Fail the notification while its body is being prepared. */
+  notifyError?: Error;
   logger?: Logger;
 }
 
@@ -100,17 +101,28 @@ function createFinishNotificationScenario(
     }
     return null;
   });
-  Reflect.set(agentManager, "subscribe", (callback: (event: AgentManagerEvent) => void) => {
-    subscriber = callback;
-    return () => {
-      subscriber = null;
-    };
-  });
+  // The watcher subscribes twice now (child observation and caller delivery), so
+  // the stub keys by agentId instead of keeping one subscriber; `subscriber`
+  // stays the child's callback, which is what every test below drives.
+  Reflect.set(
+    agentManager,
+    "subscribe",
+    (callback: (event: AgentManagerEvent) => void, subscribeOptions?: { agentId?: string }) => {
+      if (subscribeOptions?.agentId === "caller-agent") {
+        return () => {};
+      }
+      subscriber = callback;
+      return () => {
+        subscriber = null;
+      };
+    },
+  );
   Reflect.set(agentManager, "getLastAssistantMessage", async () => {
+    if (options?.notifyError) throw options.notifyError;
     return options?.childLastAssistantMessage ?? null;
   });
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
-  Reflect.set(agentManager, "hasInFlightRun", () => Boolean(options?.parentPromptError));
+  Reflect.set(agentManager, "hasInFlightRun", () => false);
   Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => {
     steerAttemptCount += 1;
     return { status: "inactive" };
@@ -123,7 +135,7 @@ function createFinishNotificationScenario(
   });
   Reflect.set(agentManager, "replaceAgentRun", async (_agentId: string, prompt: string) => {
     resolveParentPrompt?.(prompt);
-    throw options?.parentPromptError;
+    throw new Error("replaceAgentRun must never be reached for a system notification");
   });
 
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
@@ -431,15 +443,15 @@ test("follow-up finish notifications do not require a parent relationship", asyn
   expect(parentPrompt).toContain("Agent child-agent (Child Agent) finished.");
 });
 
-test("finish notifications log a rejected parent prompt without an unhandled rejection", async () => {
+test("finish notifications log a failed notification without an unhandled rejection", async () => {
   const captured = createCapturedLogger();
   const scenario = createFinishNotificationScenario({
-    parentPromptError: new Error("parent provider rejected replacement"),
+    notifyError: new Error("parent provider rejected replacement"),
     logger: captured.logger,
   });
 
   scenario.startWatchingChild();
-  await scenario.finishChildAndReadParentPrompt();
+  scenario.finishChild();
   await captured.nextRecord;
 
   expect(captured.records).toEqual([
@@ -487,7 +499,10 @@ it("does not notify archived callers", async () => {
   Reflect.set(
     agentManager,
     "subscribe",
-    vi.fn((callback: (event: AgentManagerEvent) => void) => {
+    vi.fn((callback: (event: AgentManagerEvent) => void, options?: { agentId?: string }) => {
+      if (options?.agentId === "caller-agent") {
+        return () => {};
+      }
       subscriber = callback;
       return () => {
         subscriber = null;

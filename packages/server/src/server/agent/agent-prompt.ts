@@ -6,7 +6,7 @@ import type {
   AgentRunOptions,
 } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
-import type { AgentRunStartHandle } from "./agent-run-state.js";
+import type { AgentRunStartHandle, AgentRunStartSettlement } from "./agent-run-state.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
@@ -570,6 +570,95 @@ interface NotifySafelyOptions {
   permissionRequest?: AgentPermissionRequest;
 }
 
+/**
+ * SLP-PATCH(wakeup-defers): the only reasons an owed wakeup is ever discarded.
+ * There is deliberately no capacity member: the queue is unbounded in memory
+ * (§8 decision 2, "never drop"), and this union is what makes that checkable by
+ * the compiler rather than by reading the pump.
+ */
+type WakeupDropCause = "caller closed" | "caller archived";
+
+/** SLP-PATCH(wakeup-defers): one owed notification, body already prepared. */
+interface PendingWakeup {
+  reason: FinishNotificationReason;
+  body: string;
+  permissionRequest?: AgentPermissionRequest;
+  enqueuedAt: number;
+  /** `wakeup deferred` is logged once per entry, not once per attempt. */
+  deferLogged: boolean;
+  /** Consecutive dispatch failures for this entry. */
+  failures: number;
+}
+
+/** SLP-PATCH(wakeup-defers): depth at which an abnormal caller becomes visible. */
+const WAKEUP_QUEUE_DEPTH_WARN = 8;
+/** SLP-PATCH(wakeup-defers): retry backoff for a caller that stays idle. */
+const WAKEUP_RETRY_BASE_MS = 5_000;
+const WAKEUP_RETRY_MAX_MS = 60_000;
+/** SLP-PATCH(wakeup-defers): from this attempt a failure is an `error` record. */
+const WAKEUP_FAILURE_ERROR_ATTEMPT = 3;
+
+/**
+ * SLP-PATCH(wakeup-defers): the watcher's delivery state, with the queue and the
+ * owed counter private so the compiler — not a grep — enumerates every site that
+ * can enqueue, retire or drop. `owed` is not the queue's length: it counts a
+ * reason from the moment it is accepted, before its body has been read out of
+ * storage, so a terminal body still being prepared while the queue happens to be
+ * empty still holds the caller subscription open.
+ */
+class WakeupDeliveryQueue {
+  #pending: PendingWakeup[] = [];
+  #owed = 0;
+
+  get depth(): number {
+    return this.#pending.length;
+  }
+
+  get owed(): number {
+    return this.#owed;
+  }
+
+  get head(): PendingWakeup | null {
+    return this.#pending[0] ?? null;
+  }
+
+  /** A reason was accepted. Owed from here, whether or not a body ever exists. */
+  accept(): void {
+    this.#owed += 1;
+  }
+
+  /** An accepted reason that never became an entry (ownership, dedupe, failure). */
+  abandon(): void {
+    this.#owed -= 1;
+  }
+
+  /** An archive can emit `closed` twice; `finished` entries are never merged. */
+  hasIdenticalClosure(body: string): boolean {
+    return this.#pending.some((entry) => entry.reason === "was closed" && entry.body === body);
+  }
+
+  enqueue(entry: PendingWakeup): number {
+    this.#pending.push(entry);
+    return this.#pending.length;
+  }
+
+  /** The only single-entry removal, and it always pairs with the counter. */
+  settleHead(): void {
+    this.#pending.shift();
+    this.#owed -= 1;
+  }
+
+  /** The only bulk removal. Reachable only with a `WakeupDropCause`. */
+  dropAll(_cause: WakeupDropCause): PendingWakeup[] {
+    const dropped = this.#pending;
+    this.#pending = [];
+    this.#owed -= dropped.length;
+    return dropped;
+  }
+}
+
+type WakeupDrainStatus = "empty" | "deferred" | "failed" | "held";
+
 export function setupFinishNotification(params: SetupFinishNotificationParams): void {
   const {
     agentManager,
@@ -583,30 +672,274 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   let stopped = false;
   const notifiedPermissionRequestIds = new Set<string>();
   let unsubscribe: (() => void) | null = null;
-  let notificationQueue = Promise.resolve();
+  let notificationQueue: Promise<boolean> = Promise.resolve(false);
+
+  // SLP-PATCH(wakeup-defers): observation of the child and delivery to the
+  // caller are two lifecycles. `stop()` ends observation only; everything below
+  // belongs to delivery, which outlives it.
+  const queue = new WakeupDeliveryQueue();
+  let unsubscribeCaller: (() => void) | null = null;
+  let callerReleased = false;
+  let callerGone = false;
+  let pumpInFlight: Promise<void> | null = null;
+  let rerun = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelayMs = WAKEUP_RETRY_BASE_MS;
 
   function stop(): void {
     if (stopped) return;
     stopped = true;
     unsubscribe?.();
+    // SLP-PATCH(wakeup-defers): observation stopped. The caller subscription is
+    // released only if nothing is still owed.
+    releaseCallerIfSettled();
   }
 
+  // SLP-PATCH(wakeup-defers)
+  function clearRetry(): void {
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  // SLP-PATCH(wakeup-defers)
+  function releaseCaller(): void {
+    if (callerReleased) return;
+    callerReleased = true;
+    clearRetry();
+    unsubscribeCaller?.();
+    unsubscribeCaller = null;
+  }
+
+  // SLP-PATCH(wakeup-defers): the subscription ends when nothing is owed *and*
+  // observation has stopped, or when the caller is gone. Not on an empty queue.
+  function releaseCallerIfSettled(): void {
+    if (callerReleased) return;
+    if (callerGone) {
+      releaseCaller();
+      return;
+    }
+    if (!stopped) return;
+    if (queue.owed > 0) return;
+    releaseCaller();
+  }
+
+  // SLP-PATCH(wakeup-defers)
+  function dropOwed(cause: WakeupDropCause): void {
+    for (const entry of queue.dropAll(cause)) {
+      logger.warn({ childAgentId, callerAgentId, reason: entry.reason, cause }, "wakeup dropped");
+    }
+  }
+
+  // SLP-PATCH(wakeup-defers): `closed` or `archivedAt` — never `error`, whose
+  // queue is kept for the idle after someone else's recovery prompt.
+  function callerIsGone(cause: WakeupDropCause): void {
+    if (callerGone) return;
+    callerGone = true;
+    dropOwed(cause);
+    stop();
+    releaseCaller();
+  }
+
+  // SLP-PATCH(wakeup-defers): one consumer for one queue, serialized by a single
+  // in-flight promise per watcher. A call while a pump runs sets `rerun`; the
+  // running pump loops again before releasing ownership.
+  function pump(): void {
+    if (callerGone) return;
+    if (pumpInFlight) {
+      rerun = true;
+      return;
+    }
+    const running = runPump();
+    pumpInFlight = running;
+    void running
+      .catch((error: unknown) => {
+        logger.error({ err: error, childAgentId, callerAgentId }, "wakeup pump failed");
+      })
+      .finally(() => {
+        if (pumpInFlight === running) pumpInFlight = null;
+        releaseCallerIfSettled();
+      });
+  }
+
+  // SLP-PATCH(wakeup-defers)
+  async function runPump(): Promise<void> {
+    for (;;) {
+      rerun = false;
+      const status = await drainOwed();
+      if (callerGone) return;
+      if (rerun) continue;
+      // Re-check once more before releasing ownership: an idle transition can
+      // never fall between the last attempt and the wait for the next event.
+      if (
+        status !== "failed" &&
+        status !== "held" &&
+        queue.depth > 0 &&
+        !agentManager.hasInFlightRun(callerAgentId)
+      ) {
+        continue;
+      }
+      return;
+    }
+  }
+
+  // SLP-PATCH(wakeup-defers)
+  async function drainOwed(): Promise<WakeupDrainStatus> {
+    while (queue.depth > 0) {
+      if (callerGone) return "held";
+      // Every pump entry and every retry re-reads the caller's lifecycle first.
+      // `error` holds the queue exactly like `busy` does, with no attempt, so
+      // neither the re-check after a failed turn nor a new child event can start
+      // an errored caller through `streamAgent` — which would clear `lastError`.
+      const live = agentManager.getAgent(callerAgentId);
+      if (live?.lifecycle === "error") return "held";
+      const entry = queue.head;
+      if (!entry) return "empty";
+      let result: AgentRunDispatchResult;
+      try {
+        result = await sendPromptToAgent({
+          agentManager,
+          agentStorage,
+          agentId: callerAgentId,
+          prompt: formatSystemNotificationPrompt(entry.body),
+          activeTurnBehavior: "steer",
+          unarchive: false,
+          busyFallback: "refuse",
+          logger,
+        });
+      } catch (error) {
+        recordDispatchFailure(entry, error);
+        return "failed";
+      }
+      if (result.disposition === "busy") {
+        if (!entry.deferLogged) {
+          entry.deferLogged = true;
+          logger.info({ childAgentId, callerAgentId, reason: entry.reason }, "wakeup deferred");
+        }
+        // The caller may have settled between the admission's event drain and
+        // this answer; if it is idle now, attempt again immediately.
+        if (agentManager.hasInFlightRun(callerAgentId)) return "deferred";
+        continue;
+      }
+      if (result.disposition === "archived") {
+        const cause: WakeupDropCause = "caller archived";
+        queue.settleHead();
+        logger.warn({ childAgentId, callerAgentId, reason: entry.reason, cause }, "wakeup dropped");
+        continue;
+      }
+      if (result.disposition === "turn_started" && result.run) {
+        // `turn_started` is not yet delivery: the iterator exists, the
+        // provider's `startTurn()` runs later and can fail there. Acknowledge
+        // *this* run's start, never "whichever run is current".
+        const settlement = await awaitRunStart(result.run);
+        if (settlement.status !== "started") {
+          recordDispatchFailure(
+            entry,
+            settlement.status === "failed"
+              ? settlement.error
+              : "notification run was cancelled before it started",
+          );
+          return "failed";
+        }
+      }
+      queue.settleHead();
+      retryDelayMs = WAKEUP_RETRY_BASE_MS;
+      clearRetry();
+      logger.info(
+        {
+          childAgentId,
+          callerAgentId,
+          reason: entry.reason,
+          disposition: result.disposition,
+          deferredMs: Date.now() - entry.enqueuedAt,
+        },
+        "wakeup delivered",
+      );
+    }
+    return "empty";
+  }
+
+  // SLP-PATCH(wakeup-defers): failed, cancelled and timeout are one outcome.
+  async function awaitRunStart(run: AgentRunStartHandle): Promise<AgentRunStartSettlement> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timedOut = new Promise<AgentRunStartSettlement>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            status: "failed",
+            error: `notification run did not start within ${AGENT_RUN_START_TIMEOUT_MS} ms`,
+          }),
+        AGENT_RUN_START_TIMEOUT_MS,
+      );
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([run.startSettled, timedOut]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+  }
+
+  // SLP-PATCH(wakeup-defers): a failure never drops an entry. It stays at the
+  // head, the pump leaves the loop, and a retry is armed.
+  function recordDispatchFailure(entry: PendingWakeup, error: unknown): void {
+    entry.failures += 1;
+    const record = {
+      childAgentId,
+      callerAgentId,
+      reason: entry.reason,
+      attempt: entry.failures,
+      err: error,
+    };
+    if (entry.failures >= WAKEUP_FAILURE_ERROR_ATTEMPT) {
+      logger.error(record, "wakeup dispatch failed");
+    } else {
+      logger.warn(record, "wakeup dispatch failed");
+    }
+    armRetry();
+  }
+
+  // SLP-PATCH(wakeup-defers): 5 s, doubling, capped at 60 s, so a caller that
+  // stays idle is retried even if no event ever arrives.
+  function armRetry(): void {
+    if (callerGone || callerReleased) return;
+    if (retryTimer !== null) return;
+    const delay = retryDelayMs;
+    retryDelayMs = Math.min(retryDelayMs * 2, WAKEUP_RETRY_MAX_MS);
+    const timer = setTimeout(() => {
+      retryTimer = null;
+      pump();
+    }, delay);
+    timer.unref?.();
+    retryTimer = timer;
+  }
+
+  /**
+   * SLP-PATCH(wakeup-defers): builds the body and appends to `pending`. It never
+   * dispatches; `pump()` is the only sender. Answers whether the accepted reason
+   * became an entry, so `notifySafely` can settle the owed counter for the ones
+   * that did not.
+   */
   async function notify(
     reason: FinishNotificationReason,
     permissionRequest?: AgentPermissionRequest,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    if (callerGone) return false;
     const callerRecord = await agentStorage.get(callerAgentId);
     if (callerRecord?.archivedAt) {
       // SLP-PATCH(wakeup-each): this watcher outlives the first finish, so an
       // archived caller would otherwise hold the subscription for the child's
       // whole life. Nobody is left to hear it; disarm for good.
-      stop();
-      return;
+      // SLP-PATCH(wakeup-defers): and whatever is still owed is dropped here,
+      // with one `warn` per entry — the caller is gone, not busy.
+      callerIsGone("caller archived");
+      return false;
     }
 
     const record = await agentStorage.get(childAgentId);
     if (requireParentOwnership && getParentAgentIdFromLabels(record?.labels) !== callerAgentId) {
-      return;
+      return false;
     }
     const title = record?.title ?? childAgentId;
     const lastAssistantMessage = await agentManager.getLastAssistantMessage(childAgentId);
@@ -618,19 +951,35 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       permissionRequest,
     });
 
-    await sendPromptToAgent({
-      agentManager,
-      agentStorage,
-      agentId: callerAgentId,
-      prompt: formatSystemNotificationPrompt(body),
-      activeTurnBehavior: "steer",
-      unarchive: false,
-      logger,
+    // SLP-PATCH(wakeup-defers): the caller can have gone while the body was read.
+    if (callerGone) return false;
+    // Dedupe is limited to an identical `was closed` for this child (an archive
+    // can emit the state twice). `finished` entries are never merged.
+    if (reason === "was closed" && queue.hasIdenticalClosure(body)) return false;
+    const depth = queue.enqueue({
+      reason,
+      body,
+      permissionRequest,
+      enqueuedAt: Date.now(),
+      deferLogged: false,
+      failures: 0,
     });
+    if (depth >= WAKEUP_QUEUE_DEPTH_WARN) {
+      logger.warn({ childAgentId, callerAgentId, depth }, "wakeup queue depth");
+    }
+    pump();
+    return true;
   }
 
   function notifySafely(reason: FinishNotificationReason, options: NotifySafelyOptions = {}): void {
     if (stopped) return;
+    // SLP-PATCH(wakeup-defers)
+    if (callerGone) return;
+    // SLP-PATCH(wakeup-defers): owed the moment the reason is accepted, before
+    // the body is prepared and *before* a terminal reason stops observation:
+    // `stop()` releases the caller subscription when nothing is owed, and this
+    // reason is already owed.
+    queue.accept();
     if (options.terminal ?? true) stop();
     notificationQueue = notificationQueue
       .then(() => notify(reason, options.permissionRequest))
@@ -639,8 +988,38 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
           { err: error, childAgentId, callerAgentId, reason },
           "Failed to notify caller agent",
         );
+        return false;
+      })
+      // SLP-PATCH(wakeup-defers): exactly one place settles the counter for an
+      // accepted reason that never became an entry — dedupe, ownership, a gone
+      // caller, or a failed body. Both branches above land here, so `accept()`
+      // and `abandon()` stay paired however the body preparation ended.
+      .then((enqueued) => {
+        if (!enqueued) {
+          queue.abandon();
+          releaseCallerIfSettled();
+        }
+        return enqueued;
       });
   }
+
+  // SLP-PATCH(wakeup-defers): armed at watcher creation, not on the first
+  // `busy`, so a notification can never be owed with nobody listening for the
+  // caller's next idle. `stop()` does not touch it.
+  unsubscribeCaller = agentManager.subscribe(
+    (event) => {
+      if (callerReleased || callerGone) return;
+      if (event.type !== "agent_state") return;
+      if (event.agent.lifecycle === "closed") {
+        callerIsGone("caller closed");
+        return;
+      }
+      // Retry trigger: the caller's next `agent_state` event of any lifecycle.
+      // `error` is held by the pump's own lifecycle read, not dropped here.
+      pump();
+    },
+    { agentId: callerAgentId, replayState: false },
+  );
 
   unsubscribe = agentManager.subscribe(
     (event) => {
