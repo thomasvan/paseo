@@ -70,6 +70,11 @@ test("session create forwards clientMessageId to the initial prompt run options"
       getAgent: vi.fn(() => snapshot),
       tryRunOutOfBand: vi.fn(() => false),
       hasInFlightRun: vi.fn(() => false),
+      // SLP-PATCH(wakeup-defers): §3.1's admission guard reads this before
+      // dispatch. This test drives no reservation, so the guard must see one
+      // clear to exercise the initial-prompt dispatch it asserts on.
+      isRunReserved: vi.fn(() => false),
+      getRunStartHandle: vi.fn(() => ({ startSettled: Promise.resolve({ status: "started" }) })),
       streamAgent,
       waitForAgentRunStart: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof createAgentCommand>[0]["agentManager"],

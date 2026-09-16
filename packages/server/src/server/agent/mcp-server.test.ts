@@ -220,6 +220,13 @@ function buildAgentManagerSpies() {
     emitLiveTimelineItem: vi.fn().mockResolvedValue(undefined),
     hasInFlightRun: vi.fn().mockReturnValue(false),
     tryRunOutOfBand: vi.fn().mockReturnValue(false),
+    // SLP-PATCH(wakeup-defers): §3.1's admission guard reads this before
+    // dispatch. None of these tests drive a reservation, so the guard must
+    // see one clear to exercise the send/create-agent prompt paths they assert on.
+    isRunReserved: vi.fn().mockReturnValue(false),
+    getRunStartHandle: vi
+      .fn()
+      .mockReturnValue({ startSettled: Promise.resolve({ status: "started" }) }),
     subscribe: vi.fn().mockReturnValue(() => {}),
     streamAgent: vi.fn(() => (async function* noop() {})()),
     waitForAgentRunStart: vi.fn().mockResolvedValue(undefined),
@@ -3714,7 +3721,16 @@ describe("send_agent_prompt MCP tool", () => {
 
     const response = await tool.handler(parsed.data as Record<string, unknown>);
 
-    expect(spies.agentManager.subscribe).toHaveBeenCalledTimes(1);
+    // SLP-PATCH(wakeup-defers): §3.2 opens two subscriptions per finish watcher
+    // — one on the child being observed, one on the caller for delivery. Assert
+    // both targets explicitly rather than a bare count, so a later change that
+    // drops the child watcher (or the caller subscription) while still opening
+    // two subscriptions somewhere else stays caught.
+    const subscribeAgentIds = spies.agentManager.subscribe.mock.calls.map(
+      (call) => (call[1] as { agentId?: string } | undefined)?.agentId,
+    );
+    expect(subscribeAgentIds).toEqual(expect.arrayContaining(["child-agent", "parent-agent"]));
+    expect(subscribeAgentIds).toHaveLength(2);
     expect(spies.agentManager.waitForAgentEvent).not.toHaveBeenCalled();
     expect(response.structuredContent.guidance).toBe(
       "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.",
