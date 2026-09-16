@@ -20,6 +20,8 @@ import { projectTimelineRows } from "./timeline-projection.js";
 import { getOpenAgentTabLabel, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { formatSystemNotificationPrompt, startAgentRun } from "./agent-prompt.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
+// SLP-PATCH(wakeup-defers)
+import { AgentRunState } from "./agent-run-state.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent-loading.js";
 import type { StoredAgentRecord } from "./agent-storage.js";
 import type {
@@ -11042,4 +11044,557 @@ test("onWorkspaceStateMayHaveChanged is not called for running shell tool calls"
   await manager.runAgent(snapshot.id, { text: "merge it" });
 
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
+});
+
+// ---------------------------------------------------------------------------
+// SLP-PATCH(wakeup-defers) §3.1 — a busy caller is observed busy and refused,
+// never interrupted and never replaced.
+// ---------------------------------------------------------------------------
+
+function createSingleSessionManager(session: AgentSession): {
+  manager: AgentManager;
+  workdir: string;
+} {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-busy-fallback-"));
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+    override async resumeSession(): Promise<AgentSession> {
+      return session;
+    }
+  })();
+  return { manager: new AgentManager({ clients: { codex: client }, logger }), workdir };
+}
+
+async function startForegroundRun(manager: AgentManager, agentId: string): Promise<void> {
+  const run = manager.streamAgent(agentId, "initial");
+  void (async () => {
+    for await (const _event of run) {
+    }
+  })();
+  await manager.waitForAgentRunStart(agentId);
+}
+
+test("M1: a refused steer under steerOnly answers busy and interrupts nothing", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  session.steerResult = "unavailable";
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await startForegroundRun(manager, agent.id);
+    const before = manager.getAgent(agent.id)?.activeForegroundTurnId;
+    const result = await manager.steerOrReplaceActiveTurn(agent.id, "replacement", {
+      steerOnly: true,
+    });
+    expect(result).toEqual({ status: "busy" });
+    expect(session.interruptCount).toBe(0);
+    expect(session.startCount).toBe(1);
+    expect(session.startPrompts).toEqual(["initial"]);
+    expect(manager.getAgent(agent.id)?.activeForegroundTurnId).toBe(before);
+    expect(manager.getAgent(agent.id)?.lifecycle).toBe("running");
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M4: the same refused steer without steerOnly still replaces the turn", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  session.steerResult = "unavailable";
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await startForegroundRun(manager, agent.id);
+    const result = await manager.steerOrReplaceActiveTurn(agent.id, "replacement");
+    expect(result.status).toBe("replaced");
+    if (result.status === "replaced") void drainAsyncGenerator(result.iterator).catch(() => {});
+    await manager.waitForAgentRunStart(agent.id);
+    expect(session.interruptCount).toBe(1);
+    expect(session.startCount).toBe(2);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M3: an accepted steer is unchanged under steerOnly", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await startForegroundRun(manager, agent.id);
+    const result = await manager.steerOrReplaceActiveTurn(agent.id, "steered prompt", {
+      steerOnly: true,
+      clientMessageId: "steer-1",
+    });
+    expect(result).toEqual({ status: "steered" });
+    expect(session.interruptCount).toBe(0);
+    expect(session.startCount).toBe(1);
+    expect(session.steerCount).toBe(1);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("steerOnly never reaches the provider's steerActiveTurn options", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  class OptionRecordingSession extends SteeringTestSession {
+    override async steerActiveTurn(
+      prompt: AgentPromptInput,
+      options: import("./agent-sdk-types.js").SteerActiveTurnOptions,
+    ): Promise<import("./agent-sdk-types.js").SteerResult> {
+      seen.push(options as unknown as Record<string, unknown>);
+      return super.steerActiveTurn(prompt, options);
+    }
+  }
+  const session = new OptionRecordingSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await startForegroundRun(manager, agent.id);
+    await manager.steerOrReplaceActiveTurn(agent.id, "p", { steerOnly: true });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toHaveProperty("steerOnly");
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M5: a turn that changed under the admission is busy under steerOnly and a throw without it", async () => {
+  async function run(steerOnly: boolean) {
+    const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+    const { manager, workdir } = createSingleSessionManager(session);
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    await startForegroundRun(manager, agent.id);
+    // Retire the admitted turn and open a new one. The events are queued, so
+    // `expectedTurnId` is still the old turn when the dispatch reads it and the
+    // admission's own drain is what moves the agent off it.
+    session.pushEvent({
+      type: "turn_completed",
+      provider: "codex",
+      turnId: "active-turn-1",
+    });
+    session.pushEvent({ type: "turn_started", provider: "codex", turnId: "active-turn-9" });
+    const dispatch = manager.steerOrReplaceActiveTurn(
+      agent.id,
+      "replacement",
+      steerOnly ? { steerOnly: true } : undefined,
+    );
+    const outcome = await dispatch.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+    return { outcome, session };
+  }
+
+  const refused = await run(true);
+  expect(refused.outcome).toEqual({ ok: true, value: { status: "busy" } });
+  expect(refused.session.interruptCount).toBe(0);
+
+  const thrown = await run(false);
+  expect(thrown.outcome.ok).toBe(false);
+  expect(String((thrown.outcome as { error: unknown }).error)).toContain(
+    "Active turn changed before steering could be delivered",
+  );
+});
+
+test("M2: an autonomous turn is answered busy by the dispatch and never replaced", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  session.steerResult = "unavailable";
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    // A turn the provider started on its own: no foreground run, no caller.
+    session.pushEvent({ type: "turn_started", provider: "codex", turnId: "autonomous-turn-1" });
+    await waitForAgentLifecycle(manager, agent.id, "running");
+    expect(manager.getAgent(agent.id)?.activeForegroundTurnId).toBeNull();
+    expect(manager.hasInFlightRun(agent.id)).toBe(true);
+
+    const refused = await startAgentRun(manager, agent.id, "notification", logger, {
+      replaceRunning: true,
+      activeTurnBehavior: "steer",
+      busyFallback: "refuse",
+    });
+    expect(refused.disposition).toBe("busy");
+    expect(session.interruptCount).toBe(0);
+    expect(session.startCount).toBe(0);
+    expect(manager.getAgent(agent.id)?.activeTurnId).toBe("autonomous-turn-1");
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M7: the guarded reload refuses a busy caller and cancels nothing", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const cancelSpy = vi.spyOn(manager, "cancelAgentRun");
+  try {
+    await startForegroundRun(manager, agent.id);
+    const result = await manager.reloadAgentSessionUnlessBusy(agent.id);
+    expect(result).toEqual({ reloaded: false, reason: "busy" });
+    expect(cancelSpy).not.toHaveBeenCalled();
+    expect(session.interruptCount).toBe(0);
+    expect(manager.hasInFlightRun(agent.id)).toBe(true);
+    expect(manager.isRunReserved(agent.id)).toBe(false);
+  } finally {
+    cancelSpy.mockRestore();
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M8/M13: the guarded reload reserves the idle agent, blocks every admission, and cancels nothing", async () => {
+  const held = deferred<void>();
+  const closeEntered = deferred<void>();
+  const session = new (class extends TestAgentSession {
+    override async close(): Promise<void> {
+      closeEntered.resolve();
+      await held.promise;
+    }
+  })({ provider: "codex", cwd: process.cwd() });
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-guarded-reload-"));
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+    override async resumeSession(): Promise<AgentSession> {
+      return new TestAgentSession({ provider: "codex", cwd: process.cwd() });
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const cancelSpy = vi.spyOn(manager, "cancelAgentRun");
+  const foregroundLaneSpy = vi.spyOn(
+    manager as unknown as { runForegroundMutation: (...args: unknown[]) => unknown },
+    "runForegroundMutation",
+  );
+  try {
+    const reload = manager.reloadAgentSessionUnlessBusy(agent.id);
+    reload.catch(() => undefined);
+    await closeEntered.promise;
+
+    // The reservation is held, and it is not a run: the agent is still
+    // registered here, so `hasInFlightRun` is answering about the agent and not
+    // about its absence.
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+    expect(manager.isRunReserved(agent.id)).toBe(true);
+    expect(manager.hasInFlightRun(agent.id)).toBe(false);
+
+    // (b) streamAgent, entered after the guard's read while the reload awaits
+    // session preparation, is refused without closing an admitted run.
+    expect(() => manager.streamAgent(agent.id, "racer")).toThrow("already has an active run");
+    // (c) the same window through replaceAgentRun, directly.
+    await expect(manager.replaceAgentRun(agent.id, "racer")).rejects.toThrow(
+      "already has an active run",
+    );
+    // ...and through ordinary prompt dispatch, both dispositions.
+    await expect(
+      startAgentRun(manager, agent.id, "racer", logger, { replaceRunning: true }),
+    ).rejects.toThrow("already has an active run");
+    await expect(
+      startAgentRun(manager, agent.id, "racer", logger, {
+        replaceRunning: true,
+        busyFallback: "refuse",
+      }),
+    ).resolves.toEqual({ disposition: "busy" });
+
+    // `rewind` is an admission point too: it installs a pending run as a lock.
+    await expect(manager.rewind(agent.id, "message-1", "conversation")).rejects.toThrow(
+      "already has an active run",
+    );
+
+    // Nothing was cancelled and the agent never entered a foreground mutation.
+    expect(cancelSpy).not.toHaveBeenCalled();
+    expect(manager.getAgent(agent.id)?.pendingReplacement).toBeFalsy();
+
+    held.resolve();
+    await expect(reload).resolves.toMatchObject({ reloaded: true });
+    expect(manager.isRunReserved(agent.id)).toBe(false);
+    expect(cancelSpy).not.toHaveBeenCalled();
+    // The guarded reload holds the lifecycle lane and nests nothing: it never
+    // enters the foreground mutation lane, which is the only place a reload
+    // could deadlock against a cancel.
+    expect(foregroundLaneSpy).not.toHaveBeenCalled();
+
+    // The window is one session reload: the next admission succeeds.
+    await drainAsyncGenerator(manager.streamAgent(agent.id, "after"));
+  } finally {
+    held.resolve();
+    foregroundLaneSpy.mockRestore();
+    cancelSpy.mockRestore();
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M8: the guard's read happens inside the lane, not when the reload is requested", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const cancelSpy = vi.spyOn(manager, "cancelAgentRun");
+  try {
+    // Requested while the agent is idle. `runLifecycleMutation` defers the body
+    // to a microtask, so the run below is admitted first — a read taken at call
+    // time would see an idle agent and reload a busy one.
+    const guarded = manager.reloadAgentSessionUnlessBusy(agent.id);
+    guarded.catch(() => undefined);
+    await startForegroundRun(manager, agent.id);
+    expect(manager.hasInFlightRun(agent.id)).toBe(true);
+
+    await expect(guarded).resolves.toEqual({ reloaded: false, reason: "busy" });
+    expect(cancelSpy).not.toHaveBeenCalled();
+    expect(session.interruptCount).toBe(0);
+    expect(session.startCount).toBe(1);
+    expect(manager.isRunReserved(agent.id)).toBe(false);
+  } finally {
+    cancelSpy.mockRestore();
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M8(c): replaceAgentRun refuses a reserved agent before it mutates anything", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const runs = Reflect.get(manager, "runs") as AgentRunState;
+  const cancelSpy = vi.spyOn(manager, "cancelAgentRun");
+  try {
+    await startForegroundRun(manager, agent.id);
+    const turnId = manager.getAgent(agent.id)?.activeForegroundTurnId;
+    // A running agent that is nonetheless reserved is the only shape in which
+    // the ordering inside `replaceAgentRun` is observable: the idle shape takes
+    // the early `streamAgent` branch and is refused by that gate instead.
+    runs.reserve(agent.id);
+    let emitted = 0;
+    const unsubscribe = manager.subscribe(
+      (event) => {
+        if (event.type === "agent_state") emitted += 1;
+      },
+      { agentId: agent.id, replayState: false },
+    );
+    try {
+      await expect(manager.replaceAgentRun(agent.id, "racer")).rejects.toThrow(
+        "already has an active run",
+      );
+    } finally {
+      unsubscribe();
+      runs.release(agent.id);
+    }
+    expect(emitted).toBe(0);
+    expect(manager.getAgent(agent.id)?.pendingReplacement).toBeFalsy();
+    expect(manager.getAgent(agent.id)?.activeForegroundTurnId).toBe(turnId);
+    expect(session.interruptCount).toBe(0);
+    expect(session.startCount).toBe(1);
+    expect(cancelSpy).not.toHaveBeenCalled();
+  } finally {
+    cancelSpy.mockRestore();
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M8(b): mid-swap, a refusing dispatch answers busy instead of the half-swapped session's error", async () => {
+  const held = deferred<void>();
+  const resumeEntered = deferred<void>();
+  const session = new TestAgentSession({ provider: "codex", cwd: process.cwd() });
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-guarded-reload-swap-"));
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+    override async resumeSession(): Promise<AgentSession> {
+      resumeEntered.resolve();
+      await held.promise;
+      return new TestAgentSession({ provider: "codex", cwd: process.cwd() });
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const reload = manager.reloadAgentSessionUnlessBusy(agent.id);
+    reload.catch(() => undefined);
+    // Deep inside the swap the live session is already gone, so every read of
+    // it raises something unrelated. The reservation is what makes the whole
+    // window one answer.
+    await resumeEntered.promise;
+    await expect(
+      startAgentRun(manager, agent.id, "racer", logger, {
+        replaceRunning: true,
+        busyFallback: "refuse",
+      }),
+    ).resolves.toEqual({ disposition: "busy" });
+    await expect(
+      startAgentRun(manager, agent.id, "racer", logger, { replaceRunning: true }),
+    ).rejects.toThrow("already has an active run");
+    held.resolve();
+    await expect(reload).resolves.toMatchObject({ reloaded: true });
+  } finally {
+    held.resolve();
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M13: a competing lifecycle mutation serializes behind the guarded reload", async () => {
+  const session = new TestAgentSession({ provider: "codex", cwd: process.cwd() });
+  const held = deferred<void>();
+  const resumeEntered = deferred<void>();
+  const order: string[] = [];
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-guarded-reload-lane-"));
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+    override async resumeSession(): Promise<AgentSession> {
+      resumeEntered.resolve();
+      await held.promise;
+      return new TestAgentSession({ provider: "codex", cwd: process.cwd() });
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const reload = manager.reloadAgentSessionUnlessBusy(agent.id).then(() => order.push("reload"));
+    await resumeEntered.promise;
+    const archived = manager.reloadAgentSession(agent.id).then(() => order.push("second-reload"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual([]);
+    held.resolve();
+    await Promise.all([reload, archived]);
+    expect(order).toEqual(["reload", "second-reload"]);
+  } finally {
+    held.resolve();
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a reservation is not a run: the registry keeps them apart", () => {
+  const runs = new AgentRunState();
+  expect(runs.isReserved("a")).toBe(false);
+  runs.reserve("a");
+  expect(runs.isReserved("a")).toBe(true);
+  expect(runs.hasRun("a")).toBe(false);
+  expect(runs.getRun("a")).toBeNull();
+  expect(runs.getPendingRun("a")).toBeNull();
+  runs.release("a");
+  expect(runs.isReserved("a")).toBe(false);
+});
+
+test("startSettled resolves once for every way a pending run is retired", async () => {
+  const cancelled = new AgentRunState();
+  const cancelledRun = cancelled.createPendingRun("a");
+  cancelled.clearAgentRun("a");
+  await expect(cancelledRun.startSettled).resolves.toEqual({ status: "cancelled" });
+
+  const started = new AgentRunState();
+  const startedRun = started.createPendingRun("a");
+  started.markRunStarted(startedRun, "turn-1");
+  started.clearAgentRun("a");
+  await expect(startedRun.startSettled).resolves.toEqual({ status: "started" });
+
+  const failed = new AgentRunState();
+  const failedRun = failed.createPendingRun("a");
+  failed.markRunStartFailed(failedRun, "boom");
+  failed.settleForegroundRun("a", failedRun.token);
+  await expect(failedRun.startSettled).resolves.toEqual({ status: "failed", error: "boom" });
+});
+
+test("M11: each pending run keeps its own start answer across a replacement", async () => {
+  const runs = new AgentRunState();
+  const a = runs.createPendingRun("x");
+  runs.clearAgentRun("x");
+  const b = runs.createPendingRun("x");
+  runs.markRunStarted(b, "turn-1");
+  await expect(a.startSettled).resolves.toEqual({ status: "cancelled" });
+  await expect(b.startSettled).resolves.toEqual({ status: "started" });
+});
+
+test("M12: a failed start resolves startSettled and never rejects", async () => {
+  class FailingStartSession extends TestAgentSession {
+    override async startTurn(): Promise<{ turnId: string }> {
+      throw new Error("provider refused the turn");
+    }
+  }
+  const session = new FailingStartSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const rejections: unknown[] = [];
+  const onRejection = (error: unknown) => rejections.push(error);
+  process.on("unhandledRejection", onRejection);
+  try {
+    const iterator = manager.streamAgent(agent.id, "hello");
+    const handle = manager.getRunStartHandle(agent.id);
+    expect(handle).not.toBeNull();
+    await expect(drainAsyncGenerator(iterator)).rejects.toThrow("provider refused the turn");
+    await expect(handle?.startSettled).resolves.toEqual({
+      status: "failed",
+      error: "provider refused the turn",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(rejections).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onRejection);
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("M11: the start handle read at admission belongs to that run, not to a later one", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  const { manager, workdir } = createSingleSessionManager(session);
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const iteratorA = manager.streamAgent(agent.id, "A");
+    const handleA = manager.getRunStartHandle(agent.id);
+    void drainAsyncGenerator(iteratorA).catch(() => undefined);
+    await manager.waitForAgentRunStart(agent.id);
+    await expect(handleA?.startSettled).resolves.toEqual({ status: "started" });
+
+    const replaced = await manager.replaceAgentRun(agent.id, "B");
+    const handleB = manager.getRunStartHandle(agent.id);
+    expect(handleB).not.toBe(handleA);
+    void drainAsyncGenerator(replaced).catch(() => undefined);
+    await manager.waitForAgentRunStart(agent.id);
+    await expect(handleB?.startSettled).resolves.toEqual({ status: "started" });
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });

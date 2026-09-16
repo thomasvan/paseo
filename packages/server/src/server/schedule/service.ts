@@ -208,6 +208,11 @@ type ScheduleAgentManager = Pick<
   | "replaceAgentRun"
   | "steerOrReplaceActiveTurn"
   | "streamAgent"
+  // SLP-PATCH(wakeup-defers): the dispatch surface gained a reservation read, a
+  // run-start handle and the guarded reload; this Pick tracks it.
+  | "isRunReserved"
+  | "getRunStartHandle"
+  | "reloadAgentSessionUnlessBusy"
 > &
   Pick<
     AgentManager,

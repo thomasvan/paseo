@@ -6,6 +6,7 @@ import type {
   AgentRunOptions,
 } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
+import type { AgentRunStartHandle } from "./agent-run-state.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
@@ -22,6 +23,10 @@ export type AgentRunController = Pick<
   | "replaceAgentRun"
   | "steerOrReplaceActiveTurn"
   | "streamAgent"
+  // SLP-PATCH(wakeup-defers)
+  | "isRunReserved"
+  | "getRunStartHandle"
+  | "reloadAgentSessionUnlessBusy"
 > & {
   reloadAgentSession(agentId: string): Promise<unknown>;
 };
@@ -32,9 +37,36 @@ export interface StartAgentRunOptions {
   runOptions?: AgentRunOptions;
   /** Ask the provider to deny permissions blocking this steer. */
   clearPendingPermissions?: boolean;
+  /**
+   * SLP-PATCH(wakeup-defers): what to do when the caller is already busy.
+   * `"replace"` (the default, and every existing caller's behaviour) cancels the
+   * caller's run and takes its place. `"refuse"` never interrupts and never
+   * replaces: it answers `busy` and leaves the caller's run alone.
+   */
+  busyFallback?: "replace" | "refuse";
 }
 
-export type PromptDispatchDisposition = "out_of_band" | "steered" | "turn_started";
+export type PromptDispatchDisposition =
+  | "out_of_band"
+  | "steered"
+  | "turn_started"
+  // SLP-PATCH(wakeup-defers): the caller was busy; nothing was sent, nothing
+  // was interrupted, and the prompt is the caller's to retry.
+  | "busy"
+  // SLP-PATCH(wakeup-defers): the record is archived and the caller asked not to
+  // unarchive it. Today this returns `turn_started` having sent nothing.
+  | "archived";
+
+/**
+ * SLP-PATCH(wakeup-defers): `run` is present only for `turn_started`, and only
+ * when the dispatch admitted a run of its own (an accepted steer rides an
+ * existing turn). Await `run.startSettled` to learn whether *this* run reached
+ * the provider: it always resolves and never rejects.
+ */
+export interface AgentRunDispatchResult {
+  disposition: PromptDispatchDisposition;
+  run?: AgentRunStartHandle;
+}
 
 async function steerOrReplaceActiveRun(
   agentManager: AgentRunController,
@@ -43,6 +75,7 @@ async function steerOrReplaceActiveRun(
   options: StartAgentRunOptions | undefined,
 ): Promise<
   | { disposition: "steered" }
+  | { disposition: "busy" }
   | {
       disposition: "turn_started";
       iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
@@ -52,12 +85,24 @@ async function steerOrReplaceActiveRun(
   if (options?.activeTurnBehavior !== "steer") {
     return null;
   }
-  const steerOptions = options.clearPendingPermissions
-    ? { ...options.runOptions, clearPendingPermissions: true }
-    : options.runOptions;
+  // SLP-PATCH(wakeup-defers): under `refuse` the manager must never escalate a
+  // refused steer into a replacement, so the policy travels with the options.
+  const steerOnly = options.busyFallback === "refuse";
+  const steerOptions =
+    options.clearPendingPermissions || steerOnly
+      ? {
+          ...options.runOptions,
+          ...(options.clearPendingPermissions ? { clearPendingPermissions: true } : {}),
+          ...(steerOnly ? { steerOnly: true } : {}),
+        }
+      : options.runOptions;
   const result = await agentManager.steerOrReplaceActiveTurn(agentId, prompt, steerOptions);
   if (result.status === "steered") {
     return { disposition: "steered" };
+  }
+  // SLP-PATCH(wakeup-defers)
+  if (result.status === "busy") {
+    return { disposition: "busy" };
   }
   if (result.status === "replaced") {
     return { disposition: "turn_started", iterator: result.iterator };
@@ -70,15 +115,37 @@ async function startOrReplaceRun(
   agentId: string,
   prompt: AgentPromptInput,
   options: StartAgentRunOptions | undefined,
-): Promise<{
-  iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
-  replaced: boolean;
-}> {
+): Promise<
+  | {
+      status: "started";
+      iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
+      replaced: boolean;
+      run: AgentRunStartHandle | null;
+    }
+  | { status: "busy" }
+> {
+  const refuse = options?.busyFallback === "refuse";
+  // SLP-PATCH(wakeup-defers): read the reservation explicitly and first, so
+  // ordinary dispatch is covered whichever branch `hasInFlightRun` would pick.
+  if (agentManager.isRunReserved(agentId)) {
+    if (refuse) {
+      return { status: "busy" };
+    }
+    throw new Error(`Agent ${agentId} already has an active run`);
+  }
   const replaced = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
+  // SLP-PATCH(wakeup-defers): a busy caller under `refuse` is answered, never
+  // replaced.
+  if (replaced && refuse) {
+    return { status: "busy" };
+  }
   const iterator = replaced
     ? await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions)
     : agentManager.streamAgent(agentId, prompt, options?.runOptions);
-  return { iterator, replaced };
+  // SLP-PATCH(wakeup-defers): read the handle synchronously, before anything can
+  // retire this run and admit another, so the acknowledgement belongs to the run
+  // just admitted and not to whichever run is current later.
+  return { status: "started", iterator, replaced, run: agentManager.getRunStartHandle(agentId) };
 }
 
 async function drainAgentRunIterator(
@@ -95,7 +162,7 @@ export async function startAgentRun(
   prompt: AgentPromptInput,
   logger: Logger,
   options?: StartAgentRunOptions,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+): Promise<AgentRunDispatchResult> {
   const snapshot = agentManager.getAgent(agentId);
   logger.trace(
     {
@@ -109,6 +176,18 @@ export async function startAgentRun(
     },
     "agent.session.start_stream.request",
   );
+  // SLP-PATCH(wakeup-defers): the reservation is read here, before
+  // `tryRunOutOfBand`, because that call reaches for `agent.session` — which a
+  // guarded reload is in the middle of swapping — and so fails with whatever
+  // the half-swapped agent happens to raise. Reading first makes the whole
+  // reload window one answer at this layer, and makes `refuse` total: a
+  // refusing caller is answered `busy` and never sees a throw.
+  if (agentManager.isRunReserved(agentId)) {
+    if (options?.busyFallback === "refuse") {
+      return { disposition: "busy" };
+    }
+    throw new Error(`Agent ${agentId} already has an active run`);
+  }
   // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
   // in-flight turn — replaceAgentRun would interrupt the running turn. The
   // intercept lives at this layer so it covers every prompt entrypoint.
@@ -122,7 +201,22 @@ export async function startAgentRun(
     logger.info({ agentId, err: error }, "Provider session went stale; reopening from persistence");
     // The live session belongs to a retired plugin runtime. Reload swaps in a
     // fresh session on the current runtime while preserving history and labels.
-    await agentManager.reloadAgentSession(agentId);
+    // SLP-PATCH(wakeup-defers): under `refuse` the reload must not cancel a busy
+    // caller, so it goes through the guarded variant. A refusal is a busy
+    // answer; the caller retries. This is the only catch that reloads under
+    // `refuse`, and it starts exactly one run for this attempt.
+    if (options?.busyFallback === "refuse") {
+      const reload = await agentManager.reloadAgentSessionUnlessBusy(agentId);
+      if (!reload.reloaded) {
+        logger.info(
+          { agentId, reason: reload.reason },
+          "Provider session went stale but the caller is busy; not reloading",
+        );
+        return { disposition: "busy" };
+      }
+    } else {
+      await agentManager.reloadAgentSession(agentId);
+    }
     return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
   }
 }
@@ -133,15 +227,45 @@ async function startAgentRunInner(
   prompt: AgentPromptInput,
   logger: Logger,
   options?: StartAgentRunOptions,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+): Promise<AgentRunDispatchResult> {
   const snapshot = agentManager.getAgent(agentId);
+  const refuse = options?.busyFallback === "refuse";
   const steered = await steerOrReplaceActiveRun(agentManager, agentId, prompt, options);
   if (steered?.disposition === "steered") {
-    return steered;
+    return { disposition: "steered" };
   }
-  const { iterator, replaced } = steered
-    ? { iterator: steered.iterator, replaced: true }
-    : await startOrReplaceRun(agentManager, agentId, prompt, options);
+  // SLP-PATCH(wakeup-defers)
+  if (steered?.disposition === "busy") {
+    return { disposition: "busy" };
+  }
+  // SLP-PATCH(wakeup-defers): the error hold lives at admission, not in the
+  // pump. Read the live lifecycle *synchronously in the same tick* as the call
+  // into `startOrReplaceRun` — there is no `await` between this read and the
+  // admission — so a caller that failed during `sendPromptToAgent`'s earlier
+  // awaits (storage, `ensureAgentLoaded`) is seen as errored at the only moment
+  // that matters, and never reaches `streamAgent`, which would clear
+  // `lastError`. Under `refuse` the steer branch can only answer `steered`,
+  // `busy` or null, so the admission below is the only one this read must cover.
+  if (refuse) {
+    const live = agentManager.getAgent(agentId);
+    if (live?.lifecycle === "error") {
+      return { disposition: "busy" };
+    }
+  }
+  let iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
+  let replaced: boolean;
+  let run: AgentRunStartHandle | null;
+  if (steered) {
+    iterator = steered.iterator;
+    replaced = true;
+    run = agentManager.getRunStartHandle(agentId);
+  } else {
+    const started = await startOrReplaceRun(agentManager, agentId, prompt, options);
+    if (started.status === "busy") {
+      return { disposition: "busy" };
+    }
+    ({ iterator, replaced, run } = started);
+  }
   logger.trace(
     {
       agentId,
@@ -157,13 +281,28 @@ async function startAgentRunInner(
         await drainAgentRunIterator(iterator);
       } catch (error) {
         if (!isStaleProviderSessionError(error)) throw error;
+        // SLP-PATCH(wakeup-defers): under `refuse` this detached catch neither
+        // reloads nor starts a retry run. `startAgentRun` has already returned,
+        // so a retry started here would be a second run with a second record and
+        // a second delivery. Log it, let this run settle `failed`, and return —
+        // the caller's next attempt goes through the synchronous catch above,
+        // which reloads (or answers busy) and starts exactly one run.
+        if (options?.busyFallback === "refuse") {
+          logger.info(
+            { agentId, err: error },
+            "Provider session went stale during drain; not retrying (busyFallback=refuse)",
+          );
+          return;
+        }
         logger.info(
           { agentId, err: error },
           "Provider session went stale; reopening from persistence",
         );
         await agentManager.reloadAgentSession(agentId);
         const retry = await startOrReplaceRun(agentManager, agentId, prompt, options);
-        await drainAgentRunIterator(retry.iterator);
+        if (retry.status === "started") {
+          await drainAgentRunIterator(retry.iterator);
+        }
       }
       logger.trace(
         {
@@ -186,7 +325,9 @@ async function startAgentRunInner(
       logger.error({ err: error, agentId }, "Agent stream failed");
     }
   })();
-  return { disposition: "turn_started" };
+  // SLP-PATCH(wakeup-defers): hand back the run this dispatch admitted so the
+  // caller can acknowledge *its own* start.
+  return run ? { disposition: "turn_started", run } : { disposition: "turn_started" };
 }
 
 /**
@@ -240,6 +381,8 @@ export interface SendPromptToAgentParams {
   unarchive?: boolean;
   /** See {@link StartAgentRunOptions.clearPendingPermissions}. */
   clearPendingPermissions?: boolean;
+  /** SLP-PATCH(wakeup-defers): see {@link StartAgentRunOptions.busyFallback}. */
+  busyFallback?: "replace" | "refuse";
   logger: Logger;
 }
 
@@ -297,18 +440,20 @@ export async function waitForAgentRunStartWithTimeout(
  * chat mentions, notify-on-finish) MUST go through this so behavior can never
  * drift between them.
  *
- * When `unarchive` is false and the agent is archived, the call is a silent
- * no-op (returns the normal turn-start disposition) — the agent is not run.
+ * When `unarchive` is false and the agent is archived, nothing is sent and the
+ * call answers `archived` — SLP-PATCH(wakeup-defers) corrects the previous
+ * `turn_started` answer, which claimed a turn had started when none had.
  */
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
-): Promise<{ disposition: PromptDispatchDisposition }> {
+): Promise<AgentRunDispatchResult> {
   const unarchive = params.unarchive ?? true;
 
   const record = await params.agentStorage.get(params.agentId);
   if (record?.archivedAt) {
     if (!unarchive) {
-      return { disposition: "turn_started" };
+      // SLP-PATCH(wakeup-defers)
+      return { disposition: "archived" };
     }
     await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId);
   }
@@ -331,6 +476,9 @@ export async function sendPromptToAgent(
     replaceRunning: true,
     activeTurnBehavior: params.activeTurnBehavior,
     clearPendingPermissions: params.clearPendingPermissions,
+    // SLP-PATCH(wakeup-defers): passed straight through; undefined keeps every
+    // existing surface on the default `"replace"`.
+    busyFallback: params.busyFallback,
     runOptions,
   });
 }

@@ -10,6 +10,21 @@ export interface ForegroundTurnWaiter {
   resolveSettled: () => void;
 }
 
+// SLP-PATCH(wakeup-defers): a caller that must know whether the run it just
+// admitted actually started needs an acknowledgement keyed to *that* run, not to
+// the agent — an agent-keyed wait accepts a later run started by someone else.
+// This promise always resolves and never rejects, so a run nobody awaits can
+// never surface as an unhandledRejection.
+export type AgentRunStartSettlement =
+  | { status: "started" }
+  | { status: "failed"; error: string }
+  | { status: "cancelled" };
+
+/** The slice of a tracked run a dispatcher needs to acknowledge its own start. */
+export interface AgentRunStartHandle {
+  readonly startSettled: Promise<AgentRunStartSettlement>;
+}
+
 export interface PendingForegroundRun {
   token: string;
   kind: "foreground";
@@ -21,6 +36,11 @@ export interface PendingForegroundRun {
   settled: boolean;
   settledPromise: Promise<void>;
   resolveSettled: () => void;
+  // SLP-PATCH(wakeup-defers): start acknowledgement, settled exactly once by the
+  // registry from the same transitions that write `start` and clear the run.
+  startSettled: Promise<AgentRunStartSettlement>;
+  startSettlementDone: boolean;
+  resolveStartSettled: (settlement: AgentRunStartSettlement) => void;
 }
 
 export interface AutonomousAgentRun {
@@ -42,6 +62,25 @@ export interface ForegroundRunAgentState {
 
 export class AgentRunState {
   private readonly runs = new Map<string, TrackedAgentRun>();
+  // SLP-PATCH(wakeup-defers): a reservation is NOT a run. It is a claim on the
+  // agent's admission slot held while a guarded session reload swaps the
+  // provider session out from under an agent that was observed idle. `hasRun`,
+  // `hasInFlightRun` and the cancel path deliberately cannot see it, so the
+  // reload can never mistake its own reservation for a run and nothing ever
+  // tries to cancel one.
+  private readonly reservations = new Set<string>();
+
+  reserve(agentId: string): void {
+    this.reservations.add(agentId);
+  }
+
+  release(agentId: string): void {
+    this.reservations.delete(agentId);
+  }
+
+  isReserved(agentId: string): boolean {
+    return this.reservations.has(agentId);
+  }
 
   createPendingRun(agentId: string): PendingForegroundRun {
     const pendingRun = createPendingForegroundRun();
@@ -71,6 +110,18 @@ export class AgentRunState {
     if (!run) return null;
     if (run.kind === "autonomous") return run.turnId;
     return run.start.status === "started" ? run.start.turnId : null;
+  }
+
+  // SLP-PATCH(wakeup-defers): `start` transitions go through the registry so the
+  // start acknowledgement cannot drift from the field it acknowledges.
+  markRunStarted(run: PendingForegroundRun, turnId: string): void {
+    run.start = { status: "started", turnId };
+    settleRunStart(run, { status: "started" });
+  }
+
+  markRunStartFailed(run: PendingForegroundRun, error: string): void {
+    run.start = { status: "failed", error };
+    settleRunStart(run, { status: "failed", error });
   }
 
   trackAutonomousRun(agentId: string, turnId: string | null): TrackedAgentRun {
@@ -213,6 +264,13 @@ export class AgentRunState {
 
   private clearRun(agentId: string, run: TrackedAgentRun): void {
     this.runs.delete(agentId);
+    // SLP-PATCH(wakeup-defers): every way a pending run can be retired before it
+    // started — replacement, a direct cancel, a close, the registry clearing it —
+    // lands here, so "cancelled" is the single catch-all. `settleRunStart` is
+    // idempotent, so a run that already started or failed keeps that answer.
+    if (run.kind === "foreground") {
+      settleRunStart(run, { status: "cancelled" });
+    }
     settleTrackedRun(run);
   }
 }
@@ -277,12 +335,30 @@ export class ForegroundTurnStream {
 }
 
 function createPendingForegroundRun(): PendingForegroundRun {
+  // SLP-PATCH(wakeup-defers): every pending run gets a start acknowledgement,
+  // ordinary `streamAgent` starts included.
+  let resolveStartSettled!: (settlement: AgentRunStartSettlement) => void;
+  const startSettled = new Promise<AgentRunStartSettlement>((resolve) => {
+    resolveStartSettled = resolve;
+  });
   return {
     ...createTrackedRunState(),
     kind: "foreground",
     start: { status: "pending" },
     stagedEvents: [],
+    startSettled,
+    startSettlementDone: false,
+    resolveStartSettled,
   };
+}
+
+// SLP-PATCH(wakeup-defers)
+function settleRunStart(run: PendingForegroundRun, settlement: AgentRunStartSettlement): void {
+  if (run.startSettlementDone) {
+    return;
+  }
+  run.startSettlementDone = true;
+  run.resolveStartSettled(settlement);
 }
 
 function createTrackedRunState(): {
