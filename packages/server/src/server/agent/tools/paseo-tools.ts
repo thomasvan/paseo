@@ -23,7 +23,7 @@ import {
 import { curateAgentActivity } from "../activity-curator.js";
 import { selectItemsByProjectedLimit } from "../timeline-projection.js";
 import type { AgentStorage } from "../agent-storage.js";
-import { ensureAgentLoaded } from "../agent-loading.js";
+import { withAgentHistoryRead } from "../agent-loading.js";
 import { isStoredAgentProviderAvailable } from "../../persistence-hooks.js";
 import {
   archiveByScope,
@@ -3054,13 +3054,14 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ agentId, limit }) => {
-      await ensureAgentLoaded(agentId, {
-        agentManager,
-        agentStorage,
-        logger: childLogger,
-      });
-      const timeline = agentManager.getTimeline(agentId);
-      const snapshot = agentManager.getAgent(agentId);
+      const { timeline, snapshot } = await withAgentHistoryRead(
+        agentId,
+        { agentManager, agentStorage, logger: childLogger },
+        () => ({
+          timeline: agentManager.getTimeline(agentId),
+          snapshot: agentManager.getAgent(agentId),
+        }),
+      );
 
       const selection = selectItemsByProjectedLimit({
         items: timeline,
