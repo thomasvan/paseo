@@ -339,6 +339,27 @@ export interface WaitForAgentStartOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A claim on the runtime a `purpose: "history"` read is using. Ownership is the
+ * lease, not the storage record: `archivedAt` is a field the manager edits on its
+ * own schedule, so a reader that re-reads it is asking the wrong question.
+ *
+ * The lease names the session generation it acquired. A release only ever closes
+ * that generation, so a runtime that has since been handed to an interactive
+ * caller (or replaced by one) survives a release that started before the handover.
+ */
+export interface HistoryRuntimeLease {
+  readonly agentId: string;
+  /**
+   * The session this lease is a claim on, or null when the load never produced a
+   * runtime (it resumed nothing, or it threw before the session existed).
+   */
+  session: AgentSession | null;
+  /** Set once the lease is handed to an interactive caller; a release then skips it. */
+  disowned: boolean;
+  released: boolean;
+}
+
 type AttentionState =
   | { requiresAttention: false }
   | {
@@ -710,6 +731,8 @@ export class AgentManager {
   private readonly backgroundTasks = new Set<Promise<void>>();
   private readonly agentRegistrationTasks = new Set<Promise<void>>();
   private readonly inFlightAgentCloses = new Map<string, Promise<void>>();
+  private readonly historyPurposeSessions = new WeakSet<AgentSession>();
+  private readonly historyRuntimeLeases = new Map<string, Set<HistoryRuntimeLease>>();
   private readonly reloadedSessionCloses = new WeakMap<AgentSession, Promise<void>>();
   private readonly lifecycleMutationTails = new Map<string, Promise<void>>();
   private readonly agentStreamCoalescer: AgentStreamCoalescer;
@@ -1344,6 +1367,12 @@ export class AgentManager {
       launchContext,
       resumeOptions,
     );
+    if (resumeOptions?.purpose === "history") {
+      // The purpose is a fact about the runtime, not just about the launch. It is
+      // what lets a release tell the runtime it leased from a live one, and what
+      // stops a read-only session being served to an interactive caller.
+      this.historyPurposeSessions.add(session);
+    }
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
       ...options,
@@ -1634,7 +1663,169 @@ export class AgentManager {
     return close;
   }
 
-  private async closeAgentRuntime(agentId: string): Promise<void> {
+  /**
+   * Take a claim on whatever runtime a `purpose: "history"` load is about to
+   * produce. Claiming is synchronous and happens before the load, so a release
+   * running concurrently sees the arriving reader and stands down instead of
+   * closing the runtime out from under it.
+   */
+  claimHistoryRuntime(agentId: string): HistoryRuntimeLease {
+    const lease: HistoryRuntimeLease = {
+      agentId,
+      session: null,
+      disowned: false,
+      released: false,
+    };
+    let leases = this.historyRuntimeLeases.get(agentId);
+    if (!leases) {
+      leases = new Set<HistoryRuntimeLease>();
+      this.historyRuntimeLeases.set(agentId, leases);
+    }
+    leases.add(lease);
+    return lease;
+  }
+
+  /**
+   * Bind the lease to the runtime the load left resident, but only when that
+   * runtime is one this manager launched for history. A load that adopted a live
+   * interactive runtime binds nothing: the reader borrowed someone else's agent
+   * and owes no close.
+   */
+  bindHistoryRuntime(lease: HistoryRuntimeLease): void {
+    if (lease.released || lease.disowned) {
+      return;
+    }
+    const session = this.agents.get(lease.agentId)?.session ?? null;
+    lease.session = session && this.historyPurposeSessions.has(session) ? session : null;
+  }
+
+  /**
+   * Drop a claim, and close the leased runtime when this was the last claim on it.
+   *
+   * The whole decision runs inside the agent's lifecycle lane, so the resident
+   * runtime, the lease count and the close cannot be interleaved with an archive,
+   * an unarchive, or another close. Nothing here reads `archivedAt`: ownership is
+   * the lease, and the record is not evidence of it.
+   */
+  async releaseHistoryRuntime(lease: HistoryRuntimeLease): Promise<void> {
+    if (lease.released) {
+      return;
+    }
+    lease.released = true;
+    const agentId = lease.agentId;
+    await this.runLifecycleMutation(agentId, async () => {
+      const leases = this.historyRuntimeLeases.get(agentId);
+      leases?.delete(lease);
+      if (leases && leases.size === 0) {
+        this.historyRuntimeLeases.delete(agentId);
+      }
+      const session = lease.session;
+      if (!session) {
+        return;
+      }
+      if (this.holdsHistoryLease(agentId, session)) {
+        // Another reader adopted the same runtime and is still inside its read.
+        return;
+      }
+      if (lease.disowned) {
+        // The runtime left the manager's map when an interactive caller took the
+        // agent over. Nobody else can close it, so close it directly.
+        try {
+          await session.close();
+          this.logger.debug({ agentId }, "Closed disowned history-purpose runtime after read");
+        } catch (error) {
+          this.logger.error(
+            { err: error, agentId },
+            "Disowned history-purpose session could not be disposed; the process may be leaked",
+          );
+        }
+        return;
+      }
+      if (this.agents.get(agentId)?.session !== session) {
+        // The generation this lease named is gone and something else has taken
+        // its place. Whoever replaced it owns the close.
+        return;
+      }
+      try {
+        await this.closeAgentRuntime(agentId);
+        this.logger.debug({ agentId }, "Released history-purpose runtime after read");
+      } catch (error) {
+        // The read's response is already built; failing it because cleanup failed
+        // turns a leak into a user-visible error. `closeAgentRuntime` drops the
+        // agent from the map before `session.close()`, so a throw from there leaves
+        // a provider process with no handle left to retry through — the exact leak
+        // the lease exists to prevent. The lease still names the session, so close
+        // it directly and let that be the last word.
+        this.logger.warn({ err: error, agentId }, "Failed to release history-purpose runtime");
+        // The retry cannot be reported as a disposal. `plugin-provider.ts` and the
+        // pi agent mark the session closed before awaiting their transport, so a
+        // second `close()` after a failed first one resolves without doing any
+        // work, and the manager has no way past `AgentSession` to reach the
+        // underlying process. A resolved retry is therefore not evidence of
+        // anything. Record an unresolved cleanup instead of claiming the stronger
+        // outcome: this is the line someone reads while diagnosing a leak.
+        let retryError: unknown;
+        try {
+          await session.close();
+        } catch (closeError) {
+          retryError = closeError;
+        }
+        this.logger.error(
+          { err: retryError ?? error, agentId, retryRejected: retryError !== undefined },
+          "History-purpose session cleanup is unresolved; the provider process may be leaked",
+        );
+      }
+    });
+  }
+
+  /**
+   * Hand the agent id back to interactive use. A `purpose: "history"` runtime is
+   * never served to a live client: it leaves the manager's map here, the reader
+   * holding it keeps the duty to close it, and the caller loads its own.
+   *
+   * Runs in the lifecycle lane, so the caller's load cannot start until the
+   * history runtime has stopped being the resident one.
+   */
+  async disownHistoryRuntime(agentId: string): Promise<void> {
+    const leases = this.historyRuntimeLeases.get(agentId);
+    if (!leases || leases.size === 0) {
+      return;
+    }
+    await this.runLifecycleMutation(agentId, async () => {
+      const session = this.agents.get(agentId)?.session;
+      if (!session || !this.historyPurposeSessions.has(session)) {
+        return;
+      }
+      let held = false;
+      for (const lease of this.historyRuntimeLeases.get(agentId) ?? []) {
+        if (lease.session === session) {
+          lease.disowned = true;
+          held = true;
+        }
+      }
+      if (!held) {
+        return;
+      }
+      // Drop the runtime from the map without closing it: its readers are still
+      // reading it. `closeSession: false` is the whole difference from a close.
+      await this.closeAgentRuntime(agentId, { closeSession: false });
+      this.logger.debug({ agentId }, "Disowned history-purpose runtime for an interactive caller");
+    });
+  }
+
+  private holdsHistoryLease(agentId: string, session: AgentSession): boolean {
+    for (const lease of this.historyRuntimeLeases.get(agentId) ?? []) {
+      if (lease.session === session && !lease.released) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async closeAgentRuntime(
+    agentId: string,
+    options?: { closeSession?: boolean },
+  ): Promise<void> {
     const agent = this.requireAgent(agentId);
     this.logger.trace(
       {
@@ -1652,10 +1843,12 @@ export class AgentManager {
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
     let closeError: unknown;
-    try {
-      await agent.session.close();
-    } catch (error) {
-      closeError = error;
+    if (options?.closeSession !== false) {
+      try {
+        await agent.session.close();
+      } catch (error) {
+        closeError = error;
+      }
     }
 
     let persistError: unknown;

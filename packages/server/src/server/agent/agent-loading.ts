@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 
-import type { AgentProvider, AgentSession } from "./agent-sdk-types.js";
-import type { AgentManager, ManagedAgent } from "./agent-manager.js";
+import type { AgentProvider } from "./agent-sdk-types.js";
+import type { AgentManager, HistoryRuntimeLease, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
 import {
   buildConfigOverrides,
@@ -48,7 +48,7 @@ export type AgentLoaderManager = Pick<
   | "hydrateTimelineFromProvider"
   | "resumeAgentFromPersistence"
 > &
-  Partial<Pick<AgentManager, "waitForAgentClose">>;
+  Partial<Pick<AgentManager, "waitForAgentClose" | "disownHistoryRuntime">>;
 
 export interface EnsureAgentLoadedDeps {
   agentManager: AgentLoaderManager;
@@ -82,45 +82,26 @@ export async function ensureUnarchivedAgentLoaded(
 }
 
 export interface AgentHistoryReadDeps extends EnsureAgentLoadedDeps {
-  agentManager: AgentLoaderManager & Pick<AgentManager, "closeAgent">;
+  agentManager: AgentLoaderManager &
+    Pick<
+      AgentManager,
+      "closeAgent" | "claimHistoryRuntime" | "bindHistoryRuntime" | "releaseHistoryRuntime"
+    >;
 }
-
-/**
- * One live history-read scope for one agent on one manager. An archived agent is
- * resumed into a live provider process to serve a read (`ensureAgentLoaded` passes
- * `{ purpose: "history" }`), and nothing else will ever close it — no client owns it,
- * no archive runs again. The last reader out releases it.
- */
-interface HistoryReadScope {
-  /** Readers currently inside the scope. Zero means a release may run. */
-  readers: number;
-  /**
-   * The in-flight release, if one is running. Set for the whole release, including
-   * the awaits inside it, so an arriving reader can see that a release is underway
-   * rather than finding the scope already gone.
-   */
-  releasing: Promise<void> | null;
-  /**
-   * Set once the release has invoked `closeAgent`. Past that point the runtime is
-   * committed to closing, so a reader cannot adopt it and must wait and load its own.
-   */
-  closing: boolean;
-  /**
-   * The provider session the scope's readers hold, or null when no runtime was ever
-   * resident. This is the scope's ownership token: `getAgent` returns a fresh shallow
-   * copy each call, but the `session` reference inside it is the runtime's identity
-   * and survives exactly as long as the runtime does.
-   */
-  session: AgentSession | null;
-}
-
-const historyReadScopes = new WeakMap<AgentLoaderManager, Map<string, HistoryReadScope>>();
 
 /**
  * Run `read` against a loaded agent, releasing the provider runtime afterwards when
  * the load was a history read of an archived agent.
  *
- * The scope is a callback rather than a disposer handed back to the caller because
+ * The scope is a lease taken from `AgentManager` before the load and released after
+ * it. Everything that decides the fate of the runtime — the resident session, the
+ * count of readers on it, the close — happens inside the manager's per-agent
+ * lifecycle lane, so no archive, unarchive or close can interleave with it. This
+ * module deliberately never reads `archivedAt` to decide ownership: that field is
+ * one the manager edits on its own schedule, and a reader that consults it is
+ * asking a question whose answer can change under it.
+ *
+ * The shape is a callback rather than a disposer handed back to the caller because
  * every call site is a request handler with an error path that emits a failure
  * response; a disposer has to be released on both paths and one missed `catch`
  * re-opens the leak. Inside the callback the agent is resident, so the manager's
@@ -128,7 +109,7 @@ const historyReadScopes = new WeakMap<AgentLoaderManager, Map<string, HistoryRea
  * all work — releasing inside the loader instead makes them throw `Unknown agent`.
  *
  * Interactive (non-archived) agents are loaded and left alone: they belong to
- * whoever opened them.
+ * whoever opened them, the lease binds nothing, and the release does nothing.
  */
 export async function withAgentHistoryRead<T>(
   agentId: string,
@@ -140,165 +121,45 @@ export async function withAgentHistoryRead<T>(
     return await read(await ensureAgentLoaded(agentId, deps));
   }
 
-  const scope = await claimHistoryRead(agentId, deps.agentManager);
+  // Claimed before the load, so a release already running for another reader sees
+  // this one arrive and stands down instead of closing the runtime it is about to
+  // adopt.
+  const lease = deps.agentManager.claimHistoryRuntime(agentId);
   try {
-    let agent: ManagedAgent;
-    try {
-      agent = await ensureAgentLoaded(agentId, deps);
-    } finally {
-      // Capture the runtime this scope holds even when the load threw partway:
-      // `ensureAgentLoaded` can resume a session and then fail hydrating it, and
-      // that session still has to be released. Keep the previous token when nothing
-      // is resident — a token that matches nothing makes the release stand down,
-      // which is the safe direction.
-      scope.session = deps.agentManager.getAgent(agentId)?.session ?? scope.session;
-    }
+    const agent = await ensureAgentLoaded(agentId, deps, { heldLease: lease });
+    // Bind after the load: the lease names the runtime that load left resident, and
+    // only when that runtime is one the manager launched for history. A load that
+    // adopted someone's live agent binds nothing and owes no close.
+    deps.agentManager.bindHistoryRuntime(lease);
     return await read(agent);
   } finally {
-    scope.readers -= 1;
-    await settleHistoryReadScope(agentId, deps, scope);
-  }
-}
-
-/**
- * Join the agent's current scope, or open one. A reader arriving while a release is
- * in flight adopts the scope when the runtime is still resident, and otherwise waits
- * for the release to finish and opens a fresh scope over its own load.
- */
-async function claimHistoryRead(
-  agentId: string,
-  manager: AgentHistoryReadDeps["agentManager"],
-): Promise<HistoryReadScope> {
-  const scopes = perManager(historyReadScopes, manager);
-  for (;;) {
-    const scope = scopes.get(agentId);
-    if (!scope) {
-      const opened: HistoryReadScope = {
-        readers: 1,
-        releasing: null,
-        closing: false,
-        session: null,
-      };
-      scopes.set(agentId, opened);
-      return opened;
+    // A load that threw part-way can still have left a runtime behind, so bind on
+    // the failure path too before releasing.
+    if (!lease.session) {
+      deps.agentManager.bindHistoryRuntime(lease);
     }
-    if (!scope.closing) {
-      // The runtime is still resident, so adopt it. A release suspended mid-flight
-      // sees `readers > 0` at its commit check and stands down without closing.
-      scope.readers += 1;
-      return scope;
-    }
-    // `closeAgent` is already invoked; this runtime is spoken for. Wait the release
-    // out, then loop: the scope it leaves behind is gone and a fresh one is opened.
-    await scope.releasing;
-  }
-}
-
-/**
- * Drive the scope to rest after a reader leaves. Loops because a release can stand
- * down for a reader that then finishes while the release is still unwinding, which
- * leaves the scope at zero readers with nobody holding the duty to release it.
- */
-async function settleHistoryReadScope(
-  agentId: string,
-  deps: AgentHistoryReadDeps,
-  scope: HistoryReadScope,
-): Promise<void> {
-  const scopes = perManager(historyReadScopes, deps.agentManager);
-  while (scopes.get(agentId) === scope && scope.readers === 0) {
-    const inFlight = scope.releasing;
-    if (inFlight) {
-      await inFlight;
-      continue;
-    }
-    let settle = (): void => undefined;
-    // Published before the first await inside the release, so no arriving reader can
-    // observe a zero-reader scope with no release attached to it.
-    scope.releasing = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    try {
-      await releaseHistoryRuntime(agentId, deps, scope);
-    } finally {
-      if (scope.readers === 0 && scopes.get(agentId) === scope) {
-        scopes.delete(agentId);
-      }
-      scope.releasing = null;
-      settle();
-    }
-  }
-}
-
-async function releaseHistoryRuntime(
-  agentId: string,
-  deps: AgentHistoryReadDeps,
-  scope: HistoryReadScope,
-): Promise<void> {
-  // Hoisted so the failure path disposes the runtime this release committed to
-  // closing, not whatever `scope.session` has since been repointed at.
-  let held: AgentSession | null = null;
-  try {
-    // Re-read: an unarchive during the read hands the runtime to a live client, and
-    // closing it then would kill an agent someone is talking to.
-    const latest = await deps.agentStorage.get(agentId);
-
-    // Everything from here to `closeAgent` is one synchronous turn. Nothing can be
-    // interleaved between the last check and the close, so the checks describe the
-    // state the close acts on — except `latest`, which was sampled before the await
-    // resolved and is the reason the token check below exists.
-    if (scope.readers > 0) {
-      return;
-    }
-    if (!latest?.archivedAt) {
-      return;
-    }
-    held = scope.session;
-    if (!held) {
-      return;
-    }
-    if (deps.agentManager.getAgent(agentId)?.session !== held) {
-      // A different runtime is resident, or none is. An unarchive closes the history
-      // runtime before it clears `archivedAt` (`agent-manager.ts` `unarchiveSnapshot`),
-      // so a record that still reads archived can describe a world where ours is
-      // already gone and a live one has taken its place. The token says which runtime
-      // this scope actually held; the record cannot.
-      return;
-    }
-    scope.closing = true;
-    await deps.agentManager.closeAgent(agentId);
-    deps.logger.debug({ agentId }, "Released history-purpose runtime after read");
-  } catch (error) {
-    // The response is already built. Failing the read because cleanup failed would
-    // turn a leak into a user-visible error.
-    deps.logger.warn({ err: error, agentId }, "Failed to release history-purpose runtime");
-
-    // `closeAgentRuntime` drops the agent from the manager's map before calling
-    // `session.close()` and rethrows the failure, so swallowing it here strands the
-    // provider process with no handle left to retry through — the exact leak this
-    // scope exists to prevent, and silent. We still hold the session, so dispose it
-    // directly. Only after we committed to closing: before that the runtime is still
-    // the manager's and closing it behind the manager's back would leave a zombie
-    // entry. A close that already succeeded (the throw came from the snapshot persist
-    // that follows it) gets a second `close()`; sessions are never reused across
-    // runtimes, so the worst case is a no-op or one more logged error.
-    if (scope.closing && held) {
-      try {
-        await held.close();
-        deps.logger.warn({ agentId }, "Disposed history-purpose session after a failed release");
-      } catch (disposeError) {
-        deps.logger.error(
-          { err: disposeError, agentId },
-          "History-purpose provider session could not be disposed; the process may be leaked",
-        );
-      }
-    }
+    await deps.agentManager.releaseHistoryRuntime(lease);
   }
 }
 
 export async function ensureAgentLoaded(
   agentId: string,
   deps: EnsureAgentLoadedDeps,
+  options?: {
+    /**
+     * Set by `withAgentHistoryRead` when this load is the reader's own. Every
+     * other caller is an interactive one and must not be served a runtime some
+     * reader is holding.
+     */
+    heldLease?: HistoryRuntimeLease;
+  },
 ): Promise<ManagedAgent> {
+  if (!options?.heldLease) {
+    // Take the agent id back from any history reader before the adoption checks
+    // below can hand its read-only runtime to a live client. A no-op — one map
+    // lookup — unless a read is actually in flight for this agent.
+    await deps.agentManager.disownHistoryRuntime?.(agentId);
+  }
   await deps.agentManager.waitForAgentClose?.(agentId);
 
   const pendingLoads = perManager(pendingAgentInitializations, deps.agentManager);
