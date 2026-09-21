@@ -59,6 +59,75 @@ export async function ensureUnarchivedAgentLoaded(
   return agent;
 }
 
+export interface AgentHistoryReadDeps extends EnsureAgentLoadedDeps {
+  agentManager: AgentLoaderManager & Pick<AgentManager, "closeAgent">;
+}
+
+/**
+ * Number of in-scope history reads per agent. An archived agent is resumed into a
+ * live provider process to serve a read (`ensureAgentLoaded` passes
+ * `{ purpose: "history" }`), and nothing else will ever close it — no client owns
+ * it, no archive runs again. The last reader out closes it.
+ */
+const openHistoryReads = new Map<string, number>();
+
+/**
+ * Run `read` against a loaded agent, releasing the provider runtime afterwards when
+ * the load was a history read of an archived agent.
+ *
+ * The scope is a callback rather than a disposer handed back to the caller because
+ * every call site is a request handler with an error path that emits a failure
+ * response; a disposer has to be released on both paths and one missed `catch`
+ * re-opens the leak. Inside the callback the agent is resident, so the manager's
+ * `requireAgent`-backed reads (`getTimeline`, `getTimelineRows`, `fetchTimeline`)
+ * all work — releasing inside the loader instead makes them throw `Unknown agent`.
+ *
+ * Interactive (non-archived) agents are loaded and left alone: they belong to
+ * whoever opened them.
+ */
+export async function withAgentHistoryRead<T>(
+  agentId: string,
+  deps: AgentHistoryReadDeps,
+  read: (agent: ManagedAgent) => Promise<T> | T,
+): Promise<T> {
+  const record = await deps.agentStorage.get(agentId);
+  if (!record?.archivedAt) {
+    return await read(await ensureAgentLoaded(agentId, deps));
+  }
+
+  // Claimed before the load so a second reader arriving mid-resume is counted and
+  // the first one out does not close the runtime under it.
+  openHistoryReads.set(agentId, (openHistoryReads.get(agentId) ?? 0) + 1);
+  try {
+    return await read(await ensureAgentLoaded(agentId, deps));
+  } finally {
+    const remaining = (openHistoryReads.get(agentId) ?? 1) - 1;
+    if (remaining > 0) {
+      openHistoryReads.set(agentId, remaining);
+    } else {
+      openHistoryReads.delete(agentId);
+      await releaseHistoryRuntime(agentId, deps);
+    }
+  }
+}
+
+async function releaseHistoryRuntime(agentId: string, deps: AgentHistoryReadDeps): Promise<void> {
+  try {
+    // Re-read: an unarchive during the read hands the runtime to a live client, and
+    // closing it then would kill an agent someone is talking to.
+    const latest = await deps.agentStorage.get(agentId);
+    if (!latest?.archivedAt) {
+      return;
+    }
+    await deps.agentManager.closeAgent(agentId);
+    deps.logger.debug({ agentId }, "Released history-purpose runtime after read");
+  } catch (error) {
+    // The response is already built. Failing the read because cleanup failed would
+    // turn a leak into a user-visible error.
+    deps.logger.warn({ err: error, agentId }, "Failed to release history-purpose runtime");
+  }
+}
+
 export async function ensureAgentLoaded(
   agentId: string,
   deps: EnsureAgentLoadedDeps,

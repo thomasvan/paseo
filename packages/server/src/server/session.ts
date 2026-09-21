@@ -42,7 +42,11 @@ import {
   isStoredAgentProviderAvailable,
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
-import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
+import {
+  ensureAgentLoaded,
+  ensureUnarchivedAgentLoaded,
+  withAgentHistoryRead,
+} from "./agent/agent-loading.js";
 import {
   sendPromptToAgent,
   waitForAgentRunStartWithTimeout,
@@ -1093,8 +1097,12 @@ export class Session {
     this.voiceSession = new VoiceSession({
       host: {
         emit: (msg) => this.emit(msg),
+        // Voice mode keeps the runtime it loads — it is a live conversation, not a
+        // history read, and every later voice call unarchives anyway. Guarding here
+        // stops enabling voice on an archived agent from resuming a provider process
+        // that nothing ever closes.
         loadAgent: (agentId) =>
-          ensureAgentLoaded(agentId, {
+          ensureUnarchivedAgentLoaded(agentId, {
             agentManager: this.agentManager,
             agentStorage: this.agentStorage,
             logger: this.sessionLogger,
@@ -7229,26 +7237,36 @@ export class Session {
       : undefined;
 
     try {
-      const snapshot = await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const agentPayload = await this.buildAgentPayload(snapshot);
-
-      const fetchedControlTimeline = this.agentManager.fetchTimeline(msg.agentId, {
-        direction,
-        cursor,
-        limit: pageLimit,
-      });
-      const selectedTimeline = this.selectTimelineProjection({
-        agentId: msg.agentId,
-        projection,
-        controlTimeline: fetchedControlTimeline,
-        direction,
-        ...(cursor ? { cursor } : {}),
-        pageLimit,
-      });
+      const { agentPayload, provider, fetchedControlTimeline, selectedTimeline } =
+        await withAgentHistoryRead(
+          msg.agentId,
+          {
+            agentManager: this.agentManager,
+            agentStorage: this.agentStorage,
+            logger: this.sessionLogger,
+          },
+          async (snapshot) => {
+            const payload = await this.buildAgentPayload(snapshot);
+            const controlTimeline = this.agentManager.fetchTimeline(msg.agentId, {
+              direction,
+              cursor,
+              limit: pageLimit,
+            });
+            return {
+              agentPayload: payload,
+              provider: snapshot.provider,
+              fetchedControlTimeline: controlTimeline,
+              selectedTimeline: this.selectTimelineProjection({
+                agentId: msg.agentId,
+                projection,
+                controlTimeline,
+                direction,
+                ...(cursor ? { cursor } : {}),
+                pageLimit,
+              }),
+            };
+          },
+        );
       const startCursor =
         selectedTimeline.startSeq !== null
           ? { epoch: selectedTimeline.timeline.epoch, seq: selectedTimeline.startSeq }
@@ -7282,7 +7300,7 @@ export class Session {
             ...(msg.mergeWindow === true ? { mergeWindow: true } : {}),
             entries: entries.map((entry) => {
               const payloadEntry = {
-                provider: snapshot.provider,
+                provider,
                 item: entry.item,
                 timestamp: entry.timestamp,
                 seqStart: entry.seqStart,
@@ -7359,17 +7377,22 @@ export class Session {
     source?: object,
   ): Promise<void> {
     try {
-      await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const rows = await this.agentManager.getTimelineRows(msg.agentId);
-      const timeline = this.agentManager.fetchTimeline(msg.agentId, {
-        direction: "tail",
-        limit: 1,
-      });
-      const index = buildTimelinePromptIndex(timeline.epoch, rows);
+      const index = await withAgentHistoryRead(
+        msg.agentId,
+        {
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        },
+        async () => {
+          const rows = await this.agentManager.getTimelineRows(msg.agentId);
+          const timeline = this.agentManager.fetchTimeline(msg.agentId, {
+            direction: "tail",
+            limit: 1,
+          });
+          return buildTimelinePromptIndex(timeline.epoch, rows);
+        },
+      );
       this.emitForSource(
         {
           type: "agent.timeline.list_prompts.response",
@@ -7515,25 +7538,30 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "agent.fork_context.request" }>,
   ): Promise<void> {
     try {
-      const snapshot = await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const agentPayload = await this.buildAgentPayload(snapshot);
-      const timeline = this.agentManager.fetchTimeline(msg.agentId, {
-        direction: "tail",
-        limit: 0,
-      });
-      const forkContext = buildAgentForkContextAttachment({
-        rows: timeline.rows,
-        cursorBoundary: msg.boundaryCursor
-          ? { timelineEpoch: timeline.epoch, cursor: msg.boundaryCursor }
-          : null,
-        boundaryMessageId: msg.boundaryMessageId,
-        agentTitle: agentPayload.title,
-        cwd: snapshot.cwd,
-      });
+      const forkContext = await withAgentHistoryRead(
+        msg.agentId,
+        {
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        },
+        async (snapshot) => {
+          const agentPayload = await this.buildAgentPayload(snapshot);
+          const timeline = this.agentManager.fetchTimeline(msg.agentId, {
+            direction: "tail",
+            limit: 0,
+          });
+          return buildAgentForkContextAttachment({
+            rows: timeline.rows,
+            cursorBoundary: msg.boundaryCursor
+              ? { timelineEpoch: timeline.epoch, cursor: msg.boundaryCursor }
+              : null,
+            boundaryMessageId: msg.boundaryMessageId,
+            agentTitle: agentPayload.title,
+            cwd: snapshot.cwd,
+          });
+        },
+      );
 
       this.emit({
         type: "agent.fork_context.response",
