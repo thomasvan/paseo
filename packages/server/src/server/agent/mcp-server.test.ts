@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createFakeAgentLoadPlanner } from "../test-utils/fake-load-planner.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
@@ -195,7 +196,8 @@ interface TestDeps {
 }
 
 function buildAgentManagerSpies() {
-  return {
+  const getAgent = vi.fn();
+  const spies = {
     createAgent: vi.fn(),
     waitForAgentEvent: vi.fn().mockResolvedValue({
       status: "idle",
@@ -211,7 +213,10 @@ function buildAgentManagerSpies() {
     updateAgentMetadata: vi.fn().mockResolvedValue(undefined),
     archiveAgent: vi.fn().mockResolvedValue({ archivedAt: new Date().toISOString() }),
     notifyAgentState: vi.fn(),
-    getAgent: vi.fn(),
+    // The loader asks the manager to plan every load, so a fake manager needs the
+    // plan/publish protocol even when the agent it hands back is already resident.
+    ...createFakeAgentLoadPlanner((agentId) => getAgent(agentId) ?? null),
+    getAgent,
     listAgents: vi.fn().mockReturnValue([]),
     getTimeline: vi.fn().mockReturnValue([]),
     resumeAgentFromPersistence: vi.fn(),
@@ -229,6 +234,7 @@ function buildAgentManagerSpies() {
     getRegisteredProviderIds: vi.fn().mockReturnValue(["claude"]),
     listDraftFeatures: vi.fn(),
   };
+  return spies;
 }
 
 function buildAgentStorageSpies() {

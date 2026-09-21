@@ -218,6 +218,9 @@ type ScheduleAgentManager = Pick<
     | "runAgent"
     | "waitForAgentEvent"
     | "waitForAgentClose"
+    | "planAgentLoad"
+    | "publishAgentLoad"
+    | "abandonAgentLoad"
   >;
 
 interface ScheduleWorkspaceCreateInput {

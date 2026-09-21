@@ -14,6 +14,7 @@ import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import { createPersistedWorkspaceRecord } from "../workspace-registry.js";
 import type { WorkspaceProvisioningService } from "../session/workspace-provisioning/workspace-provisioning-service.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { createFakeAgentLoadPlanner } from "../test-utils/fake-load-planner.js";
 import {
   type ImportSessionAgentManager,
   ImportSessionsRequestError,
@@ -659,6 +660,7 @@ class ProviderImportHarness {
         return true;
       },
       notifyAgentState: () => {},
+      ...createFakeAgentLoadPlanner(() => this.activeAgent),
       getAgent: () => this.activeAgent,
       getRegisteredProviderIds: () => ["codex"],
       createAgent: async () => {

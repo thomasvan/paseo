@@ -5452,6 +5452,13 @@ describe("agent config setters", () => {
     return {
       waitForAgentClose: vi.fn().mockResolvedValue(undefined),
       getAgent: vi.fn(() => ({ id: "agent-1" })),
+      // The agent is resident, so the loader's plan is the only manager call
+      // these handlers make before reaching the setter under test.
+      planAgentLoad: vi.fn().mockResolvedValue({
+        kind: "resident",
+        agent: { id: "agent-1" },
+        lease: null,
+      }),
       ...overrides,
     };
   }
