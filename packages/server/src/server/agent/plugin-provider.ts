@@ -34,6 +34,7 @@ import type {
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentResumeSessionOptions,
   AgentRunOptions,
   AgentRunResult,
   AgentSession,
@@ -878,6 +879,7 @@ class PluginAgentClient implements AgentClient {
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
     launchContext?: AgentLaunchContext,
+    options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     if (!overrides?.cwd) {
       throw new Error(`Plugin provider '${this.provider}' requires cwd to resume a session`);
@@ -888,6 +890,7 @@ class PluginAgentClient implements AgentClient {
       persistence: decodePersistence(handle),
       history: "replay",
       persist: true,
+      historyPurpose: options?.purpose === "history",
     });
   }
 
@@ -977,6 +980,7 @@ class PluginAgentClient implements AgentClient {
     persistence?: ProviderPersistence;
     history: "replay" | "skip";
     persist: boolean;
+    historyPurpose?: boolean;
   }): Promise<PluginAgentSession> {
     const sessionId = randomUUID();
     const bridge = await this.runtime.openSession({
@@ -985,9 +989,14 @@ class PluginAgentClient implements AgentClient {
       persistence: input.persistence,
       history: input.history,
     });
-    const session = new PluginAgentSession(this.provider, bridge, () => {
-      this.rootsBySession.delete(bridge.id);
-    });
+    const session = new PluginAgentSession(
+      this.provider,
+      bridge,
+      () => {
+        this.rootsBySession.delete(bridge.id);
+      },
+      input.historyPurpose,
+    );
     this.rootsBySession.set(bridge.id, session);
     this.attachPendingChildren();
     return session;
@@ -1045,9 +1054,18 @@ class PluginAgentSession implements AgentSession {
     readonly provider: string,
     private readonly bridge: ProviderRuntimeSession,
     private readonly onClose: () => void,
+    historyPurpose = false,
   ) {
     for (const event of bridge.history) this.accept(event, false);
-    this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
+    // A history-purpose resume never prompts and is read once then released;
+    // bridge.history above already carries everything session.open replayed
+    // before session.ready resolved, so subscribing here would only attach
+    // this read to the provider's live event stream for events it has no
+    // use for. Subagent replay (attachChild) writes to this.history/
+    // this.listeners directly and does not depend on this subscription.
+    if (!historyPurpose) {
+      this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
+    }
   }
 
   get id(): string {
