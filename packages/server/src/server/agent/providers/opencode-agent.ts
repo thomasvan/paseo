@@ -4901,20 +4901,20 @@ class OpenCodeAgentSession implements AgentSession {
   async close(): Promise<void> {
     try {
       this.closed = true;
+      this.abortController?.abort();
       this.recoveryAbortController.abort();
       this.unsubscribeEvents?.();
       this.unsubscribeEvents = null;
       await this.ingress.catch(() => undefined);
       this.subscribers.clear();
       if (this.purpose === "history") {
-        // A history-purpose session never started a turn and never attached
-        // to the shared server's event stream (constructor, above), so
-        // there is nothing local to abort. Calling session.abort() on the
-        // server would abort the *live* session this history read is a
-        // read-only view of — upstream issue #3358.
+        // A history-purpose session never started a turn (abortController
+        // above is already null on this path) and never attached to the
+        // shared server's event stream (constructor, above). Calling
+        // session.abort() on the server would abort the *live* session this
+        // history read is a read-only view of — upstream issue #3358.
         return;
       }
-      this.abortController?.abort();
       await abortOpenCodeSession({
         client: this.client,
         sessionId: this.sessionId,
