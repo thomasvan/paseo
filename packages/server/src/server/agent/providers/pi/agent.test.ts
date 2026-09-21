@@ -2792,9 +2792,9 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
     }
     expect(secondRead).toEqual(firstRead);
 
-    // The generic history-read release (`withAgentHistoryRead` in
-    // agent-loading.ts) calls close() unconditionally after the read; it
-    // must be a harmless no-op, not a second release.
+    // Anything that later calls close() on this session (e.g. a normal
+    // teardown of the resumed agent record) must find a harmless no-op,
+    // not a second release.
     await session.close();
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
