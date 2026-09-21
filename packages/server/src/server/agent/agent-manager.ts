@@ -1757,15 +1757,23 @@ export class AgentManager {
         // the lease exists to prevent. The lease still names the session, so close
         // it directly and let that be the last word.
         this.logger.warn({ err: error, agentId }, "Failed to release history-purpose runtime");
+        // The retry cannot be reported as a disposal. `plugin-provider.ts` and the
+        // pi agent mark the session closed before awaiting their transport, so a
+        // second `close()` after a failed first one resolves without doing any
+        // work, and the manager has no way past `AgentSession` to reach the
+        // underlying process. A resolved retry is therefore not evidence of
+        // anything. Record an unresolved cleanup instead of claiming the stronger
+        // outcome: this is the line someone reads while diagnosing a leak.
+        let retryError: unknown;
         try {
           await session.close();
-          this.logger.warn({ agentId }, "Disposed history-purpose session after a failed release");
-        } catch (disposeError) {
-          this.logger.error(
-            { err: disposeError, agentId },
-            "History-purpose provider session could not be disposed; the process may be leaked",
-          );
+        } catch (closeError) {
+          retryError = closeError;
         }
+        this.logger.error(
+          { err: retryError ?? error, agentId, retryRejected: retryError !== undefined },
+          "History-purpose session cleanup is unresolved; the provider process may be leaked",
+        );
       }
     });
   }

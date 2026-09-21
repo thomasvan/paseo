@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import pino from "pino";
 import { expect, test } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
@@ -469,18 +470,51 @@ test("concurrent loads of one agent id on two managers each get their own runtim
   }
 });
 
-test("a provider close failure during release disposes the held session directly", async () => {
+interface CapturedLogRecord {
+  level: number;
+  msg: string;
+}
+
+/**
+ * A logger whose records the test can read. Cleanup outcomes are only visible in
+ * the log, so a test about what the manager claims has to assert on them.
+ */
+function createCapturingLogger(): { logger: pino.Logger; records: CapturedLogRecord[] } {
+  const records: CapturedLogRecord[] = [];
+  const logger = pino(
+    { level: "trace" },
+    {
+      write(line: string) {
+        records.push(JSON.parse(line) as CapturedLogRecord);
+      },
+    },
+  );
+  return { logger, records };
+}
+
+test("a provider close failure during release is recorded as unresolved, not as a disposal", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "agent-history-close-failure-"));
-  const logger = createTestLogger();
+  const { logger, records } = createCapturingLogger();
   const storage = new AgentStorage(path.join(root, "agents"), logger);
   let failCloses = false;
   let closeAttempts = 0;
+  let noopCloses = 0;
+  let sessionClosed = false;
   const client = createTestAgentClients({
     closeSession: async () => {
       if (!failCloses) {
         return;
       }
       closeAttempts += 1;
+      // The closed-before-await shape `plugin-provider.ts:1202` and the pi agent
+      // both have: the session marks itself closed, then the transport close
+      // rejects. Every later `close()` resolves having done nothing, so a manager
+      // that retries through `AgentSession` cannot reach the leaked process.
+      if (sessionClosed) {
+        noopCloses += 1;
+        return;
+      }
+      sessionClosed = true;
       throw new Error("provider close failed");
     },
   }).codex;
@@ -509,6 +543,14 @@ test("a provider close failure during release disposes the held session directly
     // threw, so the manager has no handle left. The release keeps one and retries.
     expect(manager.getAgent(agent.id)).toBeNull();
     expect(closeAttempts).toBe(2);
+    // The retry resolved and disposed nothing. Nothing may claim otherwise.
+    expect(noopCloses).toBe(1);
+    expect(records.filter((record) => /dispos/i.test(record.msg))).toEqual([]);
+    const unresolved = records.filter((record) =>
+      record.msg.includes("History-purpose session cleanup is unresolved"),
+    );
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]?.level).toBe(50);
   } finally {
     failCloses = false;
     await manager.closeAgent(agentId).catch(() => undefined);
@@ -614,6 +656,49 @@ test("a live caller is never served the history runtime a reader is holding", as
     expect(loaded.session).not.toBe(historySession);
     expect(harness.manager.getAgent(agent.id)?.session).toBe(loaded.session);
     expect(harness.closeCount() - closesBefore).toBe(1);
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+test("a read that is handed a live runtime binds nothing and closes nothing", async () => {
+  const harness = await createHistoryReadHarness("agent-history-live-adopt-");
+  const agentId = "00000000-0000-4000-8000-000000000414";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-live-adopt" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    // The reader samples an archived record; an interactive caller then unarchives
+    // and loads before the reader's own load runs, so `ensureAgentLoaded` hands the
+    // reader the client's live runtime. The lease must bind nothing: the reader
+    // borrowed someone else's agent and owes no close on it.
+    const realGet = harness.storage.get.bind(harness.storage);
+    let onNextGet: (() => Promise<void>) | null = null;
+    harness.storage.get = async (id: string) => {
+      const record = await realGet(id);
+      const hook = onNextGet;
+      onNextGet = null;
+      if (hook) {
+        await hook();
+      }
+      return record;
+    };
+    onNextGet = async () => {
+      await harness.manager.unarchiveSnapshot(agent.id);
+      await ensureUnarchivedAgentLoaded(agent.id, harness.deps);
+    };
+
+    const seen = await withAgentHistoryRead(agent.id, harness.deps, (loaded) => loaded.session);
+
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["interactive"]);
+    expect(harness.manager.getAgent(agent.id)?.session).toBe(seen);
+    expect(harness.closeCount() - closesBefore).toBe(0);
   } finally {
     await harness.manager.closeAgent(agentId).catch(() => undefined);
     await harness.cleanup();
