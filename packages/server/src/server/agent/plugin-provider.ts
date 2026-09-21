@@ -1057,12 +1057,13 @@ class PluginAgentSession implements AgentSession {
     historyPurpose = false,
   ) {
     for (const event of bridge.history) this.accept(event, false);
-    // A history-purpose resume never prompts and is read once then released;
-    // bridge.history above already carries everything session.open replayed
-    // before session.ready resolved, so subscribing here would only attach
-    // this read to the provider's live event stream for events it has no
-    // use for. Subagent replay (attachChild) writes to this.history/
-    // this.listeners directly and does not depend on this subscription.
+    // A history-purpose resume never prompts; bridge.history above already
+    // carries everything session.open replayed before session.ready
+    // resolved, so subscribing here would only attach this read to the
+    // provider's live event stream for events it has no use for. Subagent
+    // replay (attachChild) writes to this.history/this.listeners directly
+    // and does not depend on this subscription. Nothing closes the
+    // provider session this bridge opened once the read completes.
     if (!historyPurpose) {
       this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
     }

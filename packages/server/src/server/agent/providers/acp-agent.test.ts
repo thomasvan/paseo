@@ -4092,9 +4092,9 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
     await expect(session.getRuntimeInfo()).resolves.toMatchObject({ sessionId: "session-1" });
     expect(terminator.terminated).toHaveLength(1);
 
-    // The generic history-read release (`withAgentHistoryRead` in
-    // agent-loading.ts) calls close() unconditionally after the read;
-    // it must not terminate the (already-gone) process a second time.
+    // Anything that later calls close() on this session (e.g. a normal
+    // teardown of the resumed agent record) must not terminate the
+    // (already-gone) process a second time.
     await session.close();
     expect(terminator.terminated).toHaveLength(1);
   });

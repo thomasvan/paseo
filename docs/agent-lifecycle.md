@@ -120,6 +120,22 @@ the only transition back to an interactive runtime: it runs the provider's nativ
 provider session can be archived outside Paseo while its Paseo agent remains active. Interactive
 resume repairs that drift through the provider's native unarchive hook; history resume does not.
 
+`purpose: "history"` is a per-provider contract, not a generic release: each provider decides for
+itself whether serving the read needs a live process, and if it does, releases it once the read
+completes. Nothing else releases it afterward — the `ManagedAgent` entry for the archived agent
+stays resident in `AgentManager`'s map for the rest of the daemon's life once resumed this way, on
+every provider. Claude and OMP never acquire anything: Claude's history comes from the session's
+`.jsonl`, OMP's `streamHistory` reads the session file directly, neither starts a runtime. Codex,
+Pi, and the ACP-based providers (`acp-agent.ts`) spawn to serve the read and terminate that process
+themselves once history is captured. Plugin-provider and OpenCode do not release: plugin-provider
+opens a provider session over its plugin's shared connection (`runtime.openSession`) and nothing
+closes it; OpenCode's resume holds an acquisition — a refcount on the shared OpenCode server, or a
+whole dedicated process when one is required — that only its own `close()` releases, and nothing
+calls `close()` on a history-purpose OpenCode session. Neither leak is a new process on every read:
+plugin-provider's and OpenCode's shared-server paths leak a held reference that blocks that shared
+process from ever idling down, not a fresh process per read; a dedicated OpenCode server is the one
+path that leaks a full process every time.
+
 Provider session connection owns every process it spawns until the session is registered with
 `AgentManager`. If initialization, persisted-session resume, or initial history hydration fails,
 `connect()` must dispose that process before rethrowing; the manager cannot clean up a session it never

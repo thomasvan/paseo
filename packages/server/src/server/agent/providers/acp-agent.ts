@@ -1825,8 +1825,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
    * Terminates the child process without the native-session-ending
    * `unstable_closeSession` RPC that `close()` sends on a real teardown —
    * a history read must not end the durable session it is only reading.
-   * Marks the session closed so a later `close()` call (the generic
-   * history-read release in `withAgentHistoryRead`) is a harmless no-op,
+   * Marks the session closed so a later `close()` call is a harmless no-op,
    * and so no guarded manager call (getRuntimeInfo, getAvailableModes,
    * getCurrentMode, getPendingPermissions — all cached-field reads) can
    * respawn the process it is about to release.
