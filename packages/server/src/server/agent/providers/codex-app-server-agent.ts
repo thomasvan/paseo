@@ -3513,6 +3513,20 @@ export class CodexAppServerAgentSession implements AgentSession {
         throw this.createClosedError();
       }
       this.connected = true;
+
+      if (this.initialResumePurpose === "history") {
+        // loadPersistedHistory() already cached the thread/read result on
+        // this.persistedHistory; streamHistory() replays that cache without
+        // touching the client. Populate the runtime-info cache first — the
+        // manager calls getRuntimeInfo() right after resume, and it
+        // reconnects on a cache miss when !this.connected, which would
+        // respawn the app-server we are about to release.
+        await this.getRuntimeInfo();
+        // The app-server transport has nothing left to do; release it now
+        // rather than holding a live process for the rest of this agent's
+        // (unbounded) resumed lifetime.
+        await this.disposeClient();
+      }
     } catch (error) {
       try {
         if (this.client === client) {

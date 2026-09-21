@@ -1657,6 +1657,38 @@ describe("Codex client disposal", () => {
     appServer.assertNoErrors();
   });
 
+  // Mutant: dropping the disposeClient() call after loadPersistedHistory()
+  // for a history-purpose resume leaves the transport connected — the kill
+  // signal below would never fire until session.close() is called (which a
+  // history-purpose resume, by design, is never guaranteed to receive).
+  test("releases the Codex app-server transport once the history read completes", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/resume": () =>
+        Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id"))),
+      "thread/read": () => ({ thread: { turns: [] } }),
+    });
+    const killSpy = vi.spyOn(appServer.child, "kill");
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const session = await provider.resumeSession(archivedThreadHandle(), undefined, undefined, {
+      purpose: "history",
+    });
+
+    // The transport is already released by the time resumeSession resolves —
+    // no session.close() needed to observe the kill signal.
+    expect(killSpy).toHaveBeenCalledWith("SIGTERM");
+
+    // getRuntimeInfo() must serve the pre-dispose cache rather than
+    // reconnecting (which would respawn the very app-server just released).
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+      sessionId: "archived-thread-id",
+    });
+    expect(killSpy).toHaveBeenCalledTimes(1);
+
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
   test("unarchives Codex when an active Paseo agent resumes an archived thread", async () => {
     const threadRequests: string[] = [];
     let resumeAttempts = 0;
