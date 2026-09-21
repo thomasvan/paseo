@@ -1467,27 +1467,37 @@ export class PiRpcAgentSession implements AgentSession {
 
     await this.requestEntryCapture("history");
     const events: AgentStreamEvent[] = [];
-    for await (const event of streamPiHistory(
-      this.provider,
-      await this.runtimeSession.getMessages(),
-      this.capturedUserEntries,
-    )) {
-      events.push(event);
-      yield event;
-    }
-
-    if (this.resumePurpose === "history") {
-      // A history-purpose resume only needs this one read: the `get_messages`
-      // RPC above requires the live Pi runtime (there is no session file the
-      // server can read directly), so cache what was fetched and release the
-      // runtime now rather than holding it for the rest of this agent's
-      // (unbounded) resumed lifetime. The cache also makes a second
-      // streamHistory() call (hydrateTimelineFromProvider and a manual
-      // resumeSession-then-read both reach it) replay instead of hitting the
-      // runtime this branch is about to close.
-      this.historyReplayCache = events;
-      await this.refreshState().catch(() => undefined);
-      await this.close();
+    let completed = false;
+    try {
+      for await (const event of streamPiHistory(
+        this.provider,
+        await this.runtimeSession.getMessages(),
+        this.capturedUserEntries,
+      )) {
+        events.push(event);
+        yield event;
+      }
+      completed = true;
+    } finally {
+      if (this.resumePurpose === "history") {
+        // A history-purpose resume only needs this one read: the `get_messages`
+        // RPC above requires the live Pi runtime (there is no session file the
+        // server can read directly), so release the runtime now rather than
+        // holding it for the rest of this agent's (unbounded) resumed
+        // lifetime. That release must happen whether the read finished, threw
+        // mid-fetch, or was abandoned early (the finally runs on all three),
+        // or the runtime leaks exactly the way this branch exists to stop.
+        // Only a completed read is cached — a partial one must not be
+        // replayed later as if it were the whole history. The cache also
+        // makes a second streamHistory() call (hydrateTimelineFromProvider
+        // and a manual resumeSession-then-read both reach it) replay instead
+        // of hitting the runtime this branch is about to close.
+        if (completed) {
+          this.historyReplayCache = events;
+        }
+        await this.refreshState().catch(() => undefined);
+        await this.close();
+      }
     }
   }
 
