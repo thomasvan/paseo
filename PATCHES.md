@@ -798,8 +798,8 @@ runtimes left resident, ~1.36 GB.
   by last-reader accounting went through four designs — a module-level refcount, a scope
   object with an `AgentSession` ownership token, a manager-held lease, and an ownership
   decision made inside the lifecycle lane — and all four failed independent cross-review on
-  the same shape, six cross-reads in total: state mutated from outside `AgentManager`'s
-  per-agent lifecycle lane (`runLifecycleMutation`, a tail-chained queue with no
+  the same shape, eight blocking findings across four rounds: state mutated from outside
+  `AgentManager`'s per-agent lifecycle lane (`runLifecycleMutation`, a tail-chained queue with no
   re-entrancy — awaiting anything inside a lane operation that takes the lane for the same
   agent deadlocks it permanently). That half is going upstream as an issue instead of landing
   here. Plugin-provider's and OpenCode's leaks are the resulting, documented gap; do not
