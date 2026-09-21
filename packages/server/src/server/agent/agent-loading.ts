@@ -1,7 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { Logger } from "pino";
 
 import type { AgentProvider } from "./agent-sdk-types.js";
-import type { AgentManager, HistoryRuntimeLease, ManagedAgent } from "./agent-manager.js";
+import type {
+  AgentLoadPurpose,
+  AgentLoadRequest,
+  AgentManager,
+  HistoryRuntimeLease,
+  ManagedAgent,
+  PendingAgentLoad,
+} from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
 import {
   buildConfigOverrides,
@@ -11,35 +20,6 @@ import {
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
 
-interface PendingAgentInitialization {
-  promise: Promise<ManagedAgent>;
-  options: { broadcastTimeline: boolean };
-}
-
-/**
- * Per-manager, not process-wide. Both of this module's caches key work by agent id,
- * and an agent id is only unique within one `AgentManager`: production bootstraps a
- * single manager, but tests construct several over the same storage, and a shared
- * key makes two managers dedupe each other's loads and count each other's readers.
- * The manager instance is the scope, so it is the outer key.
- */
-function perManager<V>(
-  cache: WeakMap<AgentLoaderManager, Map<string, V>>,
-  manager: AgentLoaderManager,
-): Map<string, V> {
-  let entries = cache.get(manager);
-  if (!entries) {
-    entries = new Map<string, V>();
-    cache.set(manager, entries);
-  }
-  return entries;
-}
-
-const pendingAgentInitializations = new WeakMap<
-  AgentLoaderManager,
-  Map<string, PendingAgentInitialization>
->();
-
 export type AgentLoaderManager = Pick<
   AgentManager,
   | "createAgent"
@@ -47,8 +27,34 @@ export type AgentLoaderManager = Pick<
   | "getRegisteredProviderIds"
   | "hydrateTimelineFromProvider"
   | "resumeAgentFromPersistence"
+  | "planAgentLoad"
+  | "publishAgentLoad"
+  | "abandonAgentLoad"
 > &
-  Partial<Pick<AgentManager, "waitForAgentClose" | "disownHistoryRuntime">>;
+  Partial<Pick<AgentManager, "waitForAgentClose" | "releaseHistoryRuntime">>;
+
+/**
+ * The history leases the current async context holds, keyed by nothing: identity
+ * is the lease object. A read callback that loads its own agent interactively
+ * would be parked on a lease only its own return can release, and the lane it is
+ * parked on cannot tell a re-entrant caller from a second client. This is how it
+ * tells them apart.
+ */
+const heldHistoryLeases = new AsyncLocalStorage<ReadonlySet<HistoryRuntimeLease>>();
+
+/**
+ * Thrown when a history read tries to load the agent it is reading as a live
+ * agent. The alternative is a permanent park, which looks like a hung request.
+ */
+export class HistoryReadReentrancyError extends Error {
+  public readonly agentId: string;
+
+  constructor(agentId: string) {
+    super(`Agent ${agentId} cannot be loaded interactively from inside a history read of itself`);
+    this.name = "HistoryReadReentrancyError";
+    this.agentId = agentId;
+  }
+}
 
 export interface EnsureAgentLoadedDeps {
   agentManager: AgentLoaderManager;
@@ -82,31 +88,29 @@ export async function ensureUnarchivedAgentLoaded(
 }
 
 export interface AgentHistoryReadDeps extends EnsureAgentLoadedDeps {
-  agentManager: AgentLoaderManager &
-    Pick<
-      AgentManager,
-      "closeAgent" | "claimHistoryRuntime" | "bindHistoryRuntime" | "releaseHistoryRuntime"
-    >;
+  agentManager: AgentLoaderManager & Pick<AgentManager, "releaseHistoryRuntime">;
 }
 
 /**
  * Run `read` against a loaded agent, releasing the provider runtime afterwards when
  * the load was a history read of an archived agent.
  *
- * The scope is a lease taken from `AgentManager` before the load and released after
- * it. Everything that decides the fate of the runtime — the resident session, the
- * count of readers on it, the close — happens inside the manager's per-agent
- * lifecycle lane, so no archive, unarchive or close can interleave with it. This
- * module deliberately never reads `archivedAt` to decide ownership: that field is
- * one the manager edits on its own schedule, and a reader that consults it is
- * asking a question whose answer can change under it.
+ * The scope is a lease the manager takes in the same lane operation that decides
+ * how this load will be served. Everything that decides the fate of the runtime —
+ * the resident session, the readers on it, the load in flight, the close — is read
+ * and written inside the manager's per-agent lifecycle lane, so no archive,
+ * unarchive, close or second loader can interleave with the decision. This module
+ * deliberately never reads `archivedAt` to decide ownership: that field is one the
+ * manager edits on its own schedule, and a reader that consults it is asking a
+ * question whose answer can change under it.
  *
  * The shape is a callback rather than a disposer handed back to the caller because
  * every call site is a request handler with an error path that emits a failure
  * response; a disposer has to be released on both paths and one missed `catch`
- * re-opens the leak. Inside the callback the agent is resident, so the manager's
- * `requireAgent`-backed reads (`getTimeline`, `getTimelineRows`, `fetchTimeline`)
- * all work — releasing inside the loader instead makes them throw `Unknown agent`.
+ * re-opens the leak. Inside the callback the agent is resident and stays resident:
+ * a live caller arriving mid-read waits for the lease instead of taking the runtime
+ * away, so the manager's `requireAgent`-backed reads (`getTimeline`,
+ * `getTimelineRows`, `fetchTimeline`) still work after an await.
  *
  * Interactive (non-archived) agents are loaded and left alone: they belong to
  * whoever opened them, the lease binds nothing, and the release does nothing.
@@ -121,23 +125,16 @@ export async function withAgentHistoryRead<T>(
     return await read(await ensureAgentLoaded(agentId, deps));
   }
 
-  // Claimed before the load, so a release already running for another reader sees
-  // this one arrive and stands down instead of closing the runtime it is about to
-  // adopt.
-  const lease = deps.agentManager.claimHistoryRuntime(agentId);
+  const loaded = await loadAgent(agentId, deps, "history");
+  const lease = loaded.lease;
+  if (!lease) {
+    return await read(loaded.agent);
+  }
   try {
-    const agent = await ensureAgentLoaded(agentId, deps, { heldLease: lease });
-    // Bind after the load: the lease names the runtime that load left resident, and
-    // only when that runtime is one the manager launched for history. A load that
-    // adopted someone's live agent binds nothing and owes no close.
-    deps.agentManager.bindHistoryRuntime(lease);
-    return await read(agent);
+    const held = new Set(heldHistoryLeases.getStore() ?? []);
+    held.add(lease);
+    return await heldHistoryLeases.run(held, async () => await read(loaded.agent));
   } finally {
-    // A load that threw part-way can still have left a runtime behind, so bind on
-    // the failure path too before releasing.
-    if (!lease.session) {
-      deps.agentManager.bindHistoryRuntime(lease);
-    }
     await deps.agentManager.releaseHistoryRuntime(lease);
   }
 }
@@ -145,102 +142,157 @@ export async function withAgentHistoryRead<T>(
 export async function ensureAgentLoaded(
   agentId: string,
   deps: EnsureAgentLoadedDeps,
-  options?: {
-    /**
-     * Set by `withAgentHistoryRead` when this load is the reader's own. Every
-     * other caller is an interactive one and must not be served a runtime some
-     * reader is holding.
-     */
-    heldLease?: HistoryRuntimeLease;
-  },
 ): Promise<ManagedAgent> {
-  if (!options?.heldLease) {
-    // Take the agent id back from any history reader before the adoption checks
-    // below can hand its read-only runtime to a live client. A no-op — one map
-    // lookup — unless a read is actually in flight for this agent.
-    await deps.agentManager.disownHistoryRuntime?.(agentId);
-  }
-  await deps.agentManager.waitForAgentClose?.(agentId);
+  return (await loadAgent(agentId, deps, "interactive")).agent;
+}
 
-  const pendingLoads = perManager(pendingAgentInitializations, deps.agentManager);
-  const inflight = pendingLoads.get(agentId);
-  if (inflight) {
-    inflight.options.broadcastTimeline ||= deps.broadcastTimeline === true;
-    return inflight.promise;
-  }
-
-  const existing = deps.agentManager.getAgent(agentId);
-  if (existing) {
-    return existing;
-  }
-
-  // A close may have started after the first barrier observed no in-flight
-  // work. Once the live lookup is empty, this second barrier closes that gap
-  // before storage-backed resume begins.
-  await deps.agentManager.waitForAgentClose?.(agentId);
-
-  const laterInflight = pendingLoads.get(agentId);
-  if (laterInflight) {
-    laterInflight.options.broadcastTimeline ||= deps.broadcastTimeline === true;
-    return laterInflight.promise;
-  }
-
-  const pendingOptions = {
+/**
+ * Plan, then load, then publish. The plan and the publish are lane operations with
+ * synchronous bodies; the load between them is the provider I/O, and it holds no
+ * lane. A plan that parks this caller returns a barrier instead, and the loop
+ * re-plans when it is signalled — the state it decided against may have changed,
+ * so nothing is carried across the park except the request.
+ */
+async function loadAgent(
+  agentId: string,
+  deps: EnsureAgentLoadedDeps,
+  purpose: AgentLoadPurpose,
+): Promise<{ agent: ManagedAgent; lease: HistoryRuntimeLease | null }> {
+  const request: AgentLoadRequest = {
+    agentId,
+    purpose,
     broadcastTimeline: deps.broadcastTimeline === true,
+    reentrant: holdsLeaseOn(agentId),
+    token: {},
   };
-  const initPromise = (async () => {
-    const record = await deps.agentStorage.get(agentId);
-    if (!record) {
-      throw new Error(`Agent not found: ${agentId}`);
-    }
+  let lease: HistoryRuntimeLease | null = null;
+  let parked = false;
+  try {
+    for (;;) {
+      // Orders this load behind a close that started before it. The lane covers
+      // closes taken through `closeAgent`; this also covers the window where the
+      // close has been registered and its lane operation has not yet run.
+      await deps.agentManager.waitForAgentClose?.(agentId);
 
-    const validProviders = deps.validProviders ?? deps.agentManager.getRegisteredProviderIds();
-    if (!isStoredAgentProviderAvailable(record, validProviders)) {
+      const plan = await deps.agentManager.planAgentLoad(request);
+      if (plan.kind === "wait") {
+        assertNotSelfBlocked(agentId, plan.blockedBy);
+        parked = true;
+        await plan.until;
+        continue;
+      }
+
+      lease = plan.lease;
+      if (plan.kind === "resident") {
+        return { agent: plan.agent, lease };
+      }
+      if (plan.kind === "adopt") {
+        return { agent: await plan.pending.promise, lease };
+      }
+      return { agent: await runAgentLoad(agentId, deps, plan.pending), lease };
+    }
+  } catch (error) {
+    // The lease is claimed inside the lane, before the load it names runs, so a
+    // load that throws can still have left a runtime behind. Release it here:
+    // the caller never received the lease and cannot.
+    if (lease) {
+      await deps.agentManager.releaseHistoryRuntime?.(lease);
+    }
+    throw error;
+  } finally {
+    if (parked) {
+      await deps.agentManager.abandonAgentLoad(request);
+    }
+  }
+}
+
+function holdsLeaseOn(agentId: string): boolean {
+  for (const lease of heldHistoryLeases.getStore() ?? []) {
+    if (lease.agentId === agentId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function assertNotSelfBlocked(agentId: string, blockedBy: readonly HistoryRuntimeLease[]): void {
+  const held = heldHistoryLeases.getStore();
+  if (!held) {
+    return;
+  }
+  for (const lease of blockedBy) {
+    if (held.has(lease)) {
+      throw new HistoryReadReentrancyError(agentId);
+    }
+  }
+}
+
+/**
+ * Run the load this caller was told to start, then publish its outcome. Publishing
+ * is what settles the promise every adopting caller is waiting on, and it binds
+ * their leases first, so none of them can see the agent before its lease names the
+ * session it is holding.
+ */
+async function runAgentLoad(
+  agentId: string,
+  deps: EnsureAgentLoadedDeps,
+  pending: PendingAgentLoad,
+): Promise<ManagedAgent> {
+  let agent: ManagedAgent;
+  try {
+    agent = await resumeOrCreateAgent(agentId, deps, pending);
+  } catch (error) {
+    await deps.agentManager.publishAgentLoad(pending, { ok: false, error });
+    throw error;
+  }
+  await deps.agentManager.publishAgentLoad(pending, { ok: true, agent });
+  return agent;
+}
+
+async function resumeOrCreateAgent(
+  agentId: string,
+  deps: EnsureAgentLoadedDeps,
+  pending: PendingAgentLoad,
+): Promise<ManagedAgent> {
+  const record = await deps.agentStorage.get(agentId);
+  if (!record) {
+    throw new Error(`Agent not found: ${agentId}`);
+  }
+
+  const validProviders = deps.validProviders ?? deps.agentManager.getRegisteredProviderIds();
+  if (!isStoredAgentProviderAvailable(record, validProviders)) {
+    throw new Error(`Agent ${agentId} references unavailable provider '${record.provider}'`);
+  }
+
+  const handle = toAgentPersistenceHandle(validProviders, record.persistence);
+
+  let snapshot: ManagedAgent;
+  if (handle) {
+    snapshot = await deps.agentManager.resumeAgentFromPersistence(
+      handle,
+      buildConfigOverrides(record),
+      agentId,
+      extractTimestamps(record),
+      record.archivedAt ? { purpose: "history" } : undefined,
+    );
+    deps.logger.info({ agentId, provider: record.provider }, "Agent resumed from persistence");
+  } else {
+    const config = buildSessionConfig(record, {
+      validProviders,
+    });
+    if (!config) {
       throw new Error(`Agent ${agentId} references unavailable provider '${record.provider}'`);
     }
-
-    const handle = toAgentPersistenceHandle(validProviders, record.persistence);
-
-    let snapshot: ManagedAgent;
-    if (handle) {
-      snapshot = await deps.agentManager.resumeAgentFromPersistence(
-        handle,
-        buildConfigOverrides(record),
-        agentId,
-        extractTimestamps(record),
-        record.archivedAt ? { purpose: "history" } : undefined,
-      );
-      deps.logger.info({ agentId, provider: record.provider }, "Agent resumed from persistence");
-    } else {
-      const config = buildSessionConfig(record, {
-        validProviders,
-      });
-      if (!config) {
-        throw new Error(`Agent ${agentId} references unavailable provider '${record.provider}'`);
-      }
-      snapshot = await deps.agentManager.createAgent(config, agentId, {
-        labels: record.labels,
-        workspaceId: record.workspaceId,
-        owner: record.owner,
-      });
-      deps.logger.info({ agentId, provider: record.provider }, "Agent created from stored config");
-    }
-
-    await deps.agentManager.hydrateTimelineFromProvider(agentId, {
-      broadcast: () => pendingOptions.broadcastTimeline,
+    snapshot = await deps.agentManager.createAgent(config, agentId, {
+      labels: record.labels,
+      workspaceId: record.workspaceId,
+      owner: record.owner,
     });
-    return deps.agentManager.getAgent(agentId) ?? snapshot;
-  })();
-
-  const pending: PendingAgentInitialization = { promise: initPromise, options: pendingOptions };
-  pendingLoads.set(agentId, pending);
-
-  try {
-    return await initPromise;
-  } finally {
-    const current = pendingLoads.get(agentId);
-    if (current === pending) {
-      pendingLoads.delete(agentId);
-    }
+    deps.logger.info({ agentId, provider: record.provider }, "Agent created from stored config");
   }
+
+  await deps.agentManager.hydrateTimelineFromProvider(agentId, {
+    broadcast: () => pending.options.broadcastTimeline,
+  });
+  return deps.agentManager.getAgent(agentId) ?? snapshot;
 }

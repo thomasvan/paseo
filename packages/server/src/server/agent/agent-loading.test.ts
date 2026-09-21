@@ -110,6 +110,11 @@ interface HistoryReadHarness {
   onNativeUnarchive: (hook: (() => Promise<void>) | null) => void;
   /** One-shot hook run inside the provider session's `close()`. */
   onCloseSession: (hook: (() => void) | null) => void;
+  /**
+   * One-shot hook run inside the client's `resumeSession`, before the session
+   * exists. Awaiting inside it holds the load in flight.
+   */
+  onResume: (hook: ((purpose: string) => Promise<void>) | null) => void;
   cleanup: () => Promise<void>;
 }
 
@@ -120,6 +125,7 @@ async function createHistoryReadHarness(prefix: string): Promise<HistoryReadHarn
   let closes = 0;
   let nativeUnarchiveHook: (() => Promise<void>) | null = null;
   let closeSessionHook: (() => void) | null = null;
+  let resumeHook: ((purpose: string) => Promise<void>) | null = null;
   const baseClient = createTestAgentClients({
     closeSession: async () => {
       closes += 1;
@@ -145,6 +151,9 @@ async function createHistoryReadHarness(prefix: string): Promise<HistoryReadHarn
       launchContext?: AgentLaunchContext,
       options?: AgentResumeSessionOptions,
     ): Promise<AgentSession> => {
+      const hook = resumeHook;
+      resumeHook = null;
+      await hook?.(options?.purpose ?? "interactive");
       const session = await baseClient.resumeSession(handle, overrides, launchContext);
       // `AgentResumeSessionOptions` documents the absent purpose as interactive.
       resumes.push({ purpose: options?.purpose ?? "interactive", session });
@@ -172,6 +181,9 @@ async function createHistoryReadHarness(prefix: string): Promise<HistoryReadHarn
     },
     onCloseSession: (hook) => {
       closeSessionHook = hook;
+    },
+    onResume: (hook) => {
+      resumeHook = hook;
     },
     cleanup: async () => {
       await manager.flush().catch(() => undefined);
@@ -574,6 +586,7 @@ interface OpenHistoryRead {
 async function unarchiveWithHistoryReadInside(
   harness: HistoryReadHarness,
   agentId: string,
+  afterGate?: () => void,
 ): Promise<OpenHistoryRead> {
   let markInside = (): void => undefined;
   const inside = new Promise<void>((resolve) => {
@@ -589,6 +602,7 @@ async function unarchiveWithHistoryReadInside(
     result = withAgentHistoryRead(agentId, harness.deps, async () => {
       markInside();
       await gate;
+      afterGate?.();
       return "read";
     });
     await inside;
@@ -736,6 +750,322 @@ test("a reader arriving during the release of an unarchived-window runtime loads
     expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history", "interactive"]);
     expect(harness.closeCount() - closesBefore).toBe(1);
     expect(harness.manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+/**
+ * Let every queued continuation and I/O completion run. Used where the point of
+ * the test is that a caller has either finished or parked, and the two must not
+ * be told apart by how long the test is willing to wait.
+ */
+async function settle(turns = 50): Promise<void> {
+  for (let index = 0; index < turns; index += 1) {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
+
+/** A history read held open at a gate, with the runtime it loaded still resident. */
+interface GatedHistoryRead {
+  result: Promise<string>;
+  end: () => void;
+}
+
+async function openGatedHistoryRead(
+  harness: HistoryReadHarness,
+  agentId: string,
+): Promise<GatedHistoryRead> {
+  let markInside = (): void => undefined;
+  const inside = new Promise<void>((resolve) => {
+    markInside = resolve;
+  });
+  let end = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    end = resolve;
+  });
+  const result = withAgentHistoryRead(agentId, harness.deps, async () => {
+    markInside();
+    await gate;
+    return "read";
+  });
+  await inside;
+  return { result, end };
+}
+
+test("a live caller is never served an in-flight history resume", async () => {
+  const harness = await createHistoryReadHarness("agent-history-inflight-adoption-");
+  const agentId = "00000000-0000-4000-8000-000000000415";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-inflight" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    let markResuming = (): void => undefined;
+    const resuming = new Promise<void>((resolve) => {
+      markResuming = resolve;
+    });
+    let releaseResume = (): void => undefined;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    harness.onResume(async (purpose) => {
+      expect(purpose).toBe("history");
+      markResuming();
+      await resumeGate;
+    });
+
+    let endRead = (): void => undefined;
+    const readGate = new Promise<void>((resolve) => {
+      endRead = resolve;
+    });
+    const read = withAgentHistoryRead(agent.id, harness.deps, async () => {
+      await readGate;
+      return "read";
+    });
+    await resuming;
+
+    // The record goes live while the reader's resume is still in flight. Nothing
+    // is resident yet, so the only thing that records what the load in flight is
+    // for is the load itself.
+    expect(await harness.manager.unarchiveSnapshot(agent.id)).toBe(true);
+    const live = ensureUnarchivedAgentLoaded(agent.id, harness.deps);
+
+    releaseResume();
+    await settle();
+    endRead();
+    expect(await read).toBe("read");
+    const loaded = await live;
+
+    // Two runtimes: the reader's read-only one and the client's own.
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history", "interactive"]);
+    expect(harness.resumes()[0]?.session).not.toBe(loaded.session);
+    expect(harness.manager.getAgent(agent.id)?.session).toBe(loaded.session);
+    expect(harness.closeCount() - closesBefore).toBe(1);
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+test("a live caller arriving mid-read leaves the read's runtime reachable by id", async () => {
+  const harness = await createHistoryReadHarness("agent-history-reentrant-read-");
+  const agentId = "00000000-0000-4000-8000-000000000416";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-reentrant-read" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    // The endpoints reach back into the manager by agent id after an await:
+    // `handleAgentTimelineListPromptsRequest` awaits `getTimelineRows` and then
+    // calls `fetchTimeline`. Anything that removes the runtime in that gap turns
+    // the second call into `Unknown agent`.
+    let seenRows = -1;
+    const read = await unarchiveWithHistoryReadInside(harness, agent.id, () => {
+      seenRows = harness.manager.getTimeline(agent.id).length;
+    });
+    const historySession = harness.manager.getAgent(agent.id)?.session ?? null;
+    expect(historySession).not.toBeNull();
+
+    // Park the live caller's own resume so the window it opens for itself stays
+    // open: a replacement runtime registered under the same id would hide the
+    // removal rather than fix it.
+    let releaseResume = (): void => undefined;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    harness.onResume(async (purpose) => {
+      expect(purpose).toBe("interactive");
+      await resumeGate;
+    });
+    const live = ensureUnarchivedAgentLoaded(agent.id, harness.deps);
+    await settle();
+
+    read.end();
+    expect(await read.result).toBe("read");
+    expect(seenRows).toBeGreaterThanOrEqual(0);
+    releaseResume();
+
+    const loaded = await live;
+    expect(loaded.session).not.toBe(historySession);
+    expect(harness.manager.getAgent(agent.id)?.session).toBe(loaded.session);
+    expect(harness.closeCount() - closesBefore).toBe(1);
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+test("a reader arriving behind a waiting live caller does not starve it", async () => {
+  const harness = await createHistoryReadHarness("agent-history-starvation-");
+  const agentId = "00000000-0000-4000-8000-000000000417";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-starvation" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+
+    const first = await openGatedHistoryRead(harness, agent.id);
+    // A live caller for the same archived id parks behind the reader's lease.
+    const live = ensureAgentLoaded(agent.id, harness.deps);
+    await settle();
+
+    // A second reader arrives while the live caller is parked. If it were allowed
+    // to join the lease set now, the set would never drain and `live` would never
+    // run: this is the starvation the queue has to prevent.
+    const second = await (async () => {
+      let end = (): void => undefined;
+      const gate = new Promise<void>((resolve) => {
+        end = resolve;
+      });
+      const result = withAgentHistoryRead(agent.id, harness.deps, async () => {
+        await gate;
+        return "second";
+      });
+      return { result, end };
+    })();
+    await settle();
+
+    first.end();
+    expect(await first.result).toBe("read");
+    // Hangs if the second reader was allowed in ahead of the parked live caller.
+    const loaded = await live;
+    expect(loaded.id).toBe(agent.id);
+
+    second.end();
+    expect(await second.result).toBe("second");
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+test("a live load for the agent a read is holding fails instead of deadlocking", async () => {
+  const harness = await createHistoryReadHarness("agent-history-self-wait-");
+  const agentId = "00000000-0000-4000-8000-000000000418";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-self-wait" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    // A read callback that loads its own agent interactively would park on its
+    // own lease, which only its own return can release.
+    await expect(
+      withAgentHistoryRead(
+        agent.id,
+        harness.deps,
+        async () => await ensureAgentLoaded(agent.id, harness.deps),
+      ),
+    ).rejects.toThrow(/history read/i);
+
+    // The failed read still releases what it loaded.
+    expect(harness.manager.getAgent(agent.id)).toBeNull();
+    expect(harness.closeCount() - closesBefore).toBe(1);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("two readers that arrive on the same cold load share one runtime and one close", async () => {
+  const harness = await createHistoryReadHarness("agent-history-shared-load-");
+  const agentId = "00000000-0000-4000-8000-000000000419";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-shared-load" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    // Park the history resume so the second reader has a load in flight to join
+    // rather than a resident runtime to find.
+    let releaseResume = (): void => undefined;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    let markResuming = (): void => undefined;
+    const resuming = new Promise<void>((resolve) => {
+      markResuming = resolve;
+    });
+    harness.onResume(async (purpose) => {
+      expect(purpose).toBe("history");
+      markResuming();
+      await resumeGate;
+    });
+
+    let endFirst = (): void => undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      endFirst = resolve;
+    });
+    let markFirstInside = (): void => undefined;
+    const firstInside = new Promise<void>((resolve) => {
+      markFirstInside = resolve;
+    });
+    let firstSession: AgentSession | null = null;
+    const first = withAgentHistoryRead(agent.id, harness.deps, async (loaded) => {
+      firstSession = loaded.session;
+      markFirstInside();
+      await firstGate;
+      return "first";
+    });
+    await resuming;
+
+    let endSecond = (): void => undefined;
+    const secondGate = new Promise<void>((resolve) => {
+      endSecond = resolve;
+    });
+    let markSecondInside = (): void => undefined;
+    const secondInside = new Promise<void>((resolve) => {
+      markSecondInside = resolve;
+    });
+    let secondSession: AgentSession | null = null;
+    const second = withAgentHistoryRead(agent.id, harness.deps, async (loaded) => {
+      secondSession = loaded.session;
+      markSecondInside();
+      await secondGate;
+      return "second";
+    });
+    // Let the joiner's plan land before the load it is joining completes, then
+    // wait for both reads to be inside rather than for a number of turns.
+    await settle();
+    releaseResume();
+    await firstInside;
+    await secondInside;
+
+    // One load, one runtime, and the joining reader holds a claim on it: the
+    // lease a caller adopts is bound to what the load left resident, so ending
+    // the first read cannot close the runtime the second is still using.
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history"]);
+    expect(secondSession).not.toBeNull();
+    expect(secondSession).toBe(firstSession);
+
+    endFirst();
+    expect(await first).toBe("first");
+    expect(harness.closeCount() - closesBefore).toBe(0);
+    expect(harness.manager.getAgent(agent.id)).not.toBeNull();
+
+    endSecond();
+    expect(await second).toBe("second");
+    expect(harness.closeCount() - closesBefore).toBe(1);
+    expect(harness.manager.getAgent(agent.id)).toBeNull();
   } finally {
     await harness.manager.closeAgent(agentId).catch(() => undefined);
     await harness.cleanup();

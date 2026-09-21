@@ -9824,6 +9824,10 @@ test("a shared agent load upgrades provider history hydration to broadcast", asy
       broadcastTimeline: true,
       logger,
     });
+    // The upgrade applies to joiners registered before hydration finishes, and
+    // registering is a lane operation. Let the join land before releasing the
+    // history stream, rather than racing the two inside one microtask window.
+    await new Promise((resolve) => setImmediate(resolve));
     historyAllowed.resolve();
     await Promise.all([quietLoad, broadcastingLoad]);
 

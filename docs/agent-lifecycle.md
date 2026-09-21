@@ -21,6 +21,14 @@ the agent runs through `ensureAgentLoaded()`, which resumes the durable provider
 same Paseo agent ID. Provider history is not appended again when the canonical timeline is already
 primed.
 
+Every change to residency runs in the agent's lifecycle lane — `runLifecycleMutation` in
+`packages/server/src/server/agent/agent-manager.ts`, one tail-chained queue per agent id, with no
+re-entrancy. Awaiting anything inside a lane operation that takes the lane for the same agent
+deadlocks permanently: the inner call queues behind the outer one, and the outer one cannot finish
+until the inner one does. So keep lane bodies synchronous and put the I/O between them. Loading is
+plan, then resume, then publish: one lane operation decides what the caller gets, the provider
+resume runs outside the lane, and a second lane operation publishes the result.
+
 Reload releases the old runtime before resuming its durable session: an idle provider process can
 still own an exclusive writer. A close failure retains that runtime for cleanup and blocks the
 replacement. Once closure succeeds, a failed resume leaves the durable agent closed and retryable.
