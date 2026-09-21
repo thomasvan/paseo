@@ -5,7 +5,11 @@ import { expect, test } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
-import { ensureAgentLoaded, withAgentHistoryRead } from "./agent-loading.js";
+import {
+  ensureAgentLoaded,
+  ensureUnarchivedAgentLoaded,
+  withAgentHistoryRead,
+} from "./agent-loading.js";
 import { AgentStorage } from "./agent-storage.js";
 import type {
   AgentClient,
@@ -81,6 +85,11 @@ test("loads archived records for history and active records with the interactive
   }
 });
 
+interface HistoryResume {
+  purpose: AgentResumeSessionOptions["purpose"];
+  session: AgentSession;
+}
+
 interface HistoryReadHarness {
   manager: AgentManager;
   storage: AgentStorage;
@@ -91,6 +100,15 @@ interface HistoryReadHarness {
     logger: ReturnType<typeof createTestLogger>;
   };
   closeCount: () => number;
+  /** Every resumed runtime, in order, with the purpose it was launched for. */
+  resumes: () => HistoryResume[];
+  /**
+   * One-shot hook run inside `unarchiveSnapshot`'s native-restore step: after it
+   * has closed any resident runtime and before it clears `archivedAt`.
+   */
+  onNativeUnarchive: (hook: (() => Promise<void>) | null) => void;
+  /** One-shot hook run inside the provider session's `close()`. */
+  onCloseSession: (hook: (() => void) | null) => void;
   cleanup: () => Promise<void>;
 }
 
@@ -99,14 +117,46 @@ async function createHistoryReadHarness(prefix: string): Promise<HistoryReadHarn
   const logger = createTestLogger();
   const storage = new AgentStorage(path.join(root, "agents"), logger);
   let closes = 0;
-  const client = createTestAgentClients({
+  let nativeUnarchiveHook: (() => Promise<void>) | null = null;
+  let closeSessionHook: (() => void) | null = null;
+  const baseClient = createTestAgentClients({
     closeSession: async () => {
       closes += 1;
+      const hook = closeSessionHook;
+      closeSessionHook = null;
+      hook?.();
     },
   }).codex;
-  if (!client) {
+  if (!baseClient) {
     throw new Error("expected Codex test client");
   }
+  const resumes: HistoryResume[] = [];
+  const client: AgentClient = {
+    provider: baseClient.provider,
+    capabilities: baseClient.capabilities,
+    createSession: async (
+      config: AgentSessionConfig,
+      launchContext?: AgentLaunchContext,
+    ): Promise<AgentSession> => await baseClient.createSession(config, launchContext),
+    resumeSession: async (
+      handle: AgentPersistenceHandle,
+      overrides?: Partial<AgentSessionConfig>,
+      launchContext?: AgentLaunchContext,
+      options?: AgentResumeSessionOptions,
+    ): Promise<AgentSession> => {
+      const session = await baseClient.resumeSession(handle, overrides, launchContext);
+      // `AgentResumeSessionOptions` documents the absent purpose as interactive.
+      resumes.push({ purpose: options?.purpose ?? "interactive", session });
+      return session;
+    },
+    fetchCatalog: async (options) => await baseClient.fetchCatalog(options),
+    isAvailable: async () => await baseClient.isAvailable(),
+    unarchiveNativeSession: async (): Promise<void> => {
+      const hook = nativeUnarchiveHook;
+      nativeUnarchiveHook = null;
+      await hook?.();
+    },
+  };
   const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
 
   return {
@@ -115,6 +165,13 @@ async function createHistoryReadHarness(prefix: string): Promise<HistoryReadHarn
     root,
     deps: { agentManager: manager, agentStorage: storage, logger },
     closeCount: () => closes,
+    resumes: () => [...resumes],
+    onNativeUnarchive: (hook) => {
+      nativeUnarchiveHook = hook;
+    },
+    onCloseSession: (hook) => {
+      closeSessionHook = hook;
+    },
     cleanup: async () => {
       await manager.flush().catch(() => undefined);
       await storage.flush().catch(() => undefined);
@@ -242,7 +299,7 @@ test("an unarchive during a history read keeps the now-live runtime", async () =
   }
 });
 
-test("a reader arriving while the last reader releases keeps the runtime it adopted", async () => {
+test("a reader arriving while the last reader's release is closing loads its own", async () => {
   const harness = await createHistoryReadHarness("agent-history-exit-window-");
   const agentId = "00000000-0000-4000-8000-000000000405";
   try {
@@ -254,93 +311,31 @@ test("a reader arriving while the last reader releases keeps the runtime it adop
     await harness.manager.archiveAgent(agent.id);
     const closesBefore = harness.closeCount();
 
-    // One-shot hook fired from inside the release's storage re-read. That await is
-    // the exit window: the release has already decided it is the last reader out.
-    const realGet = harness.storage.get.bind(harness.storage);
-    let onNextGet: (() => Promise<void>) | null = null;
-    harness.storage.get = async (id: string) => {
-      const hook = onNextGet;
-      onNextGet = null;
-      if (hook) {
-        await hook();
-      }
-      return await realGet(id);
-    };
-
-    let markSecondInside = (): void => undefined;
-    const secondInside = new Promise<void>((resolve) => {
-      markSecondInside = resolve;
-    });
-    let endSecondRead = (): void => undefined;
-    const secondGate = new Promise<void>((resolve) => {
-      endSecondRead = resolve;
-    });
-    let secondRead!: Promise<number>;
-
-    await withAgentHistoryRead(agent.id, harness.deps, () => {
-      onNextGet = async () => {
-        secondRead = withAgentHistoryRead(agent.id, harness.deps, async () => {
-          markSecondInside();
-          await secondGate;
-          // The endpoints read through `requireAgent`; if the first reader's
-          // release closed the runtime under this one, it throws `Unknown agent`.
-          return harness.manager.getTimeline(agent.id).length;
-        });
-        await secondInside;
-      };
-      return "first";
+    // The second reader arrives at the one moment that used to strand it: the
+    // release has committed and is inside `close()`, so the runtime is already
+    // out of the manager's map while the provider process is still up.
+    let secondRead: Promise<number> | null = null;
+    harness.onCloseSession(() => {
+      secondRead = withAgentHistoryRead(
+        agent.id,
+        harness.deps,
+        () =>
+          // The endpoints read through `requireAgent`; a reader that adopted a
+          // half-closed runtime throws `Unknown agent` here instead.
+          harness.manager.getTimeline(agent.id).length,
+      );
     });
 
-    expect(harness.closeCount() - closesBefore).toBe(0);
-    expect(harness.manager.getAgent(agent.id)).not.toBeNull();
+    await withAgentHistoryRead(agent.id, harness.deps, () => "first");
 
-    endSecondRead();
+    expect(secondRead).not.toBeNull();
     expect(await secondRead).toBeGreaterThanOrEqual(0);
+
+    // Two runtimes, two releases: the second reader never shared the first one's.
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history", "history"]);
     expect(harness.manager.getAgent(agent.id)).toBeNull();
-    expect(harness.closeCount() - closesBefore).toBe(1);
+    expect(harness.closeCount() - closesBefore).toBe(2);
   } finally {
-    await harness.cleanup();
-  }
-});
-
-test("an unarchive landing after the release sampled the record spares the live runtime", async () => {
-  const harness = await createHistoryReadHarness("agent-history-stale-record-");
-  const agentId = "00000000-0000-4000-8000-000000000406";
-  try {
-    const agent = await harness.manager.createAgent(
-      { provider: "codex", cwd: harness.root },
-      agentId,
-      { workspaceId: "workspace-stale-record" },
-    );
-    await harness.manager.archiveAgent(agent.id);
-
-    // The release samples the record and then suspends before it can act on it.
-    // The unarchive lands in that gap, so the release resumes holding a record that
-    // says "archived" about a runtime that is now live and owned by a client.
-    const realGet = harness.storage.get.bind(harness.storage);
-    let afterNextGet: (() => Promise<void>) | null = null;
-    harness.storage.get = async (id: string) => {
-      const record = await realGet(id);
-      const hook = afterNextGet;
-      afterNextGet = null;
-      if (hook) {
-        await hook();
-      }
-      return record;
-    };
-
-    await withAgentHistoryRead(agent.id, harness.deps, () => {
-      afterNextGet = async () => {
-        await harness.manager.unarchiveSnapshot(agent.id);
-        await ensureAgentLoaded(agent.id, harness.deps);
-      };
-      return "first";
-    });
-
-    expect(await harness.storage.get(agent.id)).toMatchObject({ archivedAt: null });
-    expect(harness.manager.getAgent(agent.id)).not.toBeNull();
-  } finally {
-    await harness.manager.closeAgent(agentId).catch(() => undefined);
     await harness.cleanup();
   }
 });
@@ -523,68 +518,141 @@ test("a provider close failure during release disposes the held session directly
   }
 });
 
-test("a reader arriving after the release committed waits and loads its own runtime", async () => {
-  // `AgentLoaderManager` makes `waitForAgentClose` optional, so the scope may not
-  // rely on it to serialise a reader behind an in-flight close. This harness omits
-  // it, and holds the close open at the point where the release has committed but
-  // the manager has not yet torn the runtime down — the moment at which adopting
-  // the runtime looks safe and is not.
-  const root = await mkdtemp(path.join(tmpdir(), "agent-history-committed-"));
-  const logger = createTestLogger();
-  const storage = new AgentStorage(path.join(root, "agents"), logger);
-  let closes = 0;
-  const client = createTestAgentClients({
-    closeSession: async () => {
-      closes += 1;
-    },
-  }).codex;
-  if (!client) {
-    throw new Error("expected Codex test client");
-  }
-  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
-  const agentId = "00000000-0000-4000-8000-000000000410";
-  let onCommit: (() => void) | null = null;
-  const deps = {
-    agentManager: {
-      createAgent: manager.createAgent.bind(manager),
-      getAgent: manager.getAgent.bind(manager),
-      getRegisteredProviderIds: manager.getRegisteredProviderIds.bind(manager),
-      hydrateTimelineFromProvider: manager.hydrateTimelineFromProvider.bind(manager),
-      resumeAgentFromPersistence: manager.resumeAgentFromPersistence.bind(manager),
-      closeAgent: async (id: string): Promise<void> => {
-        const hook = onCommit;
-        onCommit = null;
-        hook?.();
-        await manager.closeAgent(id);
-      },
-    },
-    agentStorage: storage,
-    logger,
-  };
+interface OpenHistoryRead {
+  /** Resolves with the read's result once `end()` has been called. */
+  result: Promise<string>;
+  end: () => void;
+}
+
+/**
+ * Unarchive `agentId`, starting a history read inside the window between the
+ * unarchive closing any resident runtime and clearing `archivedAt`. The read is
+ * still open when this resolves, and the record is live.
+ */
+async function unarchiveWithHistoryReadInside(
+  harness: HistoryReadHarness,
+  agentId: string,
+): Promise<OpenHistoryRead> {
+  let markInside = (): void => undefined;
+  const inside = new Promise<void>((resolve) => {
+    markInside = resolve;
+  });
+  let end = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    end = resolve;
+  });
+  let result!: Promise<string>;
+
+  harness.onNativeUnarchive(async () => {
+    result = withAgentHistoryRead(agentId, harness.deps, async () => {
+      markInside();
+      await gate;
+      return "read";
+    });
+    await inside;
+  });
+
+  expect(await harness.manager.unarchiveSnapshot(agentId)).toBe(true);
+  expect(await harness.storage.get(agentId)).toMatchObject({ archivedAt: null });
+  return { result, end };
+}
+
+test("a history read that starts inside the unarchive window releases what it loaded", async () => {
+  const harness = await createHistoryReadHarness("agent-history-unarchive-window-");
+  const agentId = "00000000-0000-4000-8000-000000000411";
   try {
-    const agent = await manager.createAgent({ provider: "codex", cwd: root }, agentId, {
-      workspaceId: "workspace-committed",
-    });
-    await manager.archiveAgent(agent.id);
-    const closesBefore = closes;
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-unarchive-window" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
 
-    let secondRead!: Promise<string>;
-    await withAgentHistoryRead(agent.id, deps, () => {
-      onCommit = () => {
-        secondRead = withAgentHistoryRead(agent.id, deps, (loaded) => loaded.id);
-      };
-      return "first";
-    });
+    const read = await unarchiveWithHistoryReadInside(harness, agent.id);
 
-    expect(await secondRead).toBe(agent.id);
-    // Two runtimes, two releases: the second reader never shared the first one's.
-    expect(closes - closesBefore).toBe(2);
-    expect(manager.getAgent(agent.id)).toBeNull();
+    // The unarchive returned believing it had closed everything. The reader is
+    // holding a `purpose: "history"` runtime that the record now says is live.
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history"]);
+
+    read.end();
+    expect(await read.result).toBe("read");
+
+    // Ownership is the lease the reader took, not what `archivedAt` says now.
+    expect(harness.manager.getAgent(agent.id)).toBeNull();
+    expect(harness.closeCount() - closesBefore).toBe(1);
   } finally {
-    onCommit = null;
-    await manager.closeAgent(agentId).catch(() => undefined);
-    await manager.flush().catch(() => undefined);
-    await storage.flush().catch(() => undefined);
-    await rm(root, { recursive: true, force: true });
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+test("a live caller is never served the history runtime a reader is holding", async () => {
+  const harness = await createHistoryReadHarness("agent-history-live-adoption-");
+  const agentId = "00000000-0000-4000-8000-000000000412";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-live-adoption" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    const read = await unarchiveWithHistoryReadInside(harness, agent.id);
+    const historySession = harness.manager.getAgent(agent.id)?.session ?? null;
+    expect(historySession).not.toBeNull();
+
+    // A client opens the now-live agent while the read is still in scope. The
+    // read-only runtime is disowned and replaced, never handed over.
+    const live = ensureUnarchivedAgentLoaded(agent.id, harness.deps);
+    read.end();
+    expect(await read.result).toBe("read");
+    const loaded = await live;
+
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history", "interactive"]);
+    expect(loaded.session).not.toBe(historySession);
+    expect(harness.manager.getAgent(agent.id)?.session).toBe(loaded.session);
+    expect(harness.closeCount() - closesBefore).toBe(1);
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
+  }
+});
+
+test("a reader arriving during the release of an unarchived-window runtime loads its own", async () => {
+  const harness = await createHistoryReadHarness("agent-history-window-release-");
+  const agentId = "00000000-0000-4000-8000-000000000413";
+  try {
+    const agent = await harness.manager.createAgent(
+      { provider: "codex", cwd: harness.root },
+      agentId,
+      { workspaceId: "workspace-window-release" },
+    );
+    await harness.manager.archiveAgent(agent.id);
+    const closesBefore = harness.closeCount();
+
+    const read = await unarchiveWithHistoryReadInside(harness, agent.id);
+
+    // The second reader arrives while the release is inside `close()`: the
+    // runtime is gone from the manager but the provider process is still there.
+    let second: Promise<string> | null = null;
+    harness.onCloseSession(() => {
+      second = withAgentHistoryRead(agent.id, harness.deps, (loaded) => loaded.id);
+    });
+
+    read.end();
+    expect(await read.result).toBe("read");
+    expect(second).not.toBeNull();
+    expect(await second).toBe(agent.id);
+
+    // The record is live, so the second reader is a live caller: it gets its own
+    // interactive runtime and leaves it open, and only the history one closed.
+    expect(harness.resumes().map((resume) => resume.purpose)).toEqual(["history", "interactive"]);
+    expect(harness.closeCount() - closesBefore).toBe(1);
+    expect(harness.manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    await harness.manager.closeAgent(agentId).catch(() => undefined);
+    await harness.cleanup();
   }
 });
