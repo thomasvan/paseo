@@ -50,11 +50,12 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Two have landed upstream and their sections are gone. **Thirteen patches remain
+Two have landed upstream and their sections are gone. **Fourteen patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
-`mcp-protocol-version-clip` made it twelve on 2026-09-09, and
-`claude-history-follows-provider-env` made it twelve on 2026-09-11, which is
+`mcp-protocol-version-clip` made it twelve on 2026-09-09,
+`claude-history-follows-provider-env` made it thirteen on 2026-09-11, and
+`history-purpose-provider-contract` made it fourteen on 2026-09-21, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-09-11**, tag `v0.8.0` at
@@ -118,21 +119,22 @@ tip's `websocket-server.ts` typechecks only against a rebuilt
 stale protocol dist fails `build:lib` with an error that looks like upstream
 breakage and is not. The patch table:
 
-| PR                                                   | Patches                                                                                                                                           | Touches                                                                                       | Status                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                             | landed `cdb116314`, synced                                |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                             | closed 2026-09-08 — feature-PR sweep                      |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                      | open                                                      |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                              | closed 2026-09-08 — feature-PR sweep                      |
-| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                | landed `53c960747`; closed #3449 as superseded 2026-09-03 |
-| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                        | closed 2026-09-08 — feature-PR sweep                      |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts` | closed 2026-09-08 in favor of #4041 — follow-up remains   |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                               | open                                                      |
-| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                      | open — **no marker**                                      |
-| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
-| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                   | closed into #3640                                         |
-| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                | open                                                      |
-| —                                                    | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                   | [#4694](https://github.com/getpaseo/paseo/pull/4694)      |
+| PR                                                   | Patches                                                                                                                                           | Touches                                                                                                                               | Status                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                                                                     | landed `cdb116314`, synced                                |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                                                                     | closed 2026-09-08 — feature-PR sweep                      |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                                                              | open                                                      |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                                                                      | closed 2026-09-08 — feature-PR sweep                      |
+| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                                                        | landed `53c960747`; closed #3449 as superseded 2026-09-03 |
+| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                                                                | closed 2026-09-08 — feature-PR sweep                      |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                         | closed 2026-09-08 in favor of #4041 — follow-up remains   |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                                                                       | open                                                      |
+| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                                                              | open — **no marker**                                      |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                           | closed into #3640                                         |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                           | closed into #3640                                         |
+| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                        | open                                                      |
+| —                                                    | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                                                           | [#4694](https://github.com/getpaseo/paseo/pull/4694)      |
+| —                                                    | `history-purpose-provider-contract`                                                                                                               | six providers — `plugin-provider.ts`, `acp-agent.ts`, `codex-app-server-agent.ts`, `omp/agent.ts`, `opencode-agent.ts`, `pi/agent.ts` | no PR yet — **no marker**                                 |
 
 ## The five codex patches ride one PR
 
@@ -763,6 +765,80 @@ section.
   upstream's own `packages/server/src/server/agent/mcp-server.test.ts`, beside the archive
   cases it extends; two of the three tests are mutation-checked, and the third is labelled
   in-file as a structural guard that passes on unfixed code.
+
+### history-purpose-provider-contract
+
+Opened 2026-09-21. Every `resumeAgentFromPersistence` call the manager makes for a history
+read already threads `{ purpose: "history" }` — upstream's own `agent-loading.ts` puts it
+there for an archived agent (`archived-live-list`, above, never touches that file) — but most
+`resumeSession` implementations ignored the option and spawned a full interactive runtime to
+serve one read. Measured on one host: eleven such runtimes left resident, ~1.36 GB.
+
+- **What:** `purpose: "history"` is now a real per-provider contract instead of an ignored
+  hint. Claude and OMP already spawn nothing to serve a history read (Claude reads the
+  session's own `.jsonl`; OMP's `streamHistory` reads the session file directly) — Claude
+  gets a regression guard so a future edit that starts spawning here turns red, and OMP
+  returns a dedicated `OmpHistorySession` instead of calling `runtime.startSession`. Codex,
+  Pi, and the ACP-based providers (`acp-agent.ts`) spawn to serve the read and release that
+  process themselves right after: Codex holds its app-server transport through
+  `loadPersistedHistory()` and disposes it, populating the runtime-info cache first so the
+  manager's post-resume `getRuntimeInfo()` doesn't see `!connected` and respawn what was just
+  released; the ACP providers skip the interactive setup calls
+  (`applyConfiguredOverrides`) that would otherwise mutate a session opened only to read it,
+  then release the child process without the `unstable_closeSession` RPC a real teardown
+  sends; Pi's `streamHistory()` self-releases the runtime (and MCP/extension cleanup) after
+  its first read and replays a cache on any later call — see below for a completion the
+  first cut of this left open. Plugin-provider spawns nothing new per read — its session sits
+  on the plugin's shared connection — but still does not release what it holds. OpenCode's
+  shared-server path is the same, a refcount on an existing server rather than a new process
+  (its live event-stream subscription is skipped for a history purpose, and a
+  provider-declared `abort()` branch that could reach the shared server's session is also
+  skipped), but `resumeSession`'s dedicated-server path is not: when
+  `requiresDedicatedOpenCodeServer` is true it calls `acquireDedicated`, which starts a new
+  process regardless of purpose, and nothing calls `close()` on a history-purpose session, so
+  that process leaks in full — see `docs/agent-lifecycle.md`'s `purpose: "history"` paragraph,
+  which this branch corrected to state only what each provider's own code supports.
+- **What this branch deliberately does not do:** a shared helper releasing the read endpoints
+  by last-reader accounting went through four designs — a module-level refcount, a scope
+  object with an `AgentSession` ownership token, a manager-held lease, and an ownership
+  decision made inside the lifecycle lane — and all four failed independent cross-review on
+  the same shape, eight blocking findings across four rounds: state mutated from outside
+  `AgentManager`'s per-agent lifecycle lane (`runLifecycleMutation`, a tail-chained queue with no
+  re-entrancy — awaiting anything inside a lane operation that takes the lane for the same
+  agent deadlocks it permanently). That half is going upstream as an issue instead of landing
+  here. Plugin-provider's and OpenCode's leaks are the resulting, documented gap; do not
+  close it with a shared helper.
+- **Pi's release also covers the error and early-abandon paths**, not just the path where
+  `streamHistory()`'s read completes normally: the read is now wrapped in a `try`/`finally`,
+  so a `get_messages` RPC failure or a consumer that stops iterating early still reaches the
+  `resumePurpose === "history"` release. Only a _completed_ read populates
+  `historyReplayCache` — a partial one is not cached and replayed as if it were whole.
+  Regression tests: `releases the runtime when the history read throws mid-fetch` and
+  `releases the runtime when the history read is abandoned before it completes`
+  (`providers/pi/agent.test.ts`), both stated as mutant claims and executed both ways —
+  reverting the `try`/`finally` to the original "release only after the loop" shape fails
+  both with `expected "close" to be called 1 times, but got 0 times`; restored, the full
+  file passes 90/90.
+- **Sites:** derived, not hand-listed — `git diff --name-only 7f37d97ec 53816a5e4` (the
+  commit before this work branched, to its tip) against the file manifest the `Sync
+procedure` gate below derives (`git fetch upstream` succeeded; Set A from
+  `BASE=$(git merge-base HEAD upstream/main)` contains all 14 of these `packages/` paths).
+  Six provider sources: `plugin-provider.ts`, `providers/acp-agent.ts`,
+  `providers/codex-app-server-agent.ts`, `providers/omp/agent.ts`,
+  `providers/opencode-agent.ts`, `providers/pi/agent.ts`. Eight tests/harness files:
+  `plugin-provider.test.ts`, `providers/acp-agent.test.ts`,
+  `providers/claude/agent.spawn.test.ts`, `providers/codex-app-server-agent.test.ts`,
+  `providers/omp/agent.history-purpose.test.ts`, `providers/opencode-agent.test.ts`,
+  `providers/opencode/test-utils/test-opencode-harness.ts`, `providers/pi/agent.test.ts`.
+  Plus `docs/agent-lifecycle.md`, outside `packages/`.
+- **Coverage:** the seven test files above (excluding the harness file, which carries no
+  tests of its own) run clean by explicit path: 491/491 in 6.1s. `tsgo --noEmit` clean on
+  `packages/server`.
+- **No `SLP-PATCH` marker, deliberately.** This patch is expected to converge upstream, so
+  its diff is unmarked the same way `archived-live-list`'s and
+  `claude-history-follows-provider-env`'s are — a marker would falsely change the patch
+  census. Nothing here needs re-applying by hand; if it lands upstream, delete this section.
+- **Upstream status:** no PR opened yet.
 
 ## Sync procedure
 
