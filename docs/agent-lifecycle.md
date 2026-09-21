@@ -129,12 +129,19 @@ every provider. Claude and OMP never acquire anything: Claude's history comes fr
 Pi, and the ACP-based providers (`acp-agent.ts`) spawn to serve the read and terminate that process
 themselves once history is captured. Plugin-provider and OpenCode do not release: plugin-provider
 opens a provider session over its plugin's shared connection (`runtime.openSession`) and nothing
-closes it; OpenCode's resume holds an acquisition — a refcount on the shared OpenCode server, or a
-whole dedicated process when one is required — that only its own `close()` releases, and nothing
-calls `close()` on a history-purpose OpenCode session. Neither leak is a new process on every read:
-plugin-provider's and OpenCode's shared-server paths leak a held reference that blocks that shared
-process from ever idling down, not a fresh process per read; a dedicated OpenCode server is the one
-path that leaks a full process every time.
+closes it, leaving that session registered on the connection for as long as the connection lives —
+`getConnection` only ever lazy-connects, so whether the leftover registration keeps the plugin host
+process itself alive is up to that host's own lifecycle, external to this tree, not something
+plugin-provider.ts enforces. OpenCode's resume holds an acquisition — a refcount on the shared
+OpenCode server, or a whole dedicated process when one is required — that only its own `close()`
+releases, and nothing calls `close()` on a history-purpose OpenCode session; `server-manager.ts`
+gates `killServer` on that refcount reaching zero, so a leaked refcount there does block the shared
+server from ever idling down, and a leaked dedicated server (born `retired`) leaks a full process
+every time. Neither leak is a new process on every read: it is a held reference or registration that
+outlives the read which acquired it. On a provider that does release (Codex, Pi, ACP), a mutation
+issued afterward against that same archived-but-loaded agent — `agent.rewind.request`, for
+example — now errors instead of silently reaching the archived native session the leak used to leave
+open.
 
 Provider session connection owns every process it spawns until the session is registered with
 `AgentManager`. If initialization, persisted-session resume, or initial history hydration fails,

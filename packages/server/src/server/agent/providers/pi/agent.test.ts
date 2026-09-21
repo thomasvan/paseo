@@ -2818,4 +2818,68 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
     expect(closeSpy).not.toHaveBeenCalled();
     await session.close();
   });
+
+  test("releases the runtime when the history read throws mid-fetch", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = (await client.resumeSession(
+      {
+        provider: "pi",
+        sessionId: "pi-session-1",
+        nativeHandle: "/tmp/native-pi-session",
+        metadata: { cwd: "/workspace/project" },
+      },
+      undefined,
+      undefined,
+      { purpose: "history" },
+    )) as PiRpcAgentSession;
+    const fakeSession = pi.latestSession();
+    const closeSpy = vi.spyOn(fakeSession, "close");
+    const readError = new Error("get_messages RPC failed");
+    vi.spyOn(fakeSession, "getMessages").mockRejectedValueOnce(readError);
+
+    await expect(async () => {
+      for await (const _event of session.streamHistory()) {
+        // never reached
+      }
+    }).rejects.toThrow(readError);
+
+    // Mutant: a streamHistory() that only releases after the loop completes
+    // normally leaves the runtime open on this path (closeSpy uncalled).
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("releases the runtime when the history read is abandoned before it completes", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = (await client.resumeSession(
+      {
+        provider: "pi",
+        sessionId: "pi-session-1",
+        nativeHandle: "/tmp/native-pi-session",
+        metadata: { cwd: "/workspace/project" },
+      },
+      undefined,
+      undefined,
+      { purpose: "history" },
+    )) as PiRpcAgentSession;
+    const fakeSession = pi.latestSession();
+    fakeSession.messages = [
+      { role: "assistant", content: [{ type: "text", text: "first" }] },
+      { role: "assistant", content: [{ type: "text", text: "second" }] },
+    ];
+    const closeSpy = vi.spyOn(fakeSession, "close");
+
+    for await (const _event of session.streamHistory()) {
+      // Stop after the first event: the for-await-of loop calls .return() on
+      // the generator, which resumes the suspended yield as a return
+      // completion and runs the enclosing finally without reaching the code
+      // after the loop.
+      break;
+    }
+
+    // Mutant: releasing only after the loop finishes normally leaves the
+    // runtime open on an abandoned read (closeSpy uncalled).
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
 });
