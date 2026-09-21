@@ -769,10 +769,10 @@ section.
 ### history-purpose-provider-contract
 
 Opened 2026-09-21. Every `resumeAgentFromPersistence` call the manager makes for a history
-read already threads `{ purpose: "history" }` (`archived-live-list`, above, is what puts it
-there for an archived agent), but most `resumeSession` implementations ignored the option
-and spawned a full interactive runtime to serve one read. Measured on one host: eleven such
-runtimes left resident, ~1.36 GB.
+read already threads `{ purpose: "history" }` — upstream's own `agent-loading.ts` puts it
+there for an archived agent (`archived-live-list`, above, never touches that file) — but most
+`resumeSession` implementations ignored the option and spawned a full interactive runtime to
+serve one read. Measured on one host: eleven such runtimes left resident, ~1.36 GB.
 
 - **What:** `purpose: "history"` is now a real per-provider contract instead of an ignored
   hint. Claude and OMP already spawn nothing to serve a history read (Claude reads the
@@ -788,12 +788,16 @@ runtimes left resident, ~1.36 GB.
   then release the child process without the `unstable_closeSession` RPC a real teardown
   sends; Pi's `streamHistory()` self-releases the runtime (and MCP/extension cleanup) after
   its first read and replays a cache on any later call — see below for a completion the
-  first cut of this left open. OpenCode and plugin-provider spawn nothing new per read
-  (OpenCode's live event-stream subscription is skipped for a history purpose; a
+  first cut of this left open. Plugin-provider spawns nothing new per read — its session sits
+  on the plugin's shared connection — but still does not release what it holds. OpenCode's
+  shared-server path is the same, a refcount on an existing server rather than a new process
+  (its live event-stream subscription is skipped for a history purpose, and a
   provider-declared `abort()` branch that could reach the shared server's session is also
-  skipped) but still do not release what they hold — see
-  `docs/agent-lifecycle.md`'s `purpose: "history"` paragraph, which this branch corrected to
-  state only what each provider's own code supports.
+  skipped), but `resumeSession`'s dedicated-server path is not: when
+  `requiresDedicatedOpenCodeServer` is true it calls `acquireDedicated`, which starts a new
+  process regardless of purpose, and nothing calls `close()` on a history-purpose session, so
+  that process leaks in full — see `docs/agent-lifecycle.md`'s `purpose: "history"` paragraph,
+  which this branch corrected to state only what each provider's own code supports.
 - **What this branch deliberately does not do:** a shared helper releasing the read endpoints
   by last-reader accounting went through four designs — a module-level refcount, a scope
   object with an `AgentSession` ownership token, a manager-held lease, and an ownership
