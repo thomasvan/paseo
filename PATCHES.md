@@ -794,11 +794,16 @@ runtimes left resident, ~1.36 GB.
   skipped) but still do not release what they hold — see
   `docs/agent-lifecycle.md`'s `purpose: "history"` paragraph, which this branch corrected to
   state only what each provider's own code supports.
-- **What this branch deliberately does not do:** a generic release at the read endpoints (an
-  unconditional `close()` after `streamHistory()` drains) failed cross-review four times on
-  the same shape — state mutated from outside the owning provider's lifecycle lane — and
-  that half is going upstream as an issue instead of landing here. Plugin-provider's and
-  OpenCode's leaks are the resulting, documented gap; do not close it with a shared helper.
+- **What this branch deliberately does not do:** a shared helper releasing the read endpoints
+  by last-reader accounting went through four designs — a module-level refcount, a scope
+  object with an `AgentSession` ownership token, a manager-held lease, and an ownership
+  decision made inside the lifecycle lane — and all four failed independent cross-review on
+  the same shape, six cross-reads in total: state mutated from outside `AgentManager`'s
+  per-agent lifecycle lane (`runLifecycleMutation`, a tail-chained queue with no
+  re-entrancy — awaiting anything inside a lane operation that takes the lane for the same
+  agent deadlocks it permanently). That half is going upstream as an issue instead of landing
+  here. Plugin-provider's and OpenCode's leaks are the resulting, documented gap; do not
+  close it with a shared helper.
 - **Pi's release also covers the error and early-abandon paths**, not just the path where
   `streamHistory()`'s read completes normally: the read is now wrapped in a `try`/`finally`,
   so a `get_messages` RPC failure or a consumer that stops iterating early still reaches the
