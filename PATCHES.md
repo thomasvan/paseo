@@ -59,39 +59,31 @@ and `archived-live-list` arrived without it being updated,
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-09-23**, `upstream/main` at
-`d161b5987d7aa8f1978f45e81531a5fec2524c63` (`v0.9.1` plus 13 commits), merged by
-the commit that introduced this paragraph. It was pinned rather than
-`upstream/main` `6d37f7fd9`, two commits past it: #5253 and #5248 change plugin
-and ACP lifecycle, which the room does not run, but they touch the
-`acp-agent.ts` and `bootstrap.ts` patch sites and had not been through the dry
-run. All fourteen patches carried; one file conflicted and no fork test was
-adapted: `providers/claude/agent.test.ts`'s import block, where #5240 added
-`AgentPromptInput`, `AgentAttachment` and the prompt-attachment helpers beside
-`question-answer-required`'s `AgentPermissionRequest`. Both kept, in the order
-#3495's rebased head uses, so the file still converges with that PR. The merge
-brings #5229, which lets a history read load an archived agent whose working
-directory is gone: before it, `paseo logs` on such an agent failed with
-`Working directory does not exist`, the error behind the level-50
-`fetch_agent_timeline_request` lines in the room's `daemon.log` (304 of them
-between the 0.9.1 restart and this sync). `mcp-parity.e2e.test.ts` failed the
-same five tests before and after the merge — Suite E's four and one Suite D
-timeout.
-Previous upstream sync: **2026-09-23**, tag `v0.9.1` at
-`81865852011df86aa0ad0ae411cb2f5e4078153f`, merge `ebbc3167d`. All fourteen
-patches carried; two files conflicted — `codex-app-server-agent.ts`, where
-upstream #4736 replaced the `connected` boolean with `connectionState` (so
-`dispose-releases-foreground` sits after `this.connectionState = "disconnected"`
-and the Codex part of `history-purpose-provider-contract` was dropped for
-upstream's own history read), and `plugin-provider.test.ts`, where both sides
-added helpers at the same place. Two fork tests were adapted to 0.9: the
-already-idle interrupt test sets `connectionState`, and
-`agent-refresh-follows-provider-env.e2e.test.ts` subscribes with `subscribe: {}`
-because the 0.9 client assigns subscription ids itself; re-proved discriminating
-after the adaptation.
-Earlier upstream sync: **2026-09-11**, tag `v0.8.0` at
-`b8e24677e12b226c7c38c1c3a40649daa9f1152f`, merge
-`683d6e776e3aa29f213c925fe3bc6a21a261fb3c`. All twelve patches carried with
-no adaptation.
+`d6861f81e5e584aec9951dbcf7a37d9d2b7dfa9a` (`v0.9.1` plus 17 commits, the tip
+when merged), merged by the commit that introduced this paragraph. No conflict
+and no fork test adapted; 30 marker sites under 11 names in 12 files. Of its four
+commits past the previous sync, #5253 reorders daemon shutdown — agents close
+(each close bounded by a deadline) before plugins stop — and #5248 gives an ACP
+terminal the agent's launch environment; they touch `bootstrap.ts` and
+`acp-agent.ts` outside every patch hunk, and #5258 and #5255 touch neither
+server patch files nor the room's providers. None of the four fixes a carried
+patch, so the 2026-09-23 re-verification above still holds here.
+`mcp-parity.e2e.test.ts` failed the same five tests before and after the merge.
+Previous upstream sync: **2026-09-23**, `upstream/main` at `d161b5987`
+(`v0.9.1` plus 13), merge `99503082c`: one conflict, `providers/claude/agent.test.ts`'s
+import block after #5240, both sides kept in #3495's order. It brought #5229,
+which lets a history read load an archived agent whose working directory is gone;
+before it, `paseo logs` on such an agent failed with `Working directory does not
+exist`, the error behind the level-50 `fetch_agent_timeline_request` lines in the
+room's `daemon.log` (304 between the 0.9.1 restart and that sync, none after).
+Earlier upstream sync: **2026-09-23**, tag `v0.9.1` at
+`81865852011df86aa0ad0ae411cb2f5e4078153f`, merge `ebbc3167d`. `codex-app-server-agent.ts`
+conflicted with upstream #4736's `connectionState` (so `dispose-releases-foreground`
+sits after `this.connectionState = "disconnected"` and the Codex part of
+`history-purpose-provider-contract` gave way to upstream's own history read), and
+`plugin-provider.test.ts` took both sides' helpers; two fork tests were adapted to
+0.9 (`connectionState`; `subscribe: {}`). Before that, **2026-09-11**: tag `v0.8.0`
+at `b8e24677e`, merge `683d6e776`, twelve patches carried with no adaptation.
 Before that: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
 merge `9934a5a60`. One patch left in that merge: `native-tools-optin`. Its PR
 [#3449](https://github.com/getpaseo/paseo/pull/3449) was closed on 2026-09-03
@@ -148,22 +140,22 @@ tip's `websocket-server.ts` typechecks only against a rebuilt
 stale protocol dist fails `build:lib` with an error that looks like upstream
 breakage and is not. The patch table:
 
-| PR                                                   | Patches                                                                                                                                           | Touches                                                                                                                                           | Status                                                                                                          |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                                                                                 | landed `cdb116314`, synced                                                                                      |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                                                                                 | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23                                            |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                                                                          | open — QA evidence added 2026-09-23                                                                             |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                                                                                  | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23                                            |
-| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                                                                    | landed `53c960747`; closed #3449 as superseded 2026-09-03                                                       |
-| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                                                                            | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23                                            |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                                     | closed 2026-09-08 in favor of #4041 (still open 2026-09-23) — follow-up remains; fork branch deleted 2026-09-23 |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                                                                                   | open — rebased 2026-09-23 onto `d161b5987`                                                                      |
-| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                                                                          | open — **no marker**; QA evidence added 2026-09-23                                                              |
-| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                       | closed into #3640; fork branch deleted 2026-09-23                                                               |
-| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                       | closed into #3640; fork branch deleted 2026-09-23                                                               |
-| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                                    | open — QA evidence added 2026-09-23                                                                             |
-| [#4694](https://github.com/getpaseo/paseo/pull/4694) | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                                                                       | open — fixes the Claude half of issue #3481                                                                     |
-| [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | five providers — `plugin-provider.ts`, `acp-agent.ts`, `omp/agent.ts`, `opencode-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736) | open — **no marker**; QA evidence added 2026-09-23                                                              |
+| PR                                                   | Patches                                                                                                                                           | Touches                                                                                                                                           | Status                                                                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                                                                                 | landed `cdb116314`, synced                                                                                                                   |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                                                                                 | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                                                                          | open — QA evidence added 2026-09-23                                                                                                          |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                                                                                  | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670) |
+| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                                                                    | landed `53c960747`; closed #3449 as superseded 2026-09-03                                                                                    |
+| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                                                                            | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671) |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                                     | closed 2026-09-08 in favor of #4041 (still open 2026-09-23) — follow-up remains; fork branch deleted 2026-09-23                              |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                                                                                   | open — rebased 2026-09-23 onto `d161b5987`                                                                                                   |
+| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                                                                          | open — **no marker**; QA evidence added 2026-09-23                                                                                           |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                       | closed into #3640; fork branch deleted 2026-09-23                                                                                            |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                       | closed into #3640; fork branch deleted 2026-09-23                                                                                            |
+| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                                    | open — QA evidence added 2026-09-23                                                                                                          |
+| [#4694](https://github.com/getpaseo/paseo/pull/4694) | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                                                                       | open — fixes the Claude half of issue #3481                                                                                                  |
+| [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | five providers — `plugin-provider.ts`, `acp-agent.ts`, `omp/agent.ts`, `opencode-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736) | open — **no marker**; QA evidence added 2026-09-23                                                                                           |
 
 **Re-verified 2026-09-23** against `upstream/main` `d161b5987` (`v0.9.1` plus 13
 commits): upstream fixes none of the fourteen. `notifySafely("finished")` still
@@ -186,7 +178,12 @@ PRs without such a section gained one, measured on the room's deployment of this
 branch: #3094, #3803, #4570 and #5132 (#3495 already carried a measured
 Verification table, #4694 a QA section). The fork branches of the seven closed
 PRs — #3455, #3147, #4434, #3640, #3674, #3683 and #3449 — were deleted that day;
-each head survives upstream at `refs/pull/<n>/head`.
+each head survives upstream at `refs/pull/<n>/head`. The three
+patches the feature sweep closed have each had an open Ideas Discussion since
+2026-09-10 — `wakeup-each` #4669, `detached-arg` #4670 and
+`native-tools-injection-independent` #4671 — with no maintainer reply as of
+2026-09-23; #4670 carries one outside comment (2026-09-18) describing the same
+create-schema gap from the plugin side.
 
 ## The five codex patches ride one PR
 
@@ -521,7 +518,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
   opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
   right artifact if upstream asks for this to be opt-in.
 - **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
-- **Upstream status:** closed 2026-09-08 in the feature-PR sweep. [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 proposed `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, with `"once"` as the default and `"each"` as the re-arming mode. This branch keeps the derived form instead — see the note above the patch list.
+- **Upstream status:** closed 2026-09-08 in the feature-PR sweep; the workflow is argued in Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669). [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 proposed `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, with `"once"` as the default and `"each"` as the re-arming mode. This branch keeps the derived form instead — see the note above the patch list.
 
 ### detached-wakeup
 
@@ -574,7 +571,7 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
 - **Relation to `detached-wakeup`:** that patch makes a detached child _notify_ its caller;
   this one makes a detached child _requestable_ from the canonical shape. Independent fixes,
   different files.
-- **Upstream status:** closed 2026-09-08 in the feature-PR sweep — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, deleted from the fork 2026-09-23; its head survives at `refs/pull/3147/head`).
+- **Upstream status:** closed 2026-09-08 in the feature-PR sweep — [getpaseo/paseo#3147](https://github.com/getpaseo/paseo/pull/3147) (branch `fix/canonical-detached-create-agent`, deleted from the fork 2026-09-23; its head survives at `refs/pull/3147/head`). The workflow is argued in Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670).
 - **Retirement and revisit:** this patch retires when upstream owns canonical detached
   creation — either `#3147 lands first` or upstream ships a behaviorally equivalent advertised
   path some other way. In that case, drop the marker and this section during the incorporating
@@ -716,7 +713,8 @@ activity, while Codex and OMP seats were unaffected.
 Opened the same day the 2026-09-07 sync retired `native-tools-optin`, after a
 Lead review showed the retirement alone breaks the room. It was closed on
 2026-09-08 in the feature-PR sweep — see the table above and
-[#4434](https://github.com/getpaseo/paseo/pull/4434).
+[#4434](https://github.com/getpaseo/paseo/pull/4434). The workflow is argued in Discussion
+[#4671](https://github.com/getpaseo/paseo/discussions/4671).
 
 - **What:** upstream #4277 kept `agentManager.setPaseoToolsEnabled` and the
   provider-runtime catalog switch tied to MCP injection
