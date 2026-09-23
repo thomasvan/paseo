@@ -158,13 +158,12 @@ commits): upstream fixes none of the fourteen. `notifySafely("finished")` still
 takes no `terminal: false`; `create.ts` still passes `requireParentOwnership: true`;
 the canonical agent-scoped `create_agent` still returns `detached: false`; the
 native catalog is still gated on `mcpInjectIntoAgents` at all seven call sites; the
-lockfile still pins `@modelcontextprotocol/sdk` 1.29.0 and 1.30.0, the npm latest,
-still lacks `2026-07-28`, which Claude Code 2.1.280 still speaks; Codex
+lockfile still pins `@modelcontextprotocol/sdk` 1.29.0, and neither it nor 1.30.0, the npm latest, knows `2026-07-28`, which Claude Code 2.1.280 still speaks; Codex
 `interrupt()` still throws on an unidentified turn, `startTurn` still refuses at
 once and `disposeClient()` still leaves the slot; the Claude provider still
 deletes a pending permission before any deliverability check and still reads
 `process.env.CLAUDE_CONFIG_DIR`; `list_agents` still filters archives on the
-stored branch only; omp, pi, acp and plugin still ignore `purpose`. A dry-run
+stored branch only; omp, pi, acp, opencode and plugin still ignore `purpose`. A dry-run
 merge of that commit conflicts only in `providers/claude/agent.test.ts`'s import
 block (#5240 added imports beside `question-answer-required`'s; keep both) and
 keeps 30 marker sites under 11 names.

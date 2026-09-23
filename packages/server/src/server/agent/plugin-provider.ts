@@ -1063,9 +1063,11 @@ class PluginAgentSession implements AgentSession {
     // carries everything session.open replayed before session.ready
     // resolved, so subscribing here would only attach this read to the
     // provider's live event stream for events it has no use for. Subagent
-    // replay (attachChild) writes to this.history/this.listeners directly
-    // and does not depend on this subscription. Nothing closes the
-    // provider session this bridge opened once the read completes.
+    // replay (attachChild) is driven by PluginAgentClient, writes to
+    // this.history/this.listeners directly, and resolves its parent through
+    // the subagentIdsBySession seed above — none of which depends on this
+    // subscription. Nothing closes the provider session this bridge opened
+    // once the read completes.
     if (!historyPurpose) {
       this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
     }
