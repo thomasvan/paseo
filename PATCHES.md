@@ -58,29 +58,41 @@ and `archived-live-list` arrived without it being updated,
 `history-purpose-provider-contract` made it fourteen on 2026-09-21, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
-Current upstream sync: **2026-09-23**, tag `v0.9.1` at
-`81865852011df86aa0ad0ae411cb2f5e4078153f` (pinned rather than
-`upstream/main`, which was ten commits past it), merged by the commit that
-introduced this paragraph. All fourteen patches carried; two files conflicted
-and two fork tests were adapted:
-`codex-app-server-agent.ts` — upstream #4736 replaced the `connected` boolean
-with `connectionState`, so `dispose-releases-foreground` now sits after
-`this.connectionState = "disconnected"`, and the Codex part of
-`history-purpose-provider-contract` was dropped for upstream's own history
-read (see that section); `plugin-provider.test.ts` — both sides added test
-helpers at the same place, both kept. The fork's already-idle interrupt test
-sets `connectionState` instead of `connected`, and
-`agent-refresh-follows-provider-env.e2e.test.ts` subscribes with
-`subscribe: {}` because the 0.9 client assigns subscription ids itself and
-throws on a caller's — the change upstream made to its sibling
-`agent-refresh-rehydrates-timeline` test. Re-proved discriminating after the
-adaptation: `resolveConfigDir()` reading `process.env` fails it with
-`expected '' to contain 'real dir hello'`.
-Previous upstream sync: **2026-09-11**, tag `v0.8.0` at
+Current upstream sync: **2026-09-23**, `upstream/main` at
+`d161b5987d7aa8f1978f45e81531a5fec2524c63` (`v0.9.1` plus 13 commits), merged by
+the commit that introduced this paragraph. It was pinned rather than
+`upstream/main` `6d37f7fd9`, two commits past it: #5253 and #5248 change plugin
+and ACP lifecycle, which the room does not run, but they touch the
+`acp-agent.ts` and `bootstrap.ts` patch sites and had not been through the dry
+run. All fourteen patches carried; one file conflicted and no fork test was
+adapted: `providers/claude/agent.test.ts`'s import block, where #5240 added
+`AgentPromptInput`, `AgentAttachment` and the prompt-attachment helpers beside
+`question-answer-required`'s `AgentPermissionRequest`. Both kept, in the order
+#3495's rebased head uses, so the file still converges with that PR. The merge
+brings #5229, which lets a history read load an archived agent whose working
+directory is gone: before it, `paseo logs` on such an agent failed with
+`Working directory does not exist`, the error behind the level-50
+`fetch_agent_timeline_request` lines in the room's `daemon.log` (304 of them
+between the 0.9.1 restart and this sync). `mcp-parity.e2e.test.ts` failed the
+same five tests before and after the merge — Suite E's four and one Suite D
+timeout.
+Previous upstream sync: **2026-09-23**, tag `v0.9.1` at
+`81865852011df86aa0ad0ae411cb2f5e4078153f`, merge `ebbc3167d`. All fourteen
+patches carried; two files conflicted — `codex-app-server-agent.ts`, where
+upstream #4736 replaced the `connected` boolean with `connectionState` (so
+`dispose-releases-foreground` sits after `this.connectionState = "disconnected"`
+and the Codex part of `history-purpose-provider-contract` was dropped for
+upstream's own history read), and `plugin-provider.test.ts`, where both sides
+added helpers at the same place. Two fork tests were adapted to 0.9: the
+already-idle interrupt test sets `connectionState`, and
+`agent-refresh-follows-provider-env.e2e.test.ts` subscribes with `subscribe: {}`
+because the 0.9 client assigns subscription ids itself; re-proved discriminating
+after the adaptation.
+Earlier upstream sync: **2026-09-11**, tag `v0.8.0` at
 `b8e24677e12b226c7c38c1c3a40649daa9f1152f`, merge
 `683d6e776e3aa29f213c925fe3bc6a21a261fb3c`. All twelve patches carried with
 no adaptation.
-Earlier upstream sync: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
+Before that: **2026-09-07**, `upstream/main` at `c424f8292` (0.7.2),
 merge `9934a5a60`. One patch left in that merge: `native-tools-optin`. Its PR
 [#3449](https://github.com/getpaseo/paseo/pull/3449) was closed on 2026-09-03
 as superseded by the maintainer's own
