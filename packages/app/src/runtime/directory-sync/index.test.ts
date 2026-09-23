@@ -22,6 +22,8 @@ import {
   type DirectoryCheckpointStorage,
 } from "./index";
 
+import { subscriptionFixture } from "../subscription-fixture";
+
 type WorkspaceFetchResult = Awaited<ReturnType<DaemonClient["fetchWorkspaces"]>>;
 type ProjectListResult = Awaited<ReturnType<DaemonClient["listProjects"]>>;
 type AgentFetchResult = Awaited<ReturnType<DaemonClient["fetchAgents"]>>;
@@ -121,6 +123,25 @@ class FakeDirectoryClient {
         },
       ],
     };
+  }
+
+  observeAgents(options: Parameters<DaemonClient["observeAgents"]>[0]) {
+    return subscriptionFixture(this.fetchAgents({ ...options, subscribe: {} }), (receive) =>
+      this.on("agent_update", receive),
+    );
+  }
+
+  observeWorkspaces(options: Parameters<DaemonClient["observeWorkspaces"]>[0]) {
+    return subscriptionFixture(this.fetchWorkspaces(options), (receive) =>
+      this.on("workspace_update", receive),
+    );
+  }
+
+  observeEvents(events: readonly SessionOutboundMessage["type"][]) {
+    return subscriptionFixture(Promise.resolve({ events }), (receive) => {
+      const stops = events.map((event) => this.on(event, receive));
+      return () => stops.forEach((stop) => stop());
+    });
   }
 
   getLastServerInfoMessage(): null {
@@ -304,7 +325,7 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
-  it("persists accepted script status updates through the directory owner", () => {
+  it("persists accepted script status updates through the directory owner", async () => {
     const serverId = "script-status-owner";
     serverIds.add(serverId);
     const client = new FakeDirectoryClient();
@@ -351,6 +372,14 @@ describe("DirectorySync session readiness", () => {
     });
     const store = useSessionStore.getState();
     store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceMultiplicity: true },
+    });
+    directory.setDemand({}, true);
+    await directory.refreshDemand();
     directory.acceptWorkspaces([workspace]);
     commits.length = 0;
 
@@ -611,6 +640,63 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
+  it("reconciles agent changes on top of the accepted cached baseline", async () => {
+    const serverId = "cached-agent-changes";
+    serverIds.add(serverId);
+    const client = new FakeDirectoryClient();
+    const cachedAgent = createAgent(serverId, "cached-agent");
+    const releaseNetwork = client.holdAgentFetch();
+    const directory = new DirectorySync(
+      serverId,
+      {
+        onAgentStoppedRunning: () => undefined,
+        markAgentLoading: () => undefined,
+        markAgentReady: () => undefined,
+        markAgentError: () => undefined,
+      },
+      {
+        readAgent: async () => undefined,
+        readWorkspace: async () => undefined,
+        readDirectory: async () => ({
+          agents: new Map([[cachedAgent.id, cachedAgent]]),
+          workspaces: new Map(),
+          projects: new Map(),
+          checkpoint: { agents: { generation: "g", afterSeq: 7 } },
+        }),
+        commitDirectoryMutations: () => undefined,
+      },
+    );
+    directory.connectionChanged({
+      client: client as unknown as DaemonClient,
+      status: "online",
+      source: { clientGeneration: 1, connectionEpoch: 1 },
+    });
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceMultiplicity: true, directorySync: true },
+    });
+
+    const refresh = directory.refreshAgents();
+    await expect.poll(() => client.fetchAgentsCalls).toBe(1);
+    releaseNetwork({
+      requestId: "agents",
+      entries: [],
+      pageInfo: { hasMore: false, nextCursor: null, prevCursor: null },
+      sync: { generation: "g", headSeq: 7, mode: "changes", removals: [] },
+    });
+    await refresh;
+
+    expect(client.lastAgentOptions).toMatchObject({
+      sync: { generation: "g", afterSeq: 7 },
+    });
+    expect(useSessionStore.getState().sessions[serverId]?.agents.has(cachedAgent.id)).toBe(true);
+    directory.dispose();
+  });
+
   it("does not use a cached checkpoint when the corresponding cache read loses its race", async () => {
     const serverId = "late-directory-cache";
     serverIds.add(serverId);
@@ -652,6 +738,8 @@ describe("DirectorySync session readiness", () => {
       features: { workspaceMultiplicity: true, directorySync: true },
     });
 
+    directory.setAgentRouteDemand(["agent-1"]);
+    await directory.refreshDemand();
     const refresh = directory.refreshWorkspaces();
     await Promise.resolve();
     client.emit({
@@ -735,10 +823,7 @@ describe("DirectorySync session readiness", () => {
     useSessionStore.getState().initializeSession(serverId, client as unknown as DaemonClient, 1);
 
     const load = directory.loadCachedAgent(cachedAgent.id);
-    client.emit({
-      type: "agent_deleted",
-      payload: { agentId: cachedAgent.id, requestId: "delete-live" },
-    });
+    directory.removeAgent(cachedAgent.id);
     releaseAgent(cachedAgent);
     await load;
 
@@ -843,14 +928,14 @@ describe("DirectorySync session readiness", () => {
     });
 
     await directory.refreshAgents({
-      subscribe: { subscriptionId: `app:${serverId}` },
+      subscribe: {},
       page: { limit: 200 },
     });
 
     expect(client.lastAgentOptions).toEqual({
       scope: "active",
       sort: [{ key: "updated_at", direction: "desc" }],
-      subscribe: { subscriptionId: `app:${serverId}` },
+      subscribe: {},
       page: { limit: 200 },
       sync: { generation: "generation", afterSeq: 12 },
     });
@@ -1045,8 +1130,9 @@ describe("DirectorySync session readiness", () => {
     });
     const completeFetch = client.holdWorkspaceFetch();
 
-    const refresh = directory.refreshWorkspaces({ subscribe: true });
-    await Promise.resolve();
+    directory.setDemand({}, true);
+    const refresh = directory.refreshDemand();
+    await expect.poll(() => client.fetchWorkspacesCalls).toBe(1);
     client.emit({
       type: "workspace_update",
       payload: {
@@ -1100,7 +1186,7 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
-  it("buffers project updates from the online epoch before workspace hydration starts", async () => {
+  it("ignores passive project events before directory demand", async () => {
     const serverId = "project-before-workspace-hydration";
     const { client, directory } = createDirectory(serverId);
     const store = useSessionStore.getState();
@@ -1130,12 +1216,9 @@ describe("DirectorySync session readiness", () => {
     await directory.refreshWorkspaces({ subscribe: true });
 
     expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(true);
-    expect(
-      useSessionStore.getState().sessions[serverId]?.projects.get("early-project"),
-    ).toMatchObject({
-      projectDisplayName: "Early project",
-      projectRootPath: "/repo/early-project",
-    });
+    expect(useSessionStore.getState().sessions[serverId]?.projects.has("early-project")).toBe(
+      false,
+    );
     directory.dispose();
   });
 });
@@ -1229,6 +1312,14 @@ it("fills every cached workspace beneath live updates received during the SQLite
     status: "online",
     source: { clientGeneration: 1, connectionEpoch: 1 },
   });
+  useSessionStore.getState().updateSessionServerInfo(serverId, {
+    serverId,
+    hostname: null,
+    version: "test",
+    features: { workspaceMultiplicity: true },
+  });
+  directory.setAgentRouteDemand(["agent"]);
+  await directory.refreshDemand();
   let updated = false;
   holdRead(async () => {
     if (updated) return;

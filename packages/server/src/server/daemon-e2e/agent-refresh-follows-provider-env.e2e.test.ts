@@ -124,7 +124,7 @@ describe("daemon E2E - refresh follows the provider's own CLAUDE_CONFIG_DIR, not
     client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
     await client.connect();
     await client.fetchAgents({
-      subscribe: { subscriptionId: "refresh-provider-env-test" },
+      subscribe: {},
     });
 
     const imported = await client.importAgent({ provider: "claude", sessionId, cwd });
