@@ -50,12 +50,13 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Two have landed upstream and their sections are gone. **Fourteen patches remain
+Two have landed upstream and their sections are gone. **Fifteen patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
-`claude-history-follows-provider-env` made it thirteen on 2026-09-11, and
-`history-purpose-provider-contract` made it fourteen on 2026-09-21, which is
+`claude-history-follows-provider-env` made it thirteen on 2026-09-11,
+`history-purpose-provider-contract` made it fourteen on 2026-09-21, and
+`acp-provider-mcp-servers` made it fifteen on 2026-09-25, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-09-23**, `upstream/main` at
@@ -156,6 +157,7 @@ breakage and is not. The patch table:
 | [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                                    | open — QA evidence added 2026-09-23                                                                                                          |
 | [#4694](https://github.com/getpaseo/paseo/pull/4694) | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                                                                       | open — fixes the Claude half of issue #3481                                                                                                  |
 | [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | five providers — `plugin-provider.ts`, `acp-agent.ts`, `omp/agent.ts`, `opencode-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736) | open — **no marker**; QA evidence added 2026-09-23                                                                                           |
+| —                                                    | `acp-provider-mcp-servers`                                                                                                                        | `generic-acp-agent.ts`, `acp-agent.ts`                                                                                                            | not yet opened upstream — room-local; landed on this branch 2026-09-25                                                                       |
 
 **Re-verified 2026-09-23** against `upstream/main` `d161b5987` (`v0.9.1` plus 13
 commits): upstream fixes none of the fourteen. `notifySafely("finished")` still
@@ -929,6 +931,49 @@ procedure` gate below derives (`git fetch upstream` succeeded; Set A from
   guard as a tripwire for an upstream edit that starts spawning on a Claude resume. Its
   omp, pi, acp, opencode and plugin sources are otherwise identical to the PR head.
 
+### acp-provider-mcp-servers
+
+Added 2026-09-25 for the room's `dsh-peer` provider (DeepSeek's ACP harness), which mounts
+the MCP servers listed in `session/new` before publishing the agent — so a seat's _first_
+turn carries the tools, rather than picking them up mid-session as the room's global rows
+connect. Background and measured evidence:
+`~/.local/state/airoom/spikes/dsh-room/phase1b-mcp-per-session.md`. Human-decided design.
+
+- **What:** `GenericACPProviderParamsSchema`
+  (`packages/server/src/server/agent/providers/generic-acp-agent.ts`) gains an optional
+  `mcpServers`, a record keyed by server name whose values are `stdio`
+  (`type: "stdio"`, absolute `command`, optional `args`/`env`) or `http`
+  (`type: "http"`, required `url`, optional `headers`) — each entry `.strict()`, so an
+  unknown key inside one is refused, a relative `command` is refused (`node:path`
+  `isAbsolute`), and an `http` entry without `url` is refused, all at params parse.
+  `ACPAgentClient` and `ACPAgentSession` (`acp-agent.ts`) gain a `providerMcpServers` option
+  that `GenericACPAgentClient` fills from those params and threads through both
+  `createSession` and `resumeSession`. `acpMcpServers()` now returns
+  `normalizeMcpServers({ ...this.providerMcpServers, ...this.config.mcpServers })` when
+  `supportsMcpServers` is true — the agent's own `config.mcpServers` wins a name clash —
+  and stays `[]` when `supportsMcpServers` is false, exactly as before. The four probe
+  `session/new`/`loadSession` call sites (catalog refresh, import-history preview) are
+  untouched: they still pass `mcpServers: []` literally, so no provider server is spawned
+  for a probe.
+- **`sse` is deliberately not accepted.** `McpServerConfig` in `agent-sdk-types.ts` has a
+  third variant, but dsh-peer — the only measured consumer — only speaks `stdio` and
+  `http`, and the brief's contract names just those two. Add it if a real consumer needs it.
+- **Sites:** `generic-acp-agent.ts` (schema + one `providerMcpServers` pass-through at the
+  `super()` call), `acp-agent.ts` (two options interfaces, two class fields, two
+  constructor assignments, two session-construction call sites, and `acpMcpServers()`
+  itself) — seven code sites; tests sit beside each file's existing suite
+  (`generic-acp-agent.test.ts`, `acp-agent.test.ts`).
+- **Coverage:** `generic-acp-agent.test.ts` — provider params `mcpServers` reach
+  `providerMcpServers` on the client; a relative stdio `command`, a `http` entry with no
+  `url`, and an unknown key inside an entry are each refused at parse. `acp-agent.test.ts`
+  — `acpMcpServers()` merges provider-level servers in; the agent's own `config.mcpServers`
+  wins a name clash; `supportsMcpServers: false` drops provider-level servers too; and an
+  end-to-end `initializeNewSession()` case asserts the merged list reaches the mocked
+  `connection.newSession` call directly, not just `acpMcpServers()`'s return value.
+- **Upstream status:** not yet opened. This is a room-local need (dsh-peer is not an
+  upstream-shipped provider); revisit whether to propose it upstream once the room shape
+  has run for a while.
+
 ## Sync procedure
 
 First, derive the patch-owned file manifest, then check whether upstream touched
@@ -1061,24 +1106,24 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured 2026-09-11 after `claude-history-follows-provider-env`
-# landed on top of the `HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a` sync
-# baseline (30 sites, 11 names, 12 files): the package-scoped command below
-# now sums to 30 sites; expect 11 names across 30 code/test sites in 12 files,
-# and use the per-name manifest below -- a bare total hides a site moving from
-# one patch to another. This file is excluded because it quotes marker-shaped
-# strings in its own prose, in a number that changes whenever the prose does;
-# include it and the gate can never pass on a healthy tree. Note -I
-# (--no-filename): -o alone prefixes each match with its path, so sort -u
-# would dedupe path:name pairs and return one line per file, not per name.
+# Marker gate. Measured 2026-09-25 after `acp-provider-mcp-servers` landed on
+# top of the `HEAD=6e41ee81a` sync baseline (30 sites, 11 names, 12 files): the
+# package-scoped command below now sums to 48 sites; expect 12 names across 48
+# code/test sites in 16 files, and use the per-name manifest below -- a bare
+# total hides a site moving from one patch to another. This file is excluded
+# because it quotes marker-shaped strings in its own prose, in a number that
+# changes whenever the prose does; include it and the gate can never pass on a
+# healthy tree. Note -I (--no-filename): -o alone prefixes each match with its
+# path, so sort -u would dedupe path:name pairs and return one line per file,
+# not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 11
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 12
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
-#    6 native-tools-injection-independent   2 force-cancel-releases-foreground
-#    6 native-tools-injection-independent  2 detached-arg
-#    4 wakeup-each                          3 interrupt-releases-foreground
-#    3 replace-awaits-teardown              1 dispose-releases-foreground
-#    3 detached-wakeup                      1 dead-run-settles
+#   18 acp-provider-mcp-servers               2 force-cancel-releases-foreground
+#    6 native-tools-injection-independent     2 detached-arg
+#    4 wakeup-each                            3 interrupt-releases-foreground
+#    3 replace-awaits-teardown                1 dispose-releases-foreground
+#    3 detached-wakeup                        1 dead-run-settles
 #    2 question-answer-required
 #    3 mcp-protocol-version-clip
 # The census is scoped to packages/ because that is the measured code/test

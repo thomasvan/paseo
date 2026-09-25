@@ -2570,6 +2570,158 @@ describe("ACPAgentSession", () => {
     expect(asInternals<ACPSessionInternals>(session).acpMcpServers()).toEqual([]);
   });
 
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("merges provider-level MCP servers into acpMcpServers when the provider supports MCP", () => {
+    const session = new ACPAgentSession(
+      {
+        provider: "generic-acp",
+        cwd: "/tmp/paseo-acp-test",
+      },
+      {
+        provider: "generic-acp",
+        logger: createTestLogger(),
+        defaultCommand: ["generic-acp", "serve"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+        providerMcpServers: {
+          serena: {
+            type: "stdio",
+            command: "/usr/local/bin/serena",
+            args: ["start-mcp-server"],
+          },
+        },
+      },
+    );
+
+    expect(asInternals<ACPSessionInternals>(session).acpMcpServers()).toEqual([
+      { name: "serena", command: "/usr/local/bin/serena", args: ["start-mcp-server"], env: [] },
+    ]);
+  });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("the agent's own config.mcpServers wins a name clash with provider-level MCP servers", () => {
+    const session = new ACPAgentSession(
+      {
+        provider: "generic-acp",
+        cwd: "/tmp/paseo-acp-test",
+        mcpServers: {
+          serena: { type: "stdio", command: "/usr/local/bin/serena-agent" },
+        },
+      },
+      {
+        provider: "generic-acp",
+        logger: createTestLogger(),
+        defaultCommand: ["generic-acp", "serve"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+        providerMcpServers: {
+          serena: { type: "stdio", command: "/usr/local/bin/serena-provider" },
+        },
+      },
+    );
+
+    expect(asInternals<ACPSessionInternals>(session).acpMcpServers()).toEqual([
+      { name: "serena", command: "/usr/local/bin/serena-agent", args: [], env: [] },
+    ]);
+  });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("drops provider-level MCP servers too when the provider does not support MCP", () => {
+    const session = new ACPAgentSession(
+      {
+        provider: "no-mcp-acp",
+        cwd: "/tmp/paseo-acp-test",
+      },
+      {
+        provider: "no-mcp-acp",
+        logger: createTestLogger(),
+        defaultCommand: ["no-mcp-acp", "serve"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: false,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+        providerMcpServers: {
+          serena: { type: "stdio", command: "/usr/local/bin/serena" },
+        },
+      },
+    );
+
+    expect(asInternals<ACPSessionInternals>(session).acpMcpServers()).toEqual([]);
+  });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("session/new carries provider-level MCP servers for a real session", async () => {
+    const newSession = vi.fn().mockResolvedValue({
+      sessionId: "session-1",
+      modes: null,
+      models: null,
+      configOptions: [],
+    });
+
+    class TestSession extends ACPAgentSession {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        return {
+          child: createProbeChildStub(),
+          connection: { newSession } as unknown as ClientSideConnection,
+          initialize: { agentCapabilities: {} },
+        } as SpawnedACPProcess;
+      }
+    }
+
+    const session = new TestSession(
+      { provider: "generic-acp", cwd: "/tmp/paseo-acp-test" },
+      {
+        provider: "generic-acp",
+        logger: createTestLogger(),
+        defaultCommand: ["generic-acp", "serve"],
+        defaultModes: [],
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: true,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+        },
+        providerMcpServers: {
+          serena: {
+            type: "stdio",
+            command: "/usr/local/bin/serena",
+            args: ["start-mcp-server"],
+          },
+        },
+      },
+    );
+
+    await session.initializeNewSession();
+
+    expect(newSession).toHaveBeenCalledWith({
+      cwd: "/tmp/paseo-acp-test",
+      mcpServers: [
+        { name: "serena", command: "/usr/local/bin/serena", args: ["start-mcp-server"], env: [] },
+      ],
+    });
+  });
+
   test("summarizes JSON-RPC error details without stringifying objects", () => {
     const summary = summarizeACPRequestError(
       new RequestError(-32603, "Internal error", {

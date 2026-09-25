@@ -82,4 +82,102 @@ describe("GenericACPAgentClient", () => {
       },
     });
   });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("passes provider params mcpServers through as providerMcpServers", () => {
+    const _client = new GenericACPAgentClient({
+      logger: createTestLogger(),
+      command: ["dsh-peer", "acp"],
+      providerParams: {
+        supportsMcpServers: true,
+        mcpServers: {
+          serena: {
+            type: "stdio",
+            command: "/usr/local/bin/serena",
+            args: ["start-mcp-server"],
+            env: { FOO: "bar" },
+          },
+          paseo: {
+            type: "http",
+            url: "http://127.0.0.1:6767/mcp",
+            headers: { Authorization: "Bearer token" },
+          },
+        },
+      },
+    });
+    void _client;
+
+    expect(mockState.superConstructorOptions.at(-1)).toMatchObject({
+      providerMcpServers: {
+        serena: {
+          type: "stdio",
+          command: "/usr/local/bin/serena",
+          args: ["start-mcp-server"],
+          env: { FOO: "bar" },
+        },
+        paseo: {
+          type: "http",
+          url: "http://127.0.0.1:6767/mcp",
+          headers: { Authorization: "Bearer token" },
+        },
+      },
+    });
+  });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("refuses a provider mcpServers stdio entry with a relative command at params parse", () => {
+    expect(
+      () =>
+        new GenericACPAgentClient({
+          logger: createTestLogger(),
+          command: ["dsh-peer", "acp"],
+          providerParams: {
+            mcpServers: {
+              serena: {
+                type: "stdio",
+                command: "serena",
+              },
+            },
+          },
+        }),
+    ).toThrow();
+  });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("refuses a provider mcpServers http entry without a url at params parse", () => {
+    expect(
+      () =>
+        new GenericACPAgentClient({
+          logger: createTestLogger(),
+          command: ["dsh-peer", "acp"],
+          providerParams: {
+            mcpServers: {
+              paseo: {
+                type: "http",
+              },
+            },
+          },
+        }),
+    ).toThrow();
+  });
+
+  // SLP-PATCH(acp-provider-mcp-servers)
+  test("refuses a provider mcpServers entry with an unknown key at params parse", () => {
+    expect(
+      () =>
+        new GenericACPAgentClient({
+          logger: createTestLogger(),
+          command: ["dsh-peer", "acp"],
+          providerParams: {
+            mcpServers: {
+              serena: {
+                type: "stdio",
+                command: "/usr/local/bin/serena",
+                unknownField: "nope",
+              },
+            },
+          },
+        }),
+    ).toThrow();
+  });
 });
