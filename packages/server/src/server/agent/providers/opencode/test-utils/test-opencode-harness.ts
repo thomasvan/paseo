@@ -29,10 +29,6 @@ export class TestOpenCodeHarness implements OpenCodeServerManagerLike {
 
   server = { port: 1234, url: "http://127.0.0.1:1234" };
 
-  get eventListenerCount(): number {
-    return this.eventListeners.size;
-  }
-
   enqueueClient(client: TestOpenCodeClient): void {
     client.observeEvents((event) => {
       const input =

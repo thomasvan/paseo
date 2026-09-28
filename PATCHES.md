@@ -50,18 +50,46 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Two have landed upstream and their sections are gone. **Fifteen patches remain
+Three have landed upstream and their sections are gone. **Fourteen patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
 `claude-history-follows-provider-env` made it thirteen on 2026-09-11,
-`history-purpose-provider-contract` made it fourteen on 2026-09-21, and
-`acp-provider-mcp-servers` made it fifteen on 2026-09-25, which is
+`history-purpose-provider-contract` made it fourteen on 2026-09-21,
+`acp-provider-mcp-servers` made it fifteen on 2026-09-25, and the v0.10.0 sync
+dropped `claude-history-follows-provider-env`, which upstream shipped as #5437, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
-Current upstream sync: **2026-09-23**, `upstream/main` at
+Current upstream sync: **2026-09-28**, tag `v0.10.0` at
+`c481ecf3e101326e3758d419341bc4faaf5b4f98` (on `upstream/main`), merged by the
+commit that introduced this paragraph, with the patch set reviewed against it
+first. Four files conflicted. `providers/claude/agent.ts` took upstream's #5437
+at the three config-dir sites, and the fork's `resolveConfigDir()` went with the
+patch. `providers/pi/agent.ts` re-applied `history-purpose-provider-contract`'s
+`try`/`finally` release around upstream's new `streamPiHistory` call (#5309 added
+the extension host and the close signal, and `capturedUserEntries` is
+`contextUserEntries` now). `providers/opencode-agent.ts` took upstream's side,
+because that half of the patch was dropped (see its section). In
+`agent-mcp.e2e.test.ts`, `mcp-protocol-version-clip`'s helper sits beside
+upstream's offline-daemon helpers. Everything else auto-merged. Three patches
+changed shape:
+`claude-history-follows-provider-env` was **dropped** (#4694 closed on
+2026-09-26 in favour of #5437, merged as `76a9781ba`, which resolves the Claude
+config dir from the provider's launch env for history, the import list and the
+model catalog — the same four sites; its fork-only e2e test left with it, and
+upstream's `claude-provider-config-dir-history.e2e.test.ts` covers the history
+read). `history-purpose-provider-contract` was **narrowed** to the two providers
+the room runs seats on that need it, pi and the ACP family; its omp, opencode and
+plugin-provider halves, the Claude and Codex guard tests and the
+`docs/agent-lifecycle.md` edit now read as upstream's. `native-tools-injection-independent`
+is kept, but **for a different reason** than the one it was written for (see its
+section). Every other patch is carried unchanged. #5407 now replaces an armed
+finish watcher when the same caller arms another for the same child, and
+`wakeup-each` keeps working through that change: its re-armed watcher is the
+armed one that a later arm replaces.
+Previous upstream sync: **2026-09-23**, `upstream/main` at
 `d6861f81e5e584aec9951dbcf7a37d9d2b7dfa9a` (`v0.9.1` plus 17 commits, the tip
-when merged), merged by the commit that introduced this paragraph. No conflict
+when merged), merge `6e41ee81a`. No conflict
 and no fork test adapted; 30 marker sites under 11 names in 12 files. Of its four
 commits past the previous sync, #5253 reorders daemon shutdown — agents close
 (each close bounded by a deadline) before plugins stop — and #5248 gives an ACP
@@ -70,7 +98,7 @@ terminal the agent's launch environment; they touch `bootstrap.ts` and
 server patch files nor the room's providers. None of the four fixes a carried
 patch, so the 2026-09-23 re-verification above still holds here.
 `mcp-parity.e2e.test.ts` failed the same five tests before and after the merge.
-Previous upstream sync: **2026-09-23**, `upstream/main` at `d161b5987`
+Earlier upstream sync: **2026-09-23**, `upstream/main` at `d161b5987`
 (`v0.9.1` plus 13), merge `99503082c`: one conflict, `providers/claude/agent.test.ts`'s
 import block after #5240, both sides kept in #3495's order. It brought #5229,
 which lets a history read load an archived agent whose working directory is gone;
@@ -141,23 +169,40 @@ tip's `websocket-server.ts` typechecks only against a rebuilt
 stale protocol dist fails `build:lib` with an error that looks like upstream
 breakage and is not. The patch table:
 
-| PR                                                   | Patches                                                                                                                                           | Touches                                                                                                                                           | Status                                                                                                                                       |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                                                                                 | landed `cdb116314`, synced                                                                                                                   |
-| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                                                                                 | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
-| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                                                                          | open — QA evidence added 2026-09-23                                                                                                          |
-| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                                                                                  | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670) |
-| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                                                                    | landed `53c960747`; closed #3449 as superseded 2026-09-03                                                                                    |
-| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                                                                            | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671) |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                                     | closed 2026-09-08 in favor of #4041 (still open 2026-09-23) — follow-up remains; fork branch deleted 2026-09-23                              |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                                                                                   | open — rebased 2026-09-23 onto `d161b5987`                                                                                                   |
-| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                                                                          | open — **no marker**; QA evidence added 2026-09-23                                                                                           |
-| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                       | closed into #3640; fork branch deleted 2026-09-23                                                                                            |
-| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                       | closed into #3640; fork branch deleted 2026-09-23                                                                                            |
-| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                                    | open — QA evidence added 2026-09-23                                                                                                          |
-| [#4694](https://github.com/getpaseo/paseo/pull/4694) | `claude-history-follows-provider-env`                                                                                                             | `providers/claude/agent.ts`                                                                                                                       | open — fixes the Claude half of issue #3481                                                                                                  |
-| [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | five providers — `plugin-provider.ts`, `acp-agent.ts`, `omp/agent.ts`, `opencode-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736) | open — **no marker**; QA evidence added 2026-09-23                                                                                           |
-| —                                                    | `acp-provider-mcp-servers`                                                                                                                        | `generic-acp-agent.ts`, `acp-agent.ts`                                                                                                            | not yet opened upstream — room-local; landed on this branch 2026-09-25                                                                       |
+| PR                                                   | Patches                                                                                                                                           | Touches                                                                                                                                                                                   | Status                                                                                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [#3192](https://github.com/getpaseo/paseo/pull/3192) | —                                                                                                                                                 | `agent-prompt.ts`                                                                                                                                                                         | landed `cdb116314`, synced                                                                                                                                   |
+| [#3455](https://github.com/getpaseo/paseo/pull/3455) | `wakeup-each`                                                                                                                                     | `agent-prompt.ts`                                                                                                                                                                         | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669)                 |
+| [#3094](https://github.com/getpaseo/paseo/pull/3094) | `detached-wakeup`                                                                                                                                 | `create-agent/create.ts`                                                                                                                                                                  | open — QA evidence added 2026-09-23                                                                                                                          |
+| [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                                                                                                                          | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                 |
+| [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                                                                                                            | landed `53c960747`; closed #3449 as superseded 2026-09-03                                                                                                    |
+| [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                                                                                                                    | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                 |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                                                                             | closed 2026-09-08 in favor of #4041 (still open 2026-09-28) — follow-up remains; fork branch deleted 2026-09-23                                              |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                                                                                                                           | open — rebased 2026-09-23 onto `d161b5987`                                                                                                                   |
+| [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                                                                                                                  | open — **no marker**; QA evidence added 2026-09-23                                                                                                           |
+| [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                                                               | closed into #3640; fork branch deleted 2026-09-23                                                                                                            |
+| [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                                                               | closed into #3640; fork branch deleted 2026-09-23                                                                                                            |
+| [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                                                                            | open — QA evidence added 2026-09-23                                                                                                                          |
+| [#4694](https://github.com/getpaseo/paseo/pull/4694) | — dropped `claude-history-follows-provider-env`                                                                                                   | `providers/claude/agent.ts`                                                                                                                                                               | closed 2026-09-26 as superseded by [#5437](https://github.com/getpaseo/paseo/pull/5437), landed `76a9781ba`, in `v0.10.0`; patch dropped at the v0.10.0 sync |
+| [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | this branch carries two of the PR's five providers — `acp-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736; omp, opencode and plugin-provider dropped at the v0.10.0 sync) | open — **no marker**; QA evidence added 2026-09-23                                                                                                           |
+| —                                                    | `acp-provider-mcp-servers`                                                                                                                        | `generic-acp-agent.ts`, `acp-agent.ts`                                                                                                                                                    | not yet opened upstream — room-local; landed on this branch 2026-09-25                                                                                       |
+
+**Re-verified 2026-09-28** against tag `v0.10.0` (`c481ecf3e`): of the fourteen,
+upstream fixes one, `claude-history-follows-provider-env` (#5437), and it was
+dropped. For each of the others, the v0.10.0 source still has the defect.
+`notifySafely("finished")` still takes no `terminal: false` (#5407 only replaces
+an armed watcher on re-arm). `create.ts` still passes `requireParentOwnership: true`
+(`create.ts:215`). The canonical agent-scoped `create_agent` still returns
+`detached: false`. Both `setPaseoToolsEnabled` and
+`setAgentProviderToolsEnabled` are still gated on `mcpInjectIntoAgents` at
+startup and in both field-change handlers. The lockfile still pins
+`@modelcontextprotocol/sdk` 1.29.0, whose newest protocol is `2025-11-25`, while
+Claude Code 2.1.283 speaks `2026-07-28`. The Codex provider is unchanged under all
+five foreground patches, and #4041 is still open. The Claude provider still
+deletes a pending permission before any deliverability check. `list_agents`
+still filters archives on the stored branch only. pi and acp still ignore
+`purpose`. The generic ACP provider still passes no provider-level MCP servers
+to `session/new`.
 
 **Re-verified 2026-09-23** against `upstream/main` `d161b5987` (`v0.9.1` plus 13
 commits): upstream fixes none of the fourteen. `notifySafely("finished")` still
@@ -638,78 +683,6 @@ review-and-adjust (Claude `348b437`); plan and impact at
   still carries only `2025-11-25`/`DRAFT-2026-v1`); when that lands, the next
   `upstream/main` sync drops the markers and this section per the convention.
 
-### claude-history-follows-provider-env
-
-Opened 2026-09-11, the same day the `b710571a2` v0.8.0 sync landed and its
-restart exposed the defect: every Claude seat's `paseo logs` returned no
-activity, while Codex and OMP seats were unaffected.
-
-- **What:** `runtime/bin/claude-room` gives each Claude role its own
-  `CLAUDE_CONFIG_DIR` and exports it into the launched `claude` process, but
-  four read-back sites in the Claude provider resolved the config dir from the
-  **daemon's own `process.env`** instead of from the session's own launch
-  environment (`runtimeSettings.env` / `launchEnv`, the same composition
-  `buildSdkEnv()` already builds for the SDK call itself). `resolveHistoryPath`
-  (`providers/claude/agent.ts`) is the one the Human saw: it read
-  `process.env.CLAUDE_CONFIG_DIR` directly, so a role-scoped seat's transcript
-  under its own config dir was invisible to timeline hydration and refresh.
-  `listImportableSessions` had the same direct read. `fetchCatalog` left its
-  `configDir` test seam unfilled from the client's own composition, so a role
-  provider's `settings.json` model list came from `~/.claude` too; that path
-  reaches `resolveClaudeConfigDir` in `providers/claude/models.ts`, which is
-  unchanged — it already prefers an explicit `configDir` argument, so filling
-  the seam at the call site was the whole fix.
-- **Why here:** the room's `claude-room` launcher gives Supervisor, Lead, and
-  Peer seats distinct `CLAUDE_CONFIG_DIR`s under `$XDG_STATE_HOME`, because
-  Paseo's SDK integration supplies its own system prompt and `--settings`
-  in-band (both last-wins), leaving a config dir as the only surface that
-  survives for role prose and hooks. Upstream Paseo has no such multi-role
-  launcher, so the daemon's own `process.env.CLAUDE_CONFIG_DIR` and a role
-  seat's are the same value there and the bug is invisible upstream — until a
-  custom provider declares `env` and expects Paseo to honour it on read-back
-  the same way it already honours it on launch.
-- **Fix:** a new private `resolveConfigDir()` on `ClaudeAgentSession` reads
-  `CLAUDE_CONFIG_DIR` off `buildSdkEnv()` (falling back to
-  `join(homedir(), ".claude")`), used at `resolveHistoryPath`.
-  `ClaudeAgentClient.listImportableSessions` and `fetchCatalog` both compose
-  `createProviderEnv({ baseEnv: process.env, runtimeSettings: this.runtimeSettings })`
-  the same way `fetchCatalog`'s mode-catalog call already did one line below
-  the broken one. In `fetchCatalog`, an explicit `options.configDir` (the test
-  seam) still wins over the composed value.
-- **Coverage:** `daemon-e2e/agent-refresh-follows-provider-env.e2e.test.ts` is
-  the discriminating regression: `process.env.CLAUDE_CONFIG_DIR` points at a
-  decoy directory with no transcript, the real transcript directory is
-  declared only through
-  `new ClaudeAgentClient({ runtimeSettings: { env: { CLAUDE_CONFIG_DIR: realDir } } })`,
-  and the test asserts the imported and refreshed timeline carries the real
-  directory's entries. Before the fix this failed with
-  `listImportableSessions` and `fetchCatalog` are also changed by this patch, but
-  have no discriminating tests in this round; that was accepted because the
-  refresh path is the user-visible high-impact regression and both sites reuse
-  the same provider-environment composition. A future round should exercise
-  session discovery and settings-model loading with a decoy process environment
-  and a provider-declared config directory.
-  `AssertionError: expected '' to contain 'real dir hello'` — the decoy
-  directory's empty transcript, not the real one. A test that instead pointed
-  `process.env.CLAUDE_CONFIG_DIR` at the real directory would pass on both
-  sides of the fix and prove nothing; this is why the shape is a decoy plus a
-  `runtimeSettings.env` declaration, not a single directory.
-- **Deliberate no-marker convergence:** this patch's four changed sites are intentionally unmarked so the fork hunks remain byte-identical to upstream while #4694 is adopted: `ClaudeAgentSession.resolveConfigDir`/`resolveHistoryPath`, `ClaudeAgentClient.listImportableSessions`, and `ClaudeAgentClient.fetchCatalog`. The written site list above is the sync record; a future fork sync must retain these four sites until the upstream change is present locally.
-- **Upstream status:** opened — [getpaseo/paseo#4694](https://github.com/getpaseo/paseo/pull/4694), branch
-  `fix/claude-history-follows-provider-env-upstream` off `upstream/main`,
-  marker and SLP wording stripped (same pattern as #4570/#4434/#3094/#3455).
-  Self-contained: a custom provider declares `env` through
-  `ProviderOverrideSchema`, Paseo already honours it on launch, this patch
-  makes read-back honour it too, with one regression test that fails on the
-  unpatched version. Publication is a Human decision; #4694 is open.
-  It fixes the Claude half of issue
-  [#3481](https://github.com/getpaseo/paseo/issues/3481) (`bug`, `p2`, triaged
-  2026-09-22): Claude agents whose transcript sat under a role-scoped config dir
-  read back as `No activity to display.`, and `resolveHistoryPath` read the
-  daemon's own `process.env.CLAUDE_CONFIG_DIR` already at the `v0.4.0-beta.2` it
-  was reported on. Since 2026-09-23 the PR body's Linked issue says so; the issue's
-  omp half is not this patch's.
-
 ### native-tools-injection-independent
 
 Opened the same day the 2026-09-07 sync retired `native-tools-optin`, after a
@@ -729,18 +702,32 @@ Lead review showed the retirement alone breaks the room. It was closed on
   those sites instead: the catalog's master enable follows the MCP stack being
   enabled, and injection controls only the injected MCP server
   (`agentMcpBaseUrl`/`setMcpBaseUrl`), never the native catalog.
-- **Why here:** the room runs `daemon.mcp.injectIntoAgents: false` (launchers
-  give each seat caller-scoped servers) while its omp Supervisor and Lead seats
-  must receive the native catalog and its omp Peer seat must not. Under merged
-  upstream, `#4277`'s per-provider policy cannot help: it is a second gate on
-  top of a `paseoToolsEnabled` that injection already forced to false.
+- **Why here:** the room runs `daemon.mcp.injectIntoAgents: false`, because its
+  launchers give each seat its own caller-scoped server
+  (`/mcp/agents?callerAgentId=<seat>`). The patch was written for omp seats that
+  needed the native catalog. omp is retired from the room, and the patch is still
+  load-bearing for a wider reason. `AgentManager.prepareSessionConfig` stores
+  `{ enabled: false }` as every new agent's Paseo tool policy whenever
+  `paseoToolsEnabled` is false. The caller-scoped MCP server builds its catalog
+  from that stored policy (`getPaseoToolPolicy(callerAgentId)` in `bootstrap.ts`),
+  and `registerTool` skips every tool whose policy is disabled. So under upstream's
+  injection-coupled gate, every Claude, Codex, pi and ACP seat's own Paseo MCP
+  server serves no tools. Measured at the v0.10.0 sync with a scratch
+  daemon-boot probe (not committed). The daemon ran with `mcpInjectIntoAgents:
+false`, an agent was created, and its caller-scoped server was listed. With
+  the patch, `list_agents`, `create_agent` and `send_agent_prompt` are present.
+  With the three startup sites reverted to upstream's expressions, the stored
+  policy reads `{ enabled: false }` and the listing fails with
+  `MCPClientError: Server does not support tools`. `#4277`'s per-provider policy
+  cannot help, because it is a second gate on top of a `paseoToolsEnabled` that
+  injection has already forced to false.
 - **Coverage:** `native-tools-gate.slp.test.ts` pins the room's live shape
   (mcp enabled + injection off ⇒ catalog available), the two other helper
   branches, and a source-level check that every `setPaseoToolsEnabled` /
   `setAgentProviderToolsEnabled` call in `bootstrap.ts` passes the fork gate
   and never an injection expression. A booted-daemon regression for the live
-  field-change handlers remains uncovered; activation verifies delivery on
-  fresh omp seats.
+  field-change handlers remains uncovered. After a daemon upgrade, the room's
+  preflight and first seats confirm that tools reach a seat.
 - **Counting note:** on upstream tag `v0.8.0` (`b8e24677e`),
   `rg -n 'setAgentProviderToolsEnabled|setPaseoToolsEnabled' packages/server/src/server/bootstrap.ts`
   returned eight hits at lines 1429, 1433, 1434, 1606, 1611, 1612, 1616, and 1617. Line 1429 is the helper definition, not a call, so there are seven
@@ -845,6 +832,19 @@ there for an archived agent (`archived-live-list`, above, never touches that fil
 `resumeSession` implementations ignored the option and spawned a full interactive runtime to
 serve one read. Measured on one host: eleven such runtimes left resident, ~1.36 GB.
 
+- **Narrowed at the v0.10.0 sync (2026-09-28).** This branch carries only the **pi** and
+  **ACP** halves (`providers/pi/agent.ts`, `providers/acp-agent.ts` and their suites). Those
+  are the two families the room runs seats on whose history read would otherwise spawn and
+  keep a runtime. Claude spawns nothing, and Codex's half is upstream's #4736. The omp,
+  opencode and plugin-provider halves were dropped. omp is retired from the room, and the
+  room runs no opencode or plugin-provider seat, so on this daemon an archived agent of
+  those providers leaks its runtime on a history read again, as upstream does. The Claude
+  spawn guard, the Codex transport guard and the `docs/agent-lifecycle.md` rewrite were
+  dropped too, because each describes upstream code rather than a patch. `v0.10.0`
+  rewrote pi's `streamHistory` (#5309 added the extension host and the close signal), so
+  the pi release was re-applied by hand around the new call. The bullets below describe the
+  whole PR, #5132; where they name omp, opencode, plugin-provider, Claude or Codex, that
+  code is upstream's on this branch.
 - **What:** `purpose: "history"` is now a real per-provider contract instead of an ignored
   hint. Claude and OMP already spawn nothing to serve a history read (Claude reads the
   session's own `.jsonl`; OMP's `streamHistory` reads the session file directly) — Claude
@@ -901,25 +901,18 @@ serve one read. Measured on one host: eleven such runtimes left resident, ~1.36 
 prompt rejects before the read begins`. Both mutants were executed: `pi/agent.ts`
   reverted to its pre-fix version fails that test (1 failed, 108 passed); removing
   only the `catch` passes all 109 tests but vitest exits 1 on the unhandled rejection.
-- **Sites:** derived, not hand-listed — `git diff --name-only 7f37d97ec 53816a5e4` (the
-  commit before this work branched, to its tip) against the file manifest the `Sync
-procedure` gate below derives (`git fetch upstream` succeeded; Set A from
-  `BASE=$(git merge-base HEAD upstream/main)` contains all 14 of these `packages/` paths).
-  Six provider sources: `plugin-provider.ts`, `providers/acp-agent.ts`,
-  `providers/codex-app-server-agent.ts`, `providers/omp/agent.ts`,
-  `providers/opencode-agent.ts`, `providers/pi/agent.ts`. Eight tests/harness files:
-  `plugin-provider.test.ts`, `providers/acp-agent.test.ts`,
-  `providers/claude/agent.spawn.test.ts`, `providers/codex-app-server-agent.test.ts`,
-  `providers/omp/agent.history-purpose.test.ts`, `providers/opencode-agent.test.ts`,
-  `providers/opencode/test-utils/test-opencode-harness.ts`, `providers/pi/agent.test.ts`.
-  Plus `docs/agent-lifecycle.md`, outside `packages/`.
-- **Coverage:** the seven test files above (excluding the harness file, which carries no
-  tests of its own) run clean by explicit path: 524/524 at `7af90acd0` (491/491 when the
-  patch was first carried). `tsgo --noEmit` clean on
-  `packages/server`.
+- **Sites (since the v0.10.0 sync):** `providers/acp-agent.ts`, `providers/pi/agent.ts`,
+  `providers/acp-agent.test.ts`, `providers/pi/agent.test.ts`.
+  `acp-provider-mcp-servers` shares `acp-agent.ts` and its suite. Before that sync this
+  patch also owned `plugin-provider.ts`, `providers/omp/agent.ts`,
+  `providers/opencode-agent.ts`, their suites, the opencode test harness,
+  `providers/omp/agent.history-purpose.test.ts`, `providers/claude/agent.spawn.test.ts`,
+  the Codex suite's transport guard and `docs/agent-lifecycle.md`. Derive the current set
+  with the `Sync procedure` gate below. Do not trust this list.
+- **Coverage:** `providers/pi/agent.test.ts` and `providers/acp-agent.test.ts` by
+  explicit path (see the v0.10.0 sync counts in `Sync procedure`).
 - **No `SLP-PATCH` marker, deliberately.** This patch is expected to converge upstream, so
-  its diff is unmarked the same way `archived-live-list`'s and
-  `claude-history-follows-provider-env`'s are — a marker would falsely change the patch
+  its diff is unmarked the same way `archived-live-list`'s is — a marker would falsely change the patch
   census. Nothing here needs re-applying by hand; if it lands upstream, delete this section.
 - **Upstream status:** open — [getpaseo/paseo#5132](https://github.com/getpaseo/paseo/pull/5132),
   branch `upstream/history-purpose-contract`, head `c86ee249e`. It differs from this branch
@@ -927,9 +920,10 @@ procedure` gate below derives (`git fetch upstream` succeeded; Set A from
   and its `8045aa414` dropped the Claude guard in `providers/claude/agent.spawn.test.ts`,
   because the guard mocked an internal module with `vi.spyOn` (upstream's
   `docs/testing.md` forbids that) and `ClaudeAgentClient.resumeSession` ignores the
-  purpose argument, so no change on that branch could falsify it. This branch keeps the
-  guard as a tripwire for an upstream edit that starts spawning on a Claude resume. Its
-  omp, pi, acp, opencode and plugin sources are otherwise identical to the PR head.
+  purpose argument, so no change on that branch could falsify it. This branch dropped
+  that guard at the v0.10.0 sync as well. The PR head predates `v0.10.0`, and its pi
+  half needs the same re-application around #5309's `streamHistory` before it can
+  merge.
 
 ### acp-provider-mcp-servers
 
@@ -1042,6 +1036,13 @@ upstream diff. Set B itself still contains three fork-only files —
 `daemon-e2e/agent-refresh-follows-provider-env.e2e.test.ts` — so only **30** of
 its arguments can match an upstream diff. Both numbers are outputs of the
 that command, not claims: regenerate them, do not trust them.
+
+At the v0.10.0 sync the same Set A command against `d6861f81e`, the previous
+sync's base, returned **38** files. With `BASE` = `v0.10.0` after the merge it
+returns **29**, because two patches narrowed or left. The fork's code diff
+against its upstream base went from 39 files, +3224/−78 (at `0a71258c1` over
+`d6861f81e`, `packages/` and `docs/`) to 29 files, +2483/−63 (over `v0.10.0`).
+The only fork-only file left in Set B is `native-tools-gate.ts`.
 
 Set A is wider than the marker set on purpose, and by more than you would guess.
 Ask it, do not estimate it:
@@ -1176,6 +1177,9 @@ npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent
 npx vitest run packages/server/src/server/agent/agent-manager.test.ts
 npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts   # diff vs baseline
 npx vitest run packages/server/src/server/agent/agent-mcp.e2e.test.ts     # mcp-protocol-version-clip
+npx vitest run packages/server/src/server/agent/providers/pi/agent.test.ts        # history-purpose (pi)
+npx vitest run packages/server/src/server/agent/providers/acp-agent.test.ts       # history-purpose (acp), acp-provider-mcp-servers
+npx vitest run packages/server/src/server/agent/providers/generic-acp-agent.test.ts  # acp-provider-mcp-servers
 
 npm run format:check
 
@@ -1187,6 +1191,18 @@ npm run format:check
 npm run lint
 git push origin slp/patches
 ```
+
+Measured at the v0.10.0 sync (2026-09-28). Each file ran by explicit path,
+and every file passed completely except `mcp-parity`: `agent-prompt.slp` 2,
+`agent-prompt` 14, `create.slp` 2, `native-tools-gate.slp` 4, `create` 10,
+`provider-registry-wrap` 1, `mcp-server` 124, `claude/agent` 104,
+`codex-app-server-agent` 171, `agent-manager` 193, `pi/agent` 113, `acp-agent`
+112, `generic-acp-agent` 6, `agent-mcp.e2e` 12, and upstream's
+`claude-provider-config-dir-history.e2e` 2. `mcp-parity.e2e` failed 5 of 33, the
+same five as at the previous sync: Suite E's four baseline names, plus
+`list_providers` timing out at 5 s. Other results at the same revision:
+`npm run typecheck` exit 0, `npm run format:check` clean, and `npm run lint`
+with 0 warnings and 0 errors.
 
 Order matters. Typecheck first — it fails fastest and on the class of breakage
 a merge introduces. Then the `.slp.` files, which this fork owns and which are

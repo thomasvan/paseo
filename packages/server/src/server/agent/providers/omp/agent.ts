@@ -19,7 +19,6 @@ import {
   type AgentPersistenceHandle,
   type AgentPromptInput,
   type AgentProvider,
-  type AgentResumeSessionOptions,
   type AgentRunOptions,
   type AgentRunResult,
   type AgentRuntimeInfo,
@@ -569,6 +568,24 @@ function getInputQuestionTitle(title: string | undefined, placeholder: string | 
   return "Optional response";
 }
 
+interface OmpSelectOption {
+  label: string;
+  description?: string;
+}
+
+function readSelectOptions(options: unknown, optionDetails: unknown): OmpSelectOption[] {
+  const labels = readStringArray(options);
+  const details = Array.isArray(optionDetails) ? optionDetails : [];
+  return labels.map((label, index) => {
+    const detail = details[index];
+    const description =
+      isRecord(detail) && typeof detail.description === "string" && detail.description.trim() !== ""
+        ? detail.description
+        : undefined;
+    return description === undefined ? { label } : { label, description };
+  });
+}
+
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
@@ -587,7 +604,7 @@ function mapExtensionUiRequestToPermission(
   const label = options.label ?? "OMP";
   switch (event.method) {
     case "select": {
-      const selectOptions = readStringArray(event.options);
+      const selectOptions = readSelectOptions(event.options, event.optionDetails);
       if (options.combineOptionalComment) {
         return buildCombinedAskUserQuestionPermission(event, {
           provider,
@@ -634,7 +651,7 @@ function mapExtensionUiRequestToPermission(
         question: [optionalString(event.title), optionalString(event.message)]
           .filter(Boolean)
           .join("\n\n"),
-        options: ["Yes", "No"],
+        options: [{ label: "Yes" }, { label: "No" }],
         multiSelect: false,
       });
     default:
@@ -679,7 +696,7 @@ function buildExtensionUiQuestionPermission(
     provider: AgentProvider;
     label: string;
     question: string;
-    options: string[];
+    options: OmpSelectOption[];
     multiSelect: boolean;
     placeholder?: string;
     allowEmpty?: boolean;
@@ -697,7 +714,10 @@ function buildExtensionUiQuestionPermission(
         {
           question: input.question,
           header: QUESTION_RESPONSE_HEADER,
-          options: input.options.map((label) => ({ label })),
+          options: input.options.map((option) => ({
+            label: option.label,
+            ...(option.description === undefined ? {} : { description: option.description }),
+          })),
           multiSelect: input.multiSelect,
           ...(input.placeholder ? { placeholder: input.placeholder } : {}),
           ...(input.allowEmpty ? { allowEmpty: true } : {}),
@@ -718,11 +738,13 @@ function buildCombinedAskUserQuestionPermission(
     provider: AgentProvider;
     label: string;
     question: string;
-    options: string[];
+    options: OmpSelectOption[];
     allowFreeform: boolean;
   },
 ): AgentPermissionRequest {
-  const visibleOptions = input.options.filter((option) => !isOmpAskUserFreeformOption(option));
+  const visibleOptions = input.options.filter(
+    (option) => !isOmpAskUserFreeformOption(option.label),
+  );
   const allowOther = input.allowFreeform || visibleOptions.length !== input.options.length;
   return {
     id: event.id,
@@ -735,7 +757,10 @@ function buildCombinedAskUserQuestionPermission(
         {
           question: input.question,
           header: QUESTION_RESPONSE_HEADER,
-          options: visibleOptions.map((label) => ({ label })),
+          options: visibleOptions.map((option) => ({
+            label: option.label,
+            ...(option.description === undefined ? {} : { description: option.description }),
+          })),
           multiSelect: false,
           ...(allowOther ? { allowOther: true } : {}),
         },
@@ -754,7 +779,7 @@ function buildCombinedAskUserQuestionPermission(
       answerHeader: QUESTION_RESPONSE_HEADER,
       commentHeader: QUESTION_COMMENT_HEADER,
       combinedAskUser: COMBINED_ASK_USER_METADATA,
-      selectOptions: visibleOptions,
+      selectOptions: visibleOptions.map((option) => option.label),
       ...(allowOther ? { freeformSentinel: OMP_ASK_USER_FREEFORM_SENTINEL } : {}),
     },
   };
@@ -844,108 +869,6 @@ function createRuntime(
     readyTimeoutMs: providerParams.readyTimeoutMs,
     requestTimeoutMs: providerParams.rpcTimeoutMs,
   });
-}
-
-/**
- * A history-purpose resume: no OMP process is started. `streamHistory` reads
- * the session file directly (streamOmpHistory needs no runtime for that),
- * and every other member is a stub or throws — the manager tolerates
- * failures from getRuntimeInfo/getAvailableModes/getCurrentMode/
- * getPendingPermissions during registration, and nothing else should be
- * called on a session opened only to read history.
- */
-class OmpHistorySession implements AgentSession {
-  readonly provider: AgentProvider;
-  readonly capabilities: AgentCapabilityFlags = withOmpCapabilities();
-
-  private readonly handle: AgentPersistenceHandle;
-  private readonly resumeConfig: OmpResumeConfig;
-  private readonly sessionFile: string;
-
-  constructor(options: {
-    handle: AgentPersistenceHandle;
-    resumeConfig: OmpResumeConfig;
-    sessionFile: string;
-    provider: AgentProvider;
-  }) {
-    this.handle = options.handle;
-    this.resumeConfig = options.resumeConfig;
-    this.sessionFile = options.sessionFile;
-    this.provider = options.provider;
-  }
-
-  get id(): string | null {
-    return this.handle.sessionId ?? null;
-  }
-
-  async run(): Promise<AgentRunResult> {
-    throw new Error("OMP history session cannot start a turn");
-  }
-
-  async startTurn(): Promise<StartTurnResult> {
-    throw new Error("OMP history session cannot start a turn");
-  }
-
-  subscribe(_callback: (event: AgentStreamEvent) => void): () => void {
-    return () => undefined;
-  }
-
-  async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
-    yield* streamOmpHistory({
-      sessionFile: this.sessionFile,
-      provider: this.provider,
-    });
-  }
-
-  async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
-    return {
-      provider: this.provider,
-      sessionId: this.handle.sessionId ?? null,
-      model: this.resumeConfig.model ?? null,
-      thinkingOptionId: this.resumeConfig.thinkingOptionId ?? null,
-      modeId: this.resumeConfig.modeId ?? null,
-    };
-  }
-
-  async getAvailableModes(): Promise<AgentMode[]> {
-    return [...OMP_MODES];
-  }
-
-  async getCurrentMode(): Promise<string | null> {
-    return this.resumeConfig.modeId ?? null;
-  }
-
-  async setMode(): Promise<void | AgentProviderNotice> {
-    throw new Error("OMP history session cannot change mode");
-  }
-
-  getPendingPermissions(): AgentPermissionRequest[] {
-    return [];
-  }
-
-  async respondToPermission(): Promise<void> {
-    throw new Error("OMP history session has no pending permissions");
-  }
-
-  describePersistence(): AgentPersistenceHandle | null {
-    return {
-      provider: this.provider,
-      sessionId: this.handle.sessionId,
-      nativeHandle: this.sessionFile,
-      metadata: {
-        cwd: this.resumeConfig.cwd,
-        ...(this.resumeConfig.model ? { model: this.resumeConfig.model } : {}),
-        ...(this.resumeConfig.thinkingOptionId
-          ? { thinkingOptionId: this.resumeConfig.thinkingOptionId }
-          : {}),
-        ...(this.resumeConfig.modeId ? { modeId: this.resumeConfig.modeId } : {}),
-      },
-    };
-  }
-
-  async interrupt(): Promise<void> {}
-
-  async close(): Promise<void> {}
 }
 
 export class OmpAgentSession implements AgentSession {
@@ -2136,9 +2059,6 @@ export class OmpAgentSession implements AgentSession {
           });
         }
       }
-      if (!this.activeTurnHasUserMessage) {
-        this.completeTurn(turnId, []);
-      }
       return;
     }
 
@@ -2395,7 +2315,6 @@ export class OmpAgentClient implements AgentClient {
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
     launchContext?: AgentLaunchContext,
-    options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const sessionFile = handle.nativeHandle;
     if (!sessionFile) {
@@ -2404,13 +2323,6 @@ export class OmpAgentClient implements AgentClient {
 
     const persistenceMetadata = parsePersistenceMetadata(handle.metadata);
     const resumeConfig = buildResumeConfig(persistenceMetadata, overrides, this.provider);
-
-    if (options?.purpose === "history") {
-      // A history read only needs `streamHistory`, which replays the session
-      // file directly (see streamOmpHistory) — starting the OMP runtime here
-      // would spawn a process (and its own MCP children) that nothing closes.
-      return new OmpHistorySession({ handle, resumeConfig, sessionFile, provider: this.provider });
-    }
 
     const launchMode = this.resolveLaunchMode(resumeConfig.modeId);
     const runtimeSession = await this.runtime.startSession(
