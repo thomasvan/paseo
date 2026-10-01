@@ -736,13 +736,16 @@ export class ScheduleService {
         };
         scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
       } else {
+        // SLP-PATCH(schedule-claim-in-flight): hold the id across the claim's store write, so
+        // runOnce() refuses a manual run that arrives meanwhile. The finally below releases it
+        // when the claim returns null or throws.
+        this.runningScheduleIds.add(schedule.id);
+        isRunning = true;
         const claimed = await this.claimDueRun(schedule.id, now);
         if (!claimed) {
           return;
         }
         ({ schedule: scheduleWithRun, runId } = claimed);
-        this.runningScheduleIds.add(schedule.id);
-        isRunning = true;
       }
 
       if (!scheduleWithRun || !runId) {

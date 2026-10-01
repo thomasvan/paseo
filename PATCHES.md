@@ -29,8 +29,8 @@ not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts` and
 third until the 2026-09-07 sync retired its patch; `native-tools-gate.slp.test.ts`
 replaced it there, keeping the count at three.)
 
-`schedule-claim-slots` also keeps its test in an upstream-owned file
-(`schedule/service.test.ts`), unmarked for the same reason.
+`schedule-claim-slots` and `schedule-claim-in-flight` also keep their tests in an
+upstream-owned file (`schedule/service.test.ts`), unmarked for the same reason.
 
 Two other patches put their tests in upstream-owned files, for the same reason in
 both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
@@ -53,7 +53,7 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Three have landed upstream and their sections are gone. **Fifteen patches remain
+Three have landed upstream and their sections are gone. **Sixteen patches remain
 here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
@@ -61,7 +61,8 @@ and `archived-live-list` arrived without it being updated,
 `history-purpose-provider-contract` made it fourteen on 2026-09-21,
 `acp-provider-mcp-servers` made it fifteen on 2026-09-25, the v0.10.0 sync
 dropped `claude-history-follows-provider-env` (upstream shipped it as #5437) and
-`schedule-claim-slots` brought it back to fifteen on 2026-10-01, which is
+`schedule-claim-slots` brought it back to fifteen on 2026-10-01 and
+`schedule-claim-in-flight` made it sixteen the same day, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-09-28**, tag `v0.10.0` at
@@ -190,6 +191,7 @@ breakage and is not. The patch table:
 | [#4694](https://github.com/getpaseo/paseo/pull/4694) | — dropped `claude-history-follows-provider-env`                                                                                                   | `providers/claude/agent.ts`                                                                                                                                                               | closed 2026-09-26 as superseded by [#5437](https://github.com/getpaseo/paseo/pull/5437), landed `76a9781ba`, in `v0.10.0`; patch dropped at the v0.10.0 sync |
 | [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | this branch carries two of the PR's five providers — `acp-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736; omp, opencode and plugin-provider dropped at the v0.10.0 sync) | open — **no marker**; QA evidence added 2026-09-23                                                                                                           |
 | [#4904](https://github.com/getpaseo/paseo/pull/4904) | `schedule-claim-slots`                                                                                                                            | `schedule/service.ts`                                                                                                                                                                     | open (head `f62ffc7`, by keithpk; closes #2819) — carried as written, drop when it merges                                                                    |
+| —                                                    | `schedule-claim-in-flight`                                                                                                                        | `schedule/service.ts`                                                                                                                                                                     | not opened upstream — room-local guard on #4904; re-check, do not drop, when #4904 merges                                                                    |
 | —                                                    | `acp-provider-mcp-servers`                                                                                                                        | `generic-acp-agent.ts`, `acp-agent.ts`                                                                                                                                                    | not yet opened upstream — room-local; landed on this branch 2026-09-25                                                                                       |
 
 **Re-verified 2026-09-28** against tag `v0.10.0` (`c481ecf3e`): of the fourteen,
@@ -1010,6 +1012,32 @@ author credited and do not redesign it here.
   without stubbing `store.list`; a real list of up to 3000 files still resolved before the
   `finally`. The claim fix covers it by the same path.
 
+### schedule-claim-in-flight
+
+Added 2026-10-01 after a cross-read of `schedule-claim-slots` (Reader d4bf7586). Room-local:
+it fixes a hole in #4904 as written, and the Human decided to carry #4904 unchanged plus
+this guard as a separate patch.
+
+- **Why:** in #4904's `runSchedule()` the scheduled path awaits `claimDueRun()` before it
+  adds the id to `runningScheduleIds`, and `runOnce()` refuses a manual run only by that
+  set. A manual run arriving during the claim's store write therefore starts a second run
+  (two starts, two persisted runs, reproduced). On base the id was added before any await.
+- **What:** the scheduled path adds the id and sets `isRunning` before awaiting the claim.
+  The existing `finally` releases it when the claim returns `null` or throws; on a
+  successful claim the id stays until the run finishes, so `runOnce` also still refuses
+  during execution. `runOnce` does no store read, and the claim logic and `finishRun` are
+  untouched. The tick's `has()` check and the `runSchedule` call have no await between
+  them, so two ticks cannot both add the id.
+- **Site:** one marker in `schedule/service.ts`, in `runSchedule`.
+- **Coverage:** `refuses a manual run while a scheduled claim is in flight` in
+  `schedule/service.test.ts`, no marker. It holds the first `ScheduleStore.update` (the
+  tick's claim) with a `vi.spyOn` that delegates to the real method, because the store is
+  not injectable; `tick()` and `runOnce()` are the real entry points. Unpatched it shows
+  `manualOutcome: "started"`, two runner starts and two persisted runs.
+- **When #4904 merges upstream:** re-check this patch against upstream's `runSchedule`.
+  If upstream still adds the id after the claim, keep it; if upstream reorders it, drop
+  the patch. Do not drop it automatically with `schedule-claim-slots`.
+
 ## Sync procedure
 
 First, derive the patch-owned file manifest, then check whether upstream touched
@@ -1152,7 +1180,7 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # Marker gate. Measured 2026-09-25 after `acp-provider-mcp-servers` landed on
 # top of the `HEAD=6e41ee81a` sync baseline (30 sites, 11 names, 12 files), and
 # re-measured 2026-10-01 after `schedule-claim-slots` (+5 sites, +1 name, +1 file): the
-# package-scoped command below now sums to 53 sites; expect 13 names across 53
+# package-scoped command below now sums to 54 sites (`schedule-claim-in-flight` adds one site and one name); expect 14 names across 54
 # code/test sites in 17 files, and use the per-name manifest below -- a bare
 # total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
@@ -1161,7 +1189,7 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # path, so sort -u would dedupe path:name pairs and return one line per file,
 # not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 13
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 14
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
 #   18 acp-provider-mcp-servers               2 force-cancel-releases-foreground
 #    6 native-tools-injection-independent     2 detached-arg
@@ -1170,6 +1198,7 @@ rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
 #    3 detached-wakeup                        1 dead-run-settles
 #    2 question-answer-required
 #    3 mcp-protocol-version-clip       5 schedule-claim-slots
+#    1 schedule-claim-in-flight
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list is absent from this manifest by design -- it carries no

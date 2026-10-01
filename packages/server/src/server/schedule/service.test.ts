@@ -454,6 +454,74 @@ describe("ScheduleService", () => {
     });
   });
 
+  test("refuses a manual run while a scheduled claim is in flight", async () => {
+    let runnerStarts = 0;
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner: async () => {
+        runnerStarts += 1;
+        return { agentId: null, output: "ok" };
+      },
+    });
+    const created = await service.create({
+      prompt: "claim in flight",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
+    });
+
+    // Hold the first store.update, which is the tick's claim, then run the real update.
+    const realUpdate = ScheduleStore.prototype.update;
+    let claimStarted: () => void = () => {};
+    const claimStartedPromise = new Promise<void>((resolve) => {
+      claimStarted = resolve;
+    });
+    let releaseClaim: () => void = () => {};
+    const claimHeld = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    let heldFirstUpdate = false;
+    const updateSpy = vi
+      .spyOn(ScheduleStore.prototype, "update")
+      .mockImplementation(async function (this: ScheduleStore, id, updater) {
+        if (!heldFirstUpdate) {
+          heldFirstUpdate = true;
+          claimStarted();
+          await claimHeld;
+        }
+        return realUpdate.call(this, id, updater);
+      });
+
+    try {
+      now = new Date("2026-01-01T00:01:00.000Z");
+      const tick = service.tick();
+      await claimStartedPromise;
+      const manualOutcome = await service.runOnce(created.id).then(
+        () => "started",
+        (error: Error) => error.message,
+      );
+      releaseClaim();
+      await tick;
+
+      const inspected = await service.inspect(created.id);
+      expect({
+        manualOutcome,
+        runnerStarts,
+        runs: inspected.runs.length,
+      }).toEqual({
+        manualOutcome: `Schedule ${created.id} is already running`,
+        runnerStarts: 1,
+        runs: 1,
+      });
+    } finally {
+      updateSpy.mockRestore();
+    }
+  });
+
   test("pause and resume update persisted schedule state", async () => {
     const service = createScheduleService({
       paseoHome: tempDir,
