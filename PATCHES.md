@@ -992,8 +992,13 @@ author credited and do not redesign it here.
   holding a stale snapshot gets `null` and returns. `finishRun()` stops recomputing the
   cursor from the stale one and only keeps it past `now`. Manual runs keep the old path.
 - **Sites:** five markers in `schedule/service.ts` (`ScheduleRunStartError`,
-  `advanceNextRunAtPast`, `runSchedule`, `claimDueRun`, `finishRun`). The code is
-  identical to #4904's apart from the markers.
+  `advanceNextRunAtPast`, `runSchedule`, `claimDueRun`, `finishRun`). With the markers
+  removed, `service.ts` equals this branch's base `050c7bae0` with #4904's own diff
+  (`git diff 135a3b4c9 f62ffc7 -- packages/server/src/server/schedule/service.ts`) applied.
+  It is not byte-identical to the file at head `f62ffc7`: #4904's merge base with upstream
+  main is `135a3b4c9`, which predates #5301's store logger, so the head's constructor reads
+  `new ScheduleStore(join(options.paseoHome, "schedules"))` and this branch keeps the
+  `this.logger` argument.
 - **Coverage:** `schedule/service.test.ts`, no marker. #4904's two tests plus a changed
   assertion: the overlapping-tick test checks the run count, every `scheduledFor` and
   `nextRunAt` in one `toEqual`, so unpatched it shows both symptoms (two starts of the
