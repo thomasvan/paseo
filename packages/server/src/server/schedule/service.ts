@@ -41,6 +41,27 @@ export class ScheduleTargetGoneError extends Error {
   }
 }
 
+// SLP-PATCH(schedule-claim-slots): upstream #4904
+export class ScheduleRunStartError extends Error {
+  constructor(public readonly scheduleId: string) {
+    super(`Failed to start schedule run: ${scheduleId}`);
+    this.name = "ScheduleRunStartError";
+  }
+}
+
+// SLP-PATCH(schedule-claim-slots): upstream #4904
+function advanceNextRunAtPast(
+  cadence: StoredSchedule["cadence"],
+  nextRunAt: Date,
+  now: Date,
+): Date {
+  let next = nextRunAt;
+  while (next.getTime() <= now.getTime()) {
+    next = computeNextRunAt(cadence, next);
+  }
+  return next;
+}
+
 function trimOptionalName(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null;
@@ -693,21 +714,43 @@ export class ScheduleService {
     options?: { manual?: boolean },
   ): Promise<void> {
     const manual = options?.manual === true;
-    this.runningScheduleIds.add(schedule.id);
-    const runId = randomUUID();
-    const runningRun: ScheduleRun = {
-      id: runId,
-      scheduledFor: manual ? now.toISOString() : (schedule.nextRunAt ?? now.toISOString()),
-      startedAt: now.toISOString(),
-      endedAt: null,
-      status: "running",
-      agentId: null,
-      output: null,
-      error: null,
-    };
-    const scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
+    // SLP-PATCH(schedule-claim-slots): a scheduled run claims its slot in the store before it starts
+    let scheduleWithRun: StoredSchedule | null = null;
+    let runId: string | null = null;
+    let isRunning = false;
 
     try {
+      if (manual) {
+        this.runningScheduleIds.add(schedule.id);
+        isRunning = true;
+        runId = randomUUID();
+        const runningRun: ScheduleRun = {
+          id: runId,
+          scheduledFor: now.toISOString(),
+          startedAt: now.toISOString(),
+          endedAt: null,
+          status: "running",
+          agentId: null,
+          output: null,
+          error: null,
+        };
+        scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
+      } else {
+        // SLP-PATCH(schedule-claim-in-flight): hold the id across the claim's store write, so
+        // runOnce() refuses a manual run that arrives meanwhile. The finally below releases it
+        // when the claim returns null or throws.
+        this.runningScheduleIds.add(schedule.id);
+        isRunning = true;
+        const claimed = await this.claimDueRun(schedule.id, now);
+        if (!claimed) {
+          return;
+        }
+        ({ schedule: scheduleWithRun, runId } = claimed);
+      }
+
+      if (!scheduleWithRun || !runId) {
+        throw new ScheduleRunStartError(schedule.id);
+      }
       const result = await this.runner(scheduleWithRun, runId);
       await this.finishRun({
         scheduleId: schedule.id,
@@ -720,6 +763,9 @@ export class ScheduleService {
         manual,
       });
     } catch (error) {
+      if (!runId) {
+        throw error;
+      }
       await this.finishRun({
         scheduleId: schedule.id,
         runId,
@@ -731,8 +777,60 @@ export class ScheduleService {
         manual,
       });
     } finally {
-      this.runningScheduleIds.delete(schedule.id);
+      if (isRunning) {
+        this.runningScheduleIds.delete(schedule.id);
+      }
     }
+  }
+
+  // SLP-PATCH(schedule-claim-slots): upstream #4904
+  private async claimDueRun(
+    scheduleId: string,
+    now: Date,
+  ): Promise<{ schedule: StoredSchedule; runId: string } | null> {
+    let claimed: { schedule: StoredSchedule; runId: string } | null = null;
+    const updatedSchedule = await this.store.update(scheduleId, (schedule) => {
+      if (
+        schedule.status !== "active" ||
+        !schedule.nextRunAt ||
+        shouldCompleteSchedule(schedule, now) ||
+        new Date(schedule.nextRunAt).getTime() > now.getTime() ||
+        schedule.runs.some((run) => run.status === "running")
+      ) {
+        return schedule;
+      }
+
+      const scheduledFor = schedule.nextRunAt;
+      const nextRunAt = advanceNextRunAtPast(
+        schedule.cadence,
+        computeNextRunAt(schedule.cadence, new Date(scheduledFor)),
+        now,
+      );
+
+      // Claim the due slot and advance its cursor in the same serialized update.
+      // A tick can hold a stale list while another tick finishes this schedule.
+      const runId = randomUUID();
+      const runningRun: ScheduleRun = {
+        id: runId,
+        scheduledFor,
+        startedAt: now.toISOString(),
+        endedAt: null,
+        status: "running",
+        agentId: null,
+        output: null,
+        error: null,
+      };
+      const updated: StoredSchedule = {
+        ...schedule,
+        nextRunAt: nextRunAt.toISOString(),
+        updatedAt: now.toISOString(),
+        runs: [...schedule.runs, runningRun],
+      };
+      claimed = { schedule: updated, runId };
+      return updated;
+    });
+    requireSchedule(updatedSchedule, scheduleId);
+    return claimed;
   }
 
   private async appendRunningRun(
@@ -794,15 +892,17 @@ export class ScheduleService {
           ...updated,
           nextRunAt: null,
         };
-      } else {
-        const after = new Date(schedule.nextRunAt ?? now.toISOString());
-        let nextRunAt = computeNextRunAt(updated.cadence, after);
-        while (nextRunAt.getTime() <= now.getTime()) {
-          nextRunAt = computeNextRunAt(updated.cadence, nextRunAt);
-        }
+      } else if (updated.nextRunAt) {
+        // SLP-PATCH(schedule-claim-slots): upstream #4904
         updated = {
           ...updated,
-          nextRunAt: nextRunAt.toISOString(),
+          // A long run can cross one or more cadence boundaries. Persist a
+          // future cursor so the next tick cannot immediately launch a catch-up run.
+          nextRunAt: advanceNextRunAtPast(
+            updated.cadence,
+            new Date(updated.nextRunAt),
+            now,
+          ).toISOString(),
         };
       }
 
