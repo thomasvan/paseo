@@ -1257,7 +1257,7 @@ differences are upstream's own added and removed tests plus the eight
   timeouts in Suites A, B and D. With `--testTimeout=30000` only Suite E's four
   failed.
 - `agent-mcp.e2e` passed 9 of 12 in two runs. In each, three `create_agent` tests
-  hit their own 30 s timeout, and every other test ran 5 to 20 times slower than
+  hit their own 30 s timeout, and every other test ran 2 to 33 times slower than
   at v0.10.0. This file builds its daemons with `createPaseoDaemon` directly,
   which starts all eleven built-in plugins (#5465, #5714), each in a forked Node
   child. `test-utils/paseo-daemon.ts` passes an empty `BuiltinPluginLoader`.
