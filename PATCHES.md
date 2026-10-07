@@ -1259,8 +1259,10 @@ differences are upstream's own added and removed tests plus the eight
 - `agent-mcp.e2e` passed 9 of 12 in two runs. In each, three `create_agent` tests
   hit their own 30 s timeout, and every other test ran 2 to 33 times slower than
   at v0.10.0. This file builds its daemons with `createPaseoDaemon` directly,
-  which starts all eleven built-in plugins (#5465, #5714), each in a forked Node
-  child. `test-utils/paseo-daemon.ts` passes an empty `BuiltinPluginLoader`.
+  which starts all eleven built-in plugins (#5465, #5714): each is compiled with
+  esbuild and run in-process, with no child process
+  (`packages/server/src/server/plugins/runtime.ts:346-363`).
+  `test-utils/paseo-daemon.ts` passes an empty `BuiltinPluginLoader`.
   A scratch copy of the file that did the same passed all three at v0.10.0's
   durations. `mcp-protocol-version-clip`'s four tests passed in every run.
 
