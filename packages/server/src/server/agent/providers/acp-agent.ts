@@ -466,9 +466,6 @@ interface ACPAgentClientOptions {
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
   now?: () => number;
-  // SLP-PATCH(acp-provider-mcp-servers): provider-level MCP servers from the
-  // provider's own params, merged into every real session's mcpServers.
-  providerMcpServers?: Record<string, McpServerConfig>;
 }
 
 interface ACPAgentSessionOptions {
@@ -503,9 +500,6 @@ interface ACPAgentSessionOptions {
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
   resumePurpose?: "interactive" | "history";
-  // SLP-PATCH(acp-provider-mcp-servers): provider-level MCP servers from the
-  // provider's own params, merged into every real session's mcpServers.
-  providerMcpServers?: Record<string, McpServerConfig>;
 }
 
 export interface SpawnedACPProcess {
@@ -935,9 +929,6 @@ export class ACPAgentClient implements AgentClient {
   private readonly importPromptCache = new Map<string, ACPImportPromptCacheEntry>();
   private readonly now: () => number;
   protected readonly terminateProcess: ProcessTerminator;
-  // SLP-PATCH(acp-provider-mcp-servers): provider-level MCP servers from the
-  // provider's own params, merged into every real session's mcpServers.
-  private readonly providerMcpServers?: Record<string, McpServerConfig>;
 
   constructor(options: ACPAgentClientOptions) {
     this.provider = options.provider;
@@ -966,7 +957,6 @@ export class ACPAgentClient implements AgentClient {
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
     this.now = options.now ?? Date.now;
-    this.providerMcpServers = options.providerMcpServers;
   }
 
   async createSession(
@@ -1004,9 +994,6 @@ export class ACPAgentClient implements AgentClient {
         extensionCommandsParser: this.extensionCommandsParser,
         waitForInitialCommands: this.waitForInitialCommands,
         initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
-        // SLP-PATCH(acp-provider-mcp-servers): thread provider-level MCP
-        // servers to the new session.
-        providerMcpServers: this.providerMcpServers,
       },
     );
     await session.initializeNewSession();
@@ -1065,9 +1052,6 @@ export class ACPAgentClient implements AgentClient {
       waitForInitialCommands: this.waitForInitialCommands,
       initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
       resumePurpose: options?.purpose ?? "interactive",
-      // SLP-PATCH(acp-provider-mcp-servers): thread provider-level MCP
-      // servers to the resumed session.
-      providerMcpServers: this.providerMcpServers,
     });
     await session.initializeResumedSession();
     return session;
@@ -1708,9 +1692,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   ) => Promise<void>;
   private readonly agentId?: string;
   private readonly launchEnv?: Record<string, string>;
-  // SLP-PATCH(acp-provider-mcp-servers): provider-level MCP servers from the
-  // provider's own params, merged into every real session's mcpServers.
-  private readonly providerMcpServers?: Record<string, McpServerConfig>;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private pendingUserMessage: PendingUserMessage | null = null;
@@ -1772,7 +1753,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.availableModes = options.defaultModes;
     this.agentId = options.agentId;
     this.launchEnv = options.launchEnv;
-    this.providerMcpServers = options.providerMcpServers;
     this.initialHandle = options.handle;
     this.resumePurpose = options.resumePurpose ?? "interactive";
     this.config = { ...config, provider: options.provider };
@@ -2897,13 +2877,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private acpMcpServers(): McpServer[] {
-    if (!this.capabilities.supportsMcpServers) {
-      return [];
-    }
-    // SLP-PATCH(acp-provider-mcp-servers): merge the provider-level servers
-    // (from provider params) with the agent's own config.mcpServers, letting
-    // the agent's own config win a name clash.
-    return normalizeMcpServers({ ...this.providerMcpServers, ...this.config.mcpServers });
+    return this.capabilities.supportsMcpServers ? normalizeMcpServers(this.config.mcpServers) : [];
   }
 
   private applySessionState(response: SessionStateResponse): void {
