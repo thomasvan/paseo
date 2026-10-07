@@ -81,8 +81,9 @@ patch or moves its insertion point:
 `sendPromptToAgent`, away from `wakeup-each`'s watcher; #6273 (`a162e1075`) adds
 `configuredModelIds` to the registry's session options, beside
 `force-cancel-releases-foreground`'s forward; #6224 (`7fd469ae1`) turns registry
-installs on and ignores `pluginRegistryEnabled`, which the schema still accepts
-under `COMPAT(plugin-registry-gate)`; #6278 and #6281 change file downloads in
+installs on, and #6254 (`3c478e596`) then removed `pluginRegistryEnabled` from
+the strict config schema, so at `v0.11.0` a config carrying that key is refused
+at startup (`Unrecognized key`); #6278 and #6281 change file downloads in
 `bootstrap.ts`; #6295, #6272 and #6248 change the Claude provider outside
 `respondToPermission`; #6213 bounds ACP `close()`, which the history release does
 not call. Everything else auto-merged, and the other 28 files that differ from
