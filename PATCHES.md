@@ -63,16 +63,33 @@ and `archived-live-list` arrived without it being updated,
 dropped `claude-history-follows-provider-env` (upstream shipped it as #5437) and
 `schedule-claim-slots` brought it back to fifteen on 2026-10-01 and
 `schedule-claim-in-flight` made it sixteen the same day, and the v0.11.0-beta.5
-sync dropped `acp-provider-mcp-servers` for fifteen, which is
+sync dropped `acp-provider-mcp-servers` for fifteen, and the v0.11.0 sync kept
+all fifteen, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
-Current upstream sync: **2026-10-07**, tag `v0.11.0-beta.5` at
-`15d774d4a17c69bc0f8a62a85842764fab3c038d`, merged by `69763bbde`. No
-`v0.11.0` tag existed yet. `upstream/main` was past the pin at `8f1091da6`, and
-two of its later commits matter to this branch: #6224 (`7fd469ae1`, plugin
-registry installs on by default, removing `pluginRegistryEnabled`) and #6255
-(`2ecf3ba78`, an archived agent stays archived when a send to it fails, in
-`agent-prompt.ts`). Neither is in this pin. Three files conflicted.
+Current upstream sync: **2026-10-07**, tag `v0.11.0` at
+`22488d4502cd0c8a4ee4619af991762f071b60a7`, merged by `9f0f820bd` on top of the
+beta.5 sync below, 58 upstream commits later. One file conflicted:
+`providers/acp-agent.ts`, where #6228 (`a9fef4879`, an archived ACP agent's
+history loads after its worktree is removed) added the same resume-purpose
+plumbing `history-purpose-provider-contract` carried — the option, the fourth
+`resumeSession` argument and the `resumePurpose` field. The merge takes
+upstream's plumbing and keeps the patch's post-load release (see its section).
+Eight patch-owned files changed upstream, and none of the changes fixes a carried
+patch or moves its insertion point:
+#6255 (`2ecf3ba78`) re-archives an agent when a send cannot load it, in
+`sendPromptToAgent`, away from `wakeup-each`'s watcher; #6273 (`a162e1075`) adds
+`configuredModelIds` to the registry's session options, beside
+`force-cancel-releases-foreground`'s forward; #6224 (`7fd469ae1`) turns registry
+installs on and ignores `pluginRegistryEnabled`, which the schema still accepts
+under `COMPAT(plugin-registry-gate)`; #6278 and #6281 change file downloads in
+`bootstrap.ts`; #6295, #6272 and #6248 change the Claude provider outside
+`respondToPermission`; #6213 bounds ACP `close()`, which the history release does
+not call. Everything else auto-merged, and the other 28 files that differ from
+the tag carry the same patch lines as at beta.5. Every kept patch's defect is still present at
+the pin.
+Previous upstream sync: **2026-10-07**, tag `v0.11.0-beta.5` at
+`15d774d4a17c69bc0f8a62a85842764fab3c038d`, merged by `69763bbde`. Three files conflicted.
 `provider-registry.ts` keeps `force-cancel-releases-foreground`'s
 `releaseForegroundTurn` forward inside #5780's `satisfies ForwardedAgentSession`
 guard, which requires every session member to be forwarded. `generic-acp-agent.ts`
@@ -83,8 +100,8 @@ decision, not because upstream fixed it:** the target still mounts only a
 session's own `mcpServers`. Its remaining sites in `acp-agent.ts` and its four
 tests there left in the commit after the merge; the `history-purpose-provider-contract`
 hunks in both ACP files stayed. Everything else auto-merged, and no other
-patch changed shape. Every kept patch's defect is still present at the pin.
-Previous upstream sync: **2026-09-28**, tag `v0.10.0` at
+patch changed shape. Every kept patch's defect was still present at that pin.
+Earlier upstream sync: **2026-09-28**, tag `v0.10.0` at
 `c481ecf3e101326e3758d419341bc4faaf5b4f98` (on `upstream/main`), merged by the
 commit that introduced this paragraph, with the patch set reviewed against it
 first. Four files conflicted. `providers/claude/agent.ts` took upstream's #5437
@@ -870,6 +887,11 @@ serve one read. Measured on one host: eleven such runtimes left resident, ~1.36 
   the pi release was re-applied by hand around the new call. The bullets below describe the
   whole PR, #5132; where they name omp, opencode, plugin-provider, Claude or Codex, that
   code is upstream's on this branch.
+- **ACP plumbing is upstream's since the v0.11.0 sync.** #6228 (`a9fef4879`) threads
+  `purpose` into `ACPAgentSession` itself, to start a history read's process from the
+  home directory when the stored cwd is gone. It does not release that process after the
+  load. The patch in `acp-agent.ts` is now only the `resumePurpose === "history"` branch
+  that skips `applyConfiguredOverrides` and `releaseTransportAfterHistoryLoad()`.
 - **What:** `purpose: "history"` is now a real per-provider contract instead of an ignored
   hint. Claude and OMP already spawn nothing to serve a history read (Claude reads the
   session's own `.jsonl`; OMP's `streamHistory` reads the session file directly) — Claude
@@ -942,7 +964,7 @@ prompt rejects before the read begins`. Both mutants were executed: `pi/agent.ts
   [getpaseo/paseo#5132](https://github.com/getpaseo/paseo/pull/5132) is closed unmerged.
   Its OMP half landed with co-authorship as #5550; the maintainer's closing comment says
   the pi, ACP, OpenCode and plugin changes are not included. The pi and ACP defects are
-  still present at `v0.11.0-beta.5`, so this branch carries them with no upstream route.
+  still present at `v0.11.0`, so this branch carries them with no upstream route.
 
 ### schedule-claim-slots
 
@@ -1146,7 +1168,7 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured after the v0.11.0-beta.5 sync (2026-10-07): expect 13
+# Marker gate. Measured after the v0.11.0 sync (2026-10-07): expect 13
 # names across 36 code/test sites in 13 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
@@ -1241,30 +1263,31 @@ npm run lint
 git push origin slp/patches
 ```
 
-Measured at the v0.11.0-beta.5 sync (2026-10-07, at `99388be64`), each file by
-explicit path in scratch homes. Every file passed completely except the two e2e
-files below: `agent-prompt.slp` 2, `agent-prompt` 14, `create.slp` 2,
+Measured at the v0.11.0 sync (2026-10-07, at `9f0f820bd`), each file by
+explicit path in scratch homes. Every file passed completely except
+`mcp-parity.e2e`, below: `agent-prompt.slp` 2, `agent-prompt` 14, `create.slp` 2,
 `native-tools-gate.slp` 4, `create` 10, `provider-registry-wrap` 4, `mcp-server` 126,
 `claude/agent` 107, `codex-app-server-agent` 189, `agent-manager` 195, `pi/agent` 123,
-`acp-agent` 110, `generic-acp-agent` 1, `schedule/service` 63 and
-`claude-provider-config-dir-history.e2e` 2. Against the v0.10.0 sync's names, the
-differences are upstream's own added and removed tests plus the eight
-`acp-provider-mcp-servers` tests that left with the patch; #5780 removed
-`generic-acp-agent`'s provider-params MCP test. `npm run typecheck` exit 0,
+`acp-agent` 117, `generic-acp-agent` 1, `schedule/service` 63,
+`claude-provider-config-dir-history.e2e` 2 and `agent-mcp.e2e` 12. Against the
+beta.5 sync's names, the only differences are `acp-agent`'s seven new upstream
+tests, two from #6213 and five from #6273. `npm run typecheck` exit 0,
 `npm run format:check` clean, and `npm run lint` with 0 warnings and 0 errors.
 
-- `mcp-parity.e2e` at the 5 s default failed Suite E's four baseline names plus
-  timeouts in Suites A, B and D. With `--testTimeout=30000` only Suite E's four
-  failed.
-- `agent-mcp.e2e` passed 9 of 12 in two runs. In each, three `create_agent` tests
-  hit their own 30 s timeout, and every other test ran 2 to 33 times slower than
-  at v0.10.0. This file builds its daemons with `createPaseoDaemon` directly,
-  which starts all eleven built-in plugins (#5465, #5714): each is compiled with
-  esbuild and run in-process, with no child process
-  (`packages/server/src/server/plugins/runtime.ts:346-363`).
-  `test-utils/paseo-daemon.ts` passes an empty `BuiltinPluginLoader`.
-  A scratch copy of the file that did the same passed all three at v0.10.0's
-  durations. `mcp-protocol-version-clip`'s four tests passed in every run.
+- `mcp-parity.e2e` at the 5 s default failed Suite E's four baseline names plus a
+  Suite D timeout (`list_providers returns providers`). With
+  `--testTimeout=30000` only Suite E's four failed.
+- `agent-mcp.e2e` passed 12 of 12 at a 1-minute load of 11 to 24, but slowly: its
+  tests ran 2 to 48 times slower than at v0.10.0, and `create_workspace with local
+isolation` took 24 s of its 30 s. At the beta.5 sync, under more load, three
+  `create_agent` tests hit that timeout in both runs. This file builds its daemons
+  with `createPaseoDaemon` directly, which starts all eleven built-in plugins
+  (#5465, #5714): each is compiled with esbuild and run in-process, with no child
+  process (`packages/server/src/server/plugins/runtime.ts:346-363`).
+  `test-utils/paseo-daemon.ts` passes an empty `BuiltinPluginLoader`. At beta.5, a
+  scratch copy of the file that did the same passed all three at v0.10.0's
+  durations. Read a timeout here as that cost, not as a patch regression.
+  `mcp-protocol-version-clip`'s four tests passed in every run.
 
 Order matters. Typecheck first — it fails fastest and on the class of breakage
 a merge introduces. Then the `.slp.` files, which this fork owns and which are
