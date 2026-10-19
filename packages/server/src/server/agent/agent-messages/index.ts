@@ -64,6 +64,32 @@ function unescapeXml(value: string): string | null {
   });
 }
 
+// SLP-PATCH(agent-message-raw-body): an agent-sent body reaches the receiving model
+// as the sender wrote it. Upstream XML-escapes every body, so a model receives
+// `&lt;sha&gt;` and `&amp;&amp;` and has run the entity form as a command. Only the
+// envelope's own tag can end or open an envelope, so a raw body escapes that tag
+// sequence alone, reversibly: `<` before it becomes `&lt;`, and an existing
+// `&lt;`/`&amp;…lt;` before it gains one `amp;`, so a body that already holds the
+// escaped form still round-trips byte for byte. `body="raw"` tells the parser which
+// decoding applies; history written without it decodes as before. The human send
+// path (kind user-message, which quotes a pasted envelope) keeps the full escape.
+const ENVELOPE_TAG = /(&(?:amp;)*lt;|<)(\/?paseo-system)/gi;
+const ESCAPED_ENVELOPE_TAG = /&((?:amp;)*)lt;(\/?paseo-system)/gi;
+const RAW_ENVELOPE_TAG = /<\/?paseo-system/i;
+
+function escapeEnvelopeTags(value: string): string {
+  return value.replace(ENVELOPE_TAG, (_, lead: string, tag: string) =>
+    lead === "<" ? `&lt;${tag}` : `&amp;${lead.slice(1)}${tag}`,
+  );
+}
+
+function unescapeEnvelopeTags(value: string): string | null {
+  if (RAW_ENVELOPE_TAG.test(value)) return null;
+  return value.replace(ESCAPED_ENVELOPE_TAG, (_, amps: string, tag: string) =>
+    amps ? `&${amps.slice(4)}lt;${tag}` : `<${tag}`,
+  );
+}
+
 export function formatAgentMessage(message: AgentMessage): string {
   const { source } = message;
   const attributes = source
@@ -71,7 +97,9 @@ export function formatAgentMessage(message: AgentMessage): string {
     : 'kind="user-message"';
   const title = source?.title ? ` source-agent-title="${escapeXml(source.title)}"` : "";
   const event = source?.kind === "agent-notification" ? ` event="${source.event}"` : "";
-  return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${title}${event}>\n${escapeXml(message.text)}\n</paseo-system>`;
+  const body = source ? escapeEnvelopeTags(message.text) : escapeXml(message.text);
+  const encoding = source ? ' body="raw"' : "";
+  return `<paseo-system version="1" ${attributes} message-id="${escapeXml(message.id)}"${title}${event}${encoding}>\n${body}\n</paseo-system>`;
 }
 
 export function parseAgentMessage(text: string): AgentMessage | null {
@@ -87,7 +115,11 @@ export function parseAgentMessage(text: string): AgentMessage | null {
   }
   if (attributes.get("version") !== "1") return null;
   const id = attributes.get("message-id");
-  const body = unescapeXml(envelope[2]);
+  // SLP-PATCH(agent-message-raw-body): a raw body reverses only the envelope-tag
+  // escape; a body written without `body="raw"` decodes as upstream wrote it.
+  const encoding = attributes.get("body");
+  if (encoding !== undefined && encoding !== "raw") return null;
+  const body = encoding === "raw" ? unescapeEnvelopeTags(envelope[2]) : unescapeXml(envelope[2]);
   if (!id || body === null) return null;
   if (attributes.get("kind") === "user-message") {
     if (attributes.has("source-agent-id") || attributes.has("event")) return null;

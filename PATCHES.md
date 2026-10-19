@@ -22,11 +22,11 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
 `provider-registry.ts`).
 
-Three patches keep their tests in fork-only `.slp.test.ts` files upstream does
-not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts` and
-`native-tools-gate.slp.test.ts`. (`native-tools-optin.slp.test.ts` was the
-third until the 2026-09-07 sync retired its patch; `native-tools-gate.slp.test.ts`
-replaced it there, keeping the count at three.)
+Four patches keep their tests in fork-only `.slp.test.ts` files upstream does
+not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`,
+`native-tools-gate.slp.test.ts` and `agent-message-raw-body.slp.test.ts`.
+(`native-tools-optin.slp.test.ts` was the third until the 2026-09-07 sync retired its
+patch; `native-tools-gate.slp.test.ts` replaced it there.)
 
 Another patch puts its tests in an upstream-owned file, because the test belongs next to
 the thing it checks: `detached-arg`'s behaviour only shows through a live MCP tool call, so
@@ -51,7 +51,7 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Patches that landed upstream have left, and their sections with them. **Twelve patches
+Patches that landed upstream have left, and their sections with them. **Thirteen patches
 remain here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
@@ -63,7 +63,8 @@ dropped `claude-history-follows-provider-env` (upstream shipped it as #5437) and
 `schedule-claim-in-flight` made it sixteen the same day, and the v0.11.0-beta.5
 sync dropped `acp-provider-mcp-servers` for fifteen, the v0.11.0 sync kept
 all fifteen, and the v0.12.0 sync retired `question-answer-required`,
-`schedule-claim-slots` and `schedule-claim-in-flight` for twelve, which is
+`schedule-claim-slots` and `schedule-claim-in-flight` for twelve, and
+`agent-message-raw-body` made it thirteen on 2026-10-20, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-10-19**, tag `v0.12.0` at
@@ -266,6 +267,7 @@ breakage and is not. The patch table:
 | [#4694](https://github.com/getpaseo/paseo/pull/4694) | — dropped `claude-history-follows-provider-env`                                                                                                   | `providers/claude/agent.ts`                                                                                                                                                               | closed 2026-09-26 as superseded by [#5437](https://github.com/getpaseo/paseo/pull/5437), landed `76a9781ba`, in `v0.10.0`; patch dropped at the v0.10.0 sync                                      |
 | [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | this branch carries two of the PR's five providers — `acp-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736; omp, opencode and plugin-provider dropped at the v0.10.0 sync) | closed unmerged — the OMP half landed as [#5550](https://github.com/getpaseo/paseo/pull/5550) (`264f6e1cc`); the pi and ACP halves were not included. **No marker**; kept, with no upstream route |
 | [#4904](https://github.com/getpaseo/paseo/pull/4904) | — retired `schedule-claim-slots`, `schedule-claim-in-flight`                                                                                      | `schedule/service.ts`                                                                                                                                                                     | closed unmerged — superseded by [#6532](https://github.com/getpaseo/paseo/pull/6532), landed `ee0d901ef` with keithpk's credit, in `v0.12.0`; both patches retired at the v0.12.0 sync            |
+| —                                                    | `agent-message-raw-body`                                                                                                                          | `agent-messages/index.ts`                                                                                                                                                                 | not opened upstream: the room decided nothing goes to getpaseo/paseo                                                                                                                              |
 
 **Re-verified 2026-10-19** against tag `v0.12.0` (`cafe4b01c`): of the fifteen, upstream
 fixes three, `question-answer-required` (#6936) and both schedule patches (#6532, #6334), and
@@ -783,9 +785,9 @@ scanning headings concluded it was gone.
 
 Scanning headings does not enumerate the patches anyway, and nothing in this file
 said so until now: since the v0.12.0 sync four patches are documented as `##` sections
-_above_ `## Patches`, and eight as `###` sections under it:
+_above_ `## Patches`, and nine as `###` sections under it:
 `sed -n '/^## Patches$/,/^## Sync procedure$/p' PATCHES.md | rg -c '^### '`
-measures **8**, so neither level alone lists them all. The roster is the marker manifest
+measures **9**, so neither level alone lists them all. The roster is the marker manifest
 in `Sync procedure`, plus `archived-live-list` and `history-purpose-provider-contract`,
 which carry no marker. That mattered more than a missing heading
 usually does: it is the patch nearest the region upstream rewrote in #3742, so
@@ -970,6 +972,48 @@ prompt rejects before the read begins`. Both mutants were executed: `pi/agent.ts
   the pi, ACP, OpenCode and plugin changes are not included. The pi defect and the ACP
   overrides are still present at `v0.12.0`, so this branch carries them with no upstream route.
 
+### agent-message-raw-body
+
+Added 2026-10-20, on the v0.12.0 sync branch. Room-local: the room decided nothing goes to
+getpaseo/paseo, so there is no upstream PR.
+
+- **What:** `formatAgentMessage` (`agent/agent-messages/index.ts`) writes the body of every
+  agent-sent envelope, `agent-message` and every `agent-notification` event, as the sender's
+  bytes, and marks the envelope `body="raw"`. Upstream (#6373, `v0.12.0`) XML-escapes every
+  body, so the receiving model is given `&lt;sha&gt;` and `&amp;&amp;` for `<sha>` and `&&`.
+- **Why it matters here:** the room's scratch proof E sent each family the command
+  `printf '%s\n' '<sha>' && printf '%s\n' 'ROOM-XML-PASS'` on the idle and steered paths,
+  three times each. Every harness delivered the escaped form, Codex ran the entity form as
+  written in two of its six runs (exit 2), and a field holding a literal `&amp;` came back
+  double-encoded in most runs. The table is the room's `~/.cache/paseo-sync-v0.12/proofs/E-table.md`.
+- **The one escape kept:** only the envelope's own tag can end an envelope or open a second
+  one, so a raw body escapes that tag sequence alone, in any letter case: `<` before
+  `paseo-system` or `/paseo-system` becomes `&lt;`, and an `&lt;` or `&amp;…lt;` already
+  there gains one `amp;`. The parser reverses exactly that, so a body that already holds the
+  escaped form round-trips byte for byte, and it refuses a raw body that carries an
+  unescaped envelope tag, so a body cannot read as a second sender.
+- **What it leaves alone:** an envelope without `body="raw"` decodes as upstream wrote it,
+  so history an unpatched v0.12 daemon wrote still projects as before. The human send path
+  is upstream's: `prepareAgentMessage` with no source still quotes a pasted envelope, raw or
+  escaped, as a fully escaped `user-message`. Every reader of the envelope goes through
+  `parseAgentMessage`: the timeline projection `projectAgentMessage` (live events, history
+  replay, accepted submissions), the human path's quoting check, and the manager's
+  out-of-band slash-command unwrap in `tryRunOutOfBand`. The app, the protocol package and
+  the activity curator read the projected `agentMessage.text`, never the envelope.
+- **Known limit:** a reader that does not know `body="raw"`, an unpatched v0.12 daemon reading
+  this daemon's history, decodes a raw body as XML. A body with a raw `<`, `>` or bare `&`
+  then falls back to a plain user row without its sender, and `&amp;` reads as `&`. A rollback
+  to the v0.11 fork reads no envelope at all.
+- **Sites:** two markers, both in `agent/agent-messages/index.ts` (the format and the parse).
+- **Coverage:** `agent-message-raw-body.slp.test.ts` drives `sendPromptToAgent` into a real
+  `AgentManager` whose fake provider records the prompt its session receives, then replays
+  those bytes as provider history through `hydrateTimelineFromProvider`. Its tables bind the
+  model's bytes per envelope kind, the projected text, history written escaped, the envelope
+  boundary, and the human path.
+- **Retirement and revisit:** if upstream stops escaping agent bodies, or delivers them some
+  other way that gives the model the sender's bytes, re-run the room's proof E on the new
+  pin before dropping this patch.
+
 ## Sync procedure
 
 First, derive the patch-owned file manifest, then check whether upstream touched
@@ -1126,8 +1170,8 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured after the v0.12.0 sync (2026-10-19): expect 10
-# names across 28 code/test sites in 11 files, and use the per-name manifest
+# Marker gate. Measured after agent-message-raw-body (2026-10-20): expect 11
+# names across 30 code/test sites in 12 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
 # changes whenever the prose does; include it and the gate can never pass on a
@@ -1135,13 +1179,14 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # path, so sort -u would dedupe path:name pairs and return one line per file,
 # not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 10
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 11
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
 #    6 native-tools-injection-independent     3 interrupt-releases-foreground
 #    4 wakeup-each                            2 force-cancel-releases-foreground
 #    3 replace-awaits-teardown                2 detached-arg
 #    3 mcp-protocol-version-clip              1 dispose-releases-foreground
 #    3 detached-wakeup                        1 dead-run-settles
+#    2 agent-message-raw-body
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list and history-purpose-provider-contract are absent from this
@@ -1230,6 +1275,7 @@ vt packages/server/src/server/agent/providers/pi/agent.test.ts        # history-
 vt packages/server/src/server/agent/providers/acp-agent.test.ts       # history-purpose (acp)
 vt packages/server/src/server/agent/providers/generic-acp-agent.test.ts
 vt packages/server/src/server/agent/providers/generic-acp-agent.archived-history.test.ts  # #6766's release
+vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts --bail=1   # agent-message-raw-body
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/daemon-e2e/claude-provider-config-dir-history.e2e.test.ts
 
@@ -1251,7 +1297,8 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 `codex-app-server-agent` 193, `agent-manager` 208, `mcp-parity.e2e` 35 (35 at the 5 s default
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
-`claude-provider-config-dir-history.e2e` 2. `npm run build:server` and `npm run typecheck`
+`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 21.
+`npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus
 name is a kept, adapted or new fork test.
