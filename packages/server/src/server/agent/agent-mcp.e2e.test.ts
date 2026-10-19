@@ -952,7 +952,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const payload = getStructuredContent(result);
@@ -1005,7 +1004,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const payload = getStructuredContent(result);
@@ -1058,7 +1056,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const payload = getStructuredContent(result);
