@@ -11,27 +11,43 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { setupFinishNotification } from "./agent-prompt.js";
+import type { PromptDispatchDisposition } from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
+import { parseAgentMessage } from "./agent-messages/index.js";
 
 interface SlpScenarioOptions {
-  childLastAssistantMessage?: string | null;
   callerArchivedAt?: string | null;
 }
 
+interface WatchOptions {
+  dispatchResult?: Promise<PromptDispatchDisposition | false>;
+}
+
 interface SlpScenario {
-  startWatchingChild(): void;
+  startWatchingChild(options?: WatchOptions): () => void;
+  startChildTurn(): void;
+  completeChildTurn(): void;
   finishChild(): void;
+  idleWithoutCompletion(): void;
+  cancelWhileRunning(): void;
+  cancelToIdle(): void;
+  replaceTimeline(): void;
   flush(parentPromptsLength: number): Promise<void>;
-  parentPrompts(): string[];
-  isSubscribed(): boolean;
+  settle(): Promise<void>;
+  parentEvents(): string[];
+  parentTexts(): string[];
+  subscriberCount(): number;
 }
 
 // Harness mirrors upstream's own agent-prompt.test.ts: a real AgentManager
 // with only the dispatch surface stubbed (getAgent/subscribe/…/streamAgent),
-// because the merged notify path walks ensureAgentLoaded → startAgentRun
-// across the manager's run tracker before reaching streamAgent.
+// because the notify path walks ensureAgentLoaded → startAgentRun across the
+// manager's run tracker before reaching streamAgent. Like upstream's harness,
+// a finish is the child's idle state followed by its terminal stream event,
+// the order the manager publishes them in. Subscribers are a set, so
+// overlapping observations of one child are visible.
 function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
-  let subscriber: ((event: AgentManagerEvent) => void) | null = null;
+  const subscribers = new Set<(event: AgentManagerEvent) => void>();
   const parentPrompts: string[] = [];
 
   const childAgent: ManagedAgent = Object.create(null);
@@ -56,14 +72,12 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
     return null;
   });
   Reflect.set(agentManager, "subscribe", (callback: (event: AgentManagerEvent) => void) => {
-    subscriber = callback;
+    subscribers.add(callback);
     return () => {
-      subscriber = null;
+      subscribers.delete(callback);
     };
   });
-  Reflect.set(agentManager, "getLastAssistantMessage", async () => {
-    return options?.childLastAssistantMessage ?? "turn done";
-  });
+  Reflect.set(agentManager, "getLastAssistantMessage", async () => "turn done");
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
   Reflect.set(agentManager, "hasInFlightRun", () => false);
   Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => ({ status: "inactive" }));
@@ -89,39 +103,79 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
     return null;
   });
 
+  function emit(event: AgentManagerEvent): void {
+    for (const subscriber of subscribers) subscriber(event);
+  }
+
   function emitLifecycle(lifecycle: "running" | "idle" | "closed" | "error"): void {
     childAgent.lifecycle = lifecycle;
-    subscriber?.({
-      type: "agent_state",
-      agent: childAgent,
+    emit({ type: "agent_state", agent: childAgent });
+  }
+
+  function emitStream(
+    event: { type: "turn_completed" } | { type: "turn_canceled"; reason: string },
+  ): void {
+    emit({
+      type: "agent_stream",
+      agentId: "child-agent",
+      event: { ...event, provider: "codex" },
     });
   }
 
   return {
-    startWatchingChild() {
-      setupFinishNotification({
+    startWatchingChild(watch?: WatchOptions) {
+      return setupFinishNotification({
         agentManager,
         agentStorage,
         childAgentId: "child-agent",
         callerAgentId: "caller-agent",
         requireParentOwnership: true,
+        ...(watch?.dispatchResult ? { dispatchResult: watch.dispatchResult } : {}),
         logger: createTestLogger(),
       });
+    },
+    startChildTurn() {
+      emitLifecycle("running");
+    },
+    completeChildTurn() {
+      emitLifecycle("idle");
+      emitStream({ type: "turn_completed" });
     },
     finishChild() {
       emitLifecycle("running");
       emitLifecycle("idle");
+      emitStream({ type: "turn_completed" });
+    },
+    idleWithoutCompletion() {
+      emitLifecycle("running");
+      emitLifecycle("idle");
+    },
+    cancelWhileRunning() {
+      emitStream({ type: "turn_canceled", reason: "replaced" });
+    },
+    cancelToIdle() {
+      emitLifecycle("idle");
+      emitStream({ type: "turn_canceled", reason: "interrupted" });
+    },
+    replaceTimeline() {
+      emit({ type: "timeline_replacement", agentId: "child-agent", epoch: "epoch-2" });
     },
     async flush(parentPromptsLength: number) {
       await vi.waitFor(() => {
         expect(parentPrompts).toHaveLength(parentPromptsLength);
       });
     },
-    parentPrompts() {
-      return parentPrompts;
+    async settle() {
+      await new Promise((resolve) => setTimeout(resolve, 25));
     },
-    isSubscribed() {
-      return subscriber !== null;
+    parentEvents() {
+      return parentPrompts.map((prompt) => parseAgentMessage(prompt)?.source?.event ?? prompt);
+    },
+    parentTexts() {
+      return parentPrompts.map((prompt) => parseAgentMessage(prompt)?.text ?? prompt);
+    },
+    subscriberCount() {
+      return subscribers.size;
     },
   };
 }
@@ -136,7 +190,123 @@ test("the watcher re-arms: every finish of the child notifies the caller", async
   scenario.finishChild();
   await scenario.flush(2);
 
-  expect(scenario.isSubscribed()).toBe(true);
+  expect(scenario.parentEvents()).toEqual(["finished", "finished"]);
+  expect(scenario.subscriberCount()).toBe(1);
+});
+
+test("a repeated completion with no new turn observed notifies nothing more", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  scenario.completeChildTurn();
+  await scenario.settle();
+
+  expect(scenario.parentEvents()).toEqual(["finished"]);
+  expect(scenario.subscriberCount()).toBe(1);
+});
+
+test("an idle state without a terminal completion notifies nothing", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.idleWithoutCompletion();
+  await scenario.settle();
+
+  expect(scenario.parentEvents()).toEqual([]);
+  expect(scenario.subscriberCount()).toBe(1);
+});
+
+test("a cancellation while the child keeps running notifies nothing and keeps watching", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.startChildTurn();
+  scenario.cancelWhileRunning();
+  await scenario.settle();
+  expect(scenario.parentEvents()).toEqual([]);
+
+  scenario.completeChildTurn();
+  await scenario.flush(1);
+  expect(scenario.parentEvents()).toEqual(["finished"]);
+  expect(scenario.subscriberCount()).toBe(1);
+});
+
+test("a cancellation that leaves the child idle notifies once and stops watching", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  scenario.startChildTurn();
+  scenario.cancelToIdle();
+  await scenario.flush(2);
+
+  // "was canceled" travels on the errored event; the body names the outcome.
+  expect(scenario.parentEvents()).toEqual(["finished", "errored"]);
+  expect(scenario.parentTexts()[1]).toContain("Agent child-agent (Child Agent) was canceled.");
+  expect(scenario.subscriberCount()).toBe(0);
+});
+
+test("a cancellation with no new turn after a finish notifies nothing", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  scenario.cancelToIdle();
+  await scenario.settle();
+
+  expect(scenario.parentEvents()).toEqual(["finished"]);
+  expect(scenario.subscriberCount()).toBe(1);
+});
+
+test("a timeline replacement passes through a re-armed watcher without throwing", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  expect(() => scenario.replaceTimeline()).not.toThrow();
+  scenario.finishChild();
+  await scenario.flush(2);
+
+  expect(scenario.parentEvents()).toEqual(["finished", "finished"]);
+});
+
+test("a rejected follow-up leaves the re-armed watcher as the one that notifies", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  scenario.startWatchingChild({ dispatchResult: Promise.resolve(false) });
+  await scenario.settle();
+  expect(scenario.subscriberCount()).toBe(1);
+
+  scenario.finishChild();
+  await scenario.flush(2);
+  await scenario.settle();
+  expect(scenario.parentEvents()).toEqual(["finished", "finished"]);
+});
+
+test("an accepted follow-up supersedes the re-armed watcher, so each finish notifies once", async () => {
+  const scenario = createSlpScenario();
+
+  scenario.startWatchingChild();
+  scenario.finishChild();
+  await scenario.flush(1);
+  scenario.startWatchingChild({ dispatchResult: Promise.resolve("steered") });
+  await scenario.settle();
+  expect(scenario.subscriberCount()).toBe(1);
+
+  scenario.finishChild();
+  await scenario.flush(2);
+  scenario.finishChild();
+  await scenario.flush(3);
+  await scenario.settle();
+  expect(scenario.parentEvents()).toEqual(["finished", "finished", "finished"]);
 });
 
 // SLP-PATCH(wakeup-each)
@@ -147,8 +317,8 @@ test("an archived caller disarms the watcher instead of leaking it", async () =>
 
   scenario.startWatchingChild();
   scenario.finishChild();
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await scenario.settle();
 
-  expect(scenario.parentPrompts()).toHaveLength(0);
-  expect(scenario.isSubscribed()).toBe(false);
+  expect(scenario.parentEvents()).toEqual([]);
+  expect(scenario.subscriberCount()).toBe(0);
 });
