@@ -1057,6 +1057,21 @@ describe("Codex client disposal", () => {
     await internals.disposeClient();
     expect(internals.activeForegroundTurnId).toBeNull();
   });
+});
+
+describe("Codex app-server provider", () => {
+  test("getAvailableModes includes auto-review when the Codex version supports it", async () => {
+    const session = createSession({}, { autoReviewEnabled: true });
+
+    await expect(session.getAvailableModes()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "auto-review",
+          label: "Auto-review",
+        }),
+      ]),
+    );
+  });
 
   test("getAvailableModes excludes auto-review when the Codex version is too old", async () => {
     const session = createSession({}, { autoReviewEnabled: false });
