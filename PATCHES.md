@@ -14,8 +14,7 @@ Patches live in **more files than any sentence here should try to list** — the
 manifest is derived in `Sync procedure` below, and a hand-kept list drifted
 twice before that. The shape, though: `packages/server/src/server/agent/agent-prompt.ts`,
 one argument in `packages/server/src/server/agent/create-agent/create.ts`, one schema
-field in `packages/server/src/server/agent/tools/paseo-tools.ts`, one guard in
-`packages/server/src/server/agent/providers/claude/agent.ts`, four provider-local
+field in `packages/server/src/server/agent/tools/paseo-tools.ts`, four provider-local
 repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts`
 (`dead-run-settles`, `replace-awaits-teardown`, `dispose-releases-foreground`,
 `interrupt-releases-foreground`), and a fifth,
@@ -29,18 +28,17 @@ not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts` and
 third until the 2026-09-07 sync retired its patch; `native-tools-gate.slp.test.ts`
 replaced it there, keeping the count at three.)
 
-`schedule-claim-slots` and `schedule-claim-in-flight` also keep their tests in an
-upstream-owned file (`schedule/service.test.ts`), unmarked for the same reason.
+Another patch puts its tests in an upstream-owned file, because the test belongs next to
+the thing it checks: `detached-arg`'s behaviour only shows through a live MCP tool call, so
+its two tests sit in `mcp-parity.e2e.test.ts` beside the legacy-shape test they mirror.
 
-Two other patches put their tests in upstream-owned files, for the same reason in
-both cases — the test belongs next to the thing it checks. `detached-arg`'s behaviour only
-shows through a live MCP tool call, so its two tests sit in `mcp-parity.e2e.test.ts` beside
-the legacy-shape test they mirror; `question-answer-required` guards a rule defined in the
-Claude provider, so its tests sit in `providers/claude/agent.test.ts` beside that rule. The
-new `a rejected question answer leaves the request answerable by a corrected retry` test
-follows that upstream-owned-file convention and carries no marker: these tests are expected
-to converge if upstream takes the patch, and adding a marker would falsely change the patch
-census.
+`schedule/service.test.ts` carries one fork test that belongs to no patch:
+`refuses a manual run while a scheduled claim is in flight`. It came from
+`schedule-claim-in-flight`, which retired at the v0.12.0 sync, and stays as the one guard on
+upstream's reservation of a schedule before its claim (#6532): no upstream test fails when
+that reservation moves after the claim. It carries no marker, keeps
+`schedule/service.test.ts` in the derived file manifest, and leaves when upstream adds an
+equivalent.
 
 ## Why these patches exist
 
@@ -53,8 +51,8 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Three have landed upstream and their sections are gone. **Fifteen patches remain
-here** — the count was nine for a while after `force-cancel-releases-foreground`
+Patches that landed upstream have left, and their sections with them. **Twelve patches
+remain here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
 `claude-history-follows-provider-env` made it thirteen on 2026-09-11,
@@ -63,11 +61,51 @@ and `archived-live-list` arrived without it being updated,
 dropped `claude-history-follows-provider-env` (upstream shipped it as #5437) and
 `schedule-claim-slots` brought it back to fifteen on 2026-10-01 and
 `schedule-claim-in-flight` made it sixteen the same day, and the v0.11.0-beta.5
-sync dropped `acp-provider-mcp-servers` for fifteen, and the v0.11.0 sync kept
-all fifteen, which is
+sync dropped `acp-provider-mcp-servers` for fifteen, the v0.11.0 sync kept
+all fifteen, and the v0.12.0 sync retired `question-answer-required`,
+`schedule-claim-slots` and `schedule-claim-in-flight` for twelve, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
-Current upstream sync: **2026-10-07**, tag `v0.11.0` at
+Current upstream sync: **2026-10-19**, tag `v0.12.0` at
+`cafe4b01c8522ff39560241c5deb01427dc8dc5b` (tag object `d288bcfc8`), merged by
+`5bf333959` on top of the v0.11.0 sync below, 248 upstream commits later, by the
+room's plan `plans/paseo-sync-v0.12.md` (AI-airoom `4283af45e`). Eight files conflicted:
+
+- `agent/agent-prompt.ts`: #6660 settles a turn on its terminal stream event, #5164 adds
+  dispatch acknowledgement and observer supersession, and #6373 marks the sender. The merge
+  takes all three; `wakeup-each` moved into the idle `turn_completed` branch (see its section).
+- `agent/create-agent/create.ts`: #5039 arms the finish watcher before the first prompt is
+  dispatched. `detached-wakeup`'s argument moved into that registration, and the fork's later
+  arming block left.
+- `agent/agent-projections.ts`: the fork's `archivedAt` sits beside #5039's `internal`.
+- `agent/tools/paseo-tools.ts`: `list_agents` takes #5039's `AgentDirectory`, and
+  `archived-live-list` keeps its archive filter after projection (see its section).
+- `agent/providers/acp-agent.ts`: #6766's `releaseHistoryRuntime()` replaces the fork's
+  release helper; `history-purpose-provider-contract`'s ACP half is narrowed to returning
+  before the configured overrides (see its section).
+- `agent/providers/claude/agent.ts` and `schedule/service.ts` take upstream's files whole.
+  `schedule/service.test.ts` takes upstream's tests and adds the fork's manual-run-during-claim
+  case.
+
+Three patches retired, each on its proof run against the merged tree:
+
+- `question-answer-required`, by #6936 (`71f575e16`): an undeliverable question answer is
+  rejected before the request is consumed, with a typed `question_answer_required` error, and a
+  corrected retry on the same request id delivers. Upstream's rejection does not name the keys
+  a request accepts, which two of the fork's nineteen helper cases asserted; that message is
+  lost, by decision. Upstream's `providers/claude/question-response.test.ts` carries the
+  behaviour.
+- `schedule-claim-slots`, by #6532 (`ee0d901ef`), which carries keithpk's #4904 forward with
+  its credit, adds final-slot handling and drops the persisted-running veto that wedged later
+  slots after an unsaved outcome.
+- `schedule-claim-in-flight`, by the same commit's reservation of the schedule before any
+  store I/O, which #6334 (`0fc6bf0c9`) releases when the run record cannot be written.
+
+Outside the patches, the sync restored upstream's positive Codex test
+`getAvailableModes includes auto-review when the Codex version supports it` and its
+`Codex app-server provider` describe, which an unrelated fork commit (`a54319c5a`) had deleted
+and renamed.
+Previous upstream sync: **2026-10-07**, tag `v0.11.0` at
 `22488d4502cd0c8a4ee4619af991762f071b60a7`, merged by `9f0f820bd` on top of the
 beta.5 sync below, 58 upstream commits later. One file conflicted:
 `providers/acp-agent.ts`, where #6228 (`a9fef4879`, an archived ACP agent's
@@ -89,7 +127,7 @@ at startup (`Unrecognized key`); #6278 and #6281 change file downloads in
 not call. Everything else auto-merged, and the other 28 files that differ from
 the tag carry the same patch lines as at beta.5. Every kept patch's defect is still present at
 the pin.
-Previous upstream sync: **2026-10-07**, tag `v0.11.0-beta.5` at
+Earlier upstream sync: **2026-10-07**, tag `v0.11.0-beta.5` at
 `15d774d4a17c69bc0f8a62a85842764fab3c038d`, merged by `69763bbde`. Three files conflicted.
 `provider-registry.ts` keeps `force-cancel-releases-foreground`'s
 `releaseForegroundTurn` forward inside #5780's `satisfies ForwardedAgentSession`
@@ -219,16 +257,28 @@ breakage and is not. The patch table:
 | [#3147](https://github.com/getpaseo/paseo/pull/3147) | `detached-arg`                                                                                                                                    | `paseo-tools.ts`                                                                                                                                                                          | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                      |
 | [#4277](https://github.com/getpaseo/paseo/pull/4277) | — superseded `native-tools-optin`                                                                                                                 | per-provider Paseo tool policy                                                                                                                                                            | landed `53c960747`; closed #3449 as superseded 2026-09-03                                                                                                                                         |
 | [#4434](https://github.com/getpaseo/paseo/pull/4434) | `native-tools-injection-independent`                                                                                                              | `bootstrap.ts`, `native-tools-gate.ts`                                                                                                                                                    | closed 2026-09-08 — feature-PR sweep; fork branch deleted 2026-09-23; Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                      |
-| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                                                                             | closed 2026-09-08 in favor of #4041 (still open 2026-10-07) — follow-up remains; fork branch deleted 2026-09-23                                                                                   |
-| [#3495](https://github.com/getpaseo/paseo/pull/3495) | `question-answer-required`                                                                                                                        | claude provider                                                                                                                                                                           | open — rebased 2026-09-23 onto `d161b5987`                                                                                                                                                        |
+| [#3640](https://github.com/getpaseo/paseo/pull/3640) | `dead-run-settles`, `interrupt-releases-foreground`, `replace-awaits-teardown`, `dispose-releases-foreground`, `force-cancel-releases-foreground` | `codex-app-server-agent.ts`, `agent-manager.ts`, `agent-sdk-types.ts`, `provider-registry.ts`                                                                                             | closed 2026-09-08 in favor of #4041 (still open 2026-10-19) — follow-up remains; fork branch deleted 2026-09-23                                                                                   |
+| [#3495](https://github.com/getpaseo/paseo/pull/3495) | — retired `question-answer-required`                                                                                                              | claude provider                                                                                                                                                                           | closed unmerged — superseded by [#6936](https://github.com/getpaseo/paseo/pull/6936), landed `71f575e16`, in `v0.12.0`; patch retired at the v0.12.0 sync                                         |
 | [#3803](https://github.com/getpaseo/paseo/pull/3803) | `archived-live-list`                                                                                                                              | `mcp-shared.ts`, `agent-projections.ts`, `messages.ts`, `paseo-tools.ts`                                                                                                                  | open — **no marker**; QA evidence added 2026-09-23                                                                                                                                                |
 | [#3674](https://github.com/getpaseo/paseo/pull/3674) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                                                               | closed into #3640; fork branch deleted 2026-09-23                                                                                                                                                 |
 | [#3683](https://github.com/getpaseo/paseo/pull/3683) | —                                                                                                                                                 | `codex-app-server-agent.ts`                                                                                                                                                               | closed into #3640; fork branch deleted 2026-09-23                                                                                                                                                 |
 | [#4570](https://github.com/getpaseo/paseo/pull/4570) | `mcp-protocol-version-clip`                                                                                                                       | `bootstrap.ts`                                                                                                                                                                            | open — QA evidence added 2026-09-23                                                                                                                                                               |
 | [#4694](https://github.com/getpaseo/paseo/pull/4694) | — dropped `claude-history-follows-provider-env`                                                                                                   | `providers/claude/agent.ts`                                                                                                                                                               | closed 2026-09-26 as superseded by [#5437](https://github.com/getpaseo/paseo/pull/5437), landed `76a9781ba`, in `v0.10.0`; patch dropped at the v0.10.0 sync                                      |
 | [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | this branch carries two of the PR's five providers — `acp-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736; omp, opencode and plugin-provider dropped at the v0.10.0 sync) | closed unmerged — the OMP half landed as [#5550](https://github.com/getpaseo/paseo/pull/5550) (`264f6e1cc`); the pi and ACP halves were not included. **No marker**; kept, with no upstream route |
-| [#4904](https://github.com/getpaseo/paseo/pull/4904) | `schedule-claim-slots`                                                                                                                            | `schedule/service.ts`                                                                                                                                                                     | open (head `f62ffc7`, by keithpk; closes #2819) — carried as written, drop when it merges                                                                                                         |
-| —                                                    | `schedule-claim-in-flight`                                                                                                                        | `schedule/service.ts`                                                                                                                                                                     | not opened upstream — room-local guard on #4904; re-check, do not drop, when #4904 merges                                                                                                         |
+| [#4904](https://github.com/getpaseo/paseo/pull/4904) | — retired `schedule-claim-slots`, `schedule-claim-in-flight`                                                                                      | `schedule/service.ts`                                                                                                                                                                     | closed unmerged — superseded by [#6532](https://github.com/getpaseo/paseo/pull/6532), landed `ee0d901ef` with keithpk's credit, in `v0.12.0`; both patches retired at the v0.12.0 sync            |
+
+**Re-verified 2026-10-19** against tag `v0.12.0` (`cafe4b01c`): of the fifteen, upstream
+fixes three, `question-answer-required` (#6936) and both schedule patches (#6532, #6334), and
+they were retired. For each of the twelve kept, the v0.12.0 source still has the defect. A
+successful finish still stops the watcher, and an archived caller returns without stopping it.
+`create.ts` still passes `requireParentOwnership: true`. The canonical agent-scoped
+`create_agent` still returns `detached: false`. The seven native-catalog enables are still
+gated on injection. The lockfile still pins `@modelcontextprotocol/sdk` 1.29.0. The Codex
+provider still throws on an unidentified turn, refuses a new turn at once while the slot is
+held, and keeps the slot through disposal and forced settlement; #7339 buffers startup events
+and closes none of these, and #4041 is still open. `list_agents`' new `AgentDirectory` filters
+archives on raw live snapshots, which carry no archive timestamp. pi still ignores `purpose`,
+and ACP applies the configured overrides before it releases a history read's process.
 
 **Re-verified 2026-09-28** against tag `v0.10.0` (`c481ecf3e`): of the fourteen,
 upstream fixes one, `claude-history-follows-provider-env` (#5437), and it was
@@ -481,85 +531,7 @@ compile-time exhaustiveness guard, which exists for exactly this omission.
 call one keyed `releaseForegroundTurn()`, so the slot has a single release
 path and one test covers the waiter flush for all of them.
 
-## `question-answer-required`
-
-**PR:** [#3495](https://github.com/getpaseo/paseo/pull/3495), cut from
-`upstream/main` so it carries no `SLP-PATCH` marker — if it lands the file
-converges instead of conflicting, and this section goes. **Rebased 2026-09-23**
-onto `main` `d161b5987` (head `32a5085c9`): the only conflict was the test file's
-import block, where #5240 added imports beside this PR's; `git range-diff` shows no
-other change, the file's 103 tests pass, and moving the guard after the delete
-(M12) still fails `a rejected question answer leaves the request answerable by a
-corrected retry`.
-
-**Sites:** `packages/server/src/server/agent/providers/claude/agent.ts` — one
-extracted helper, one guard beside the normalizer, one call at the top of
-`respondToPermission` — with its tests in upstream's own
-`providers/claude/agent.test.ts`. Two markers, both in that one file.
-
-**What it fixes.** A `question` permission answered in any shape but
-`updatedInput.answers` keyed by one of its questions resolved as `allow` and
-delivered nothing. The waiting agent was told `The user did not answer the
-questions.` — an affirmative falsehood rather than silence, so neither side
-could see the failure. The natural field to reach for, `selectedActionId`, is
-`z.string().optional()` with no membership check and is read only for `plan`
-kinds, while a question advertises `actions: undefined`.
-
-Worse, it was unrecoverable: `respondToPermission` deletes the request from
-`pendingPermissions` on entry, so the malformed answer consumed it and the retry
-failed with `No pending permission request`. The guard runs **before** that
-delete, and `AgentManager` drops its own copy only once the call resolves, so
-both maps are intended to survive the throw and the request should stay
-answerable. The committed test `a rejected question answer leaves the request
-answerable by a corrected retry` proves that recoverability behaviour: it rejects
-the non-deliverable answer, retries the same `requestId` with a corrected answer,
-and observes the normalized answer at the waiting caller. With the M12 mutation
-moving the deliverability check after `pendingPermissions.delete`, the test fails
-with `No pending permission request`. Both captures are re-runs at revision
-`e92e5d29434b925647b0c6f1e53322f6073d977a`, not at the census tree: under
-`--bail=1` the mutated file reports 1 failed and 40 passed of 99
-(`m12-qar-ordering-KILLED.log`); reverted and re-run without `--bail`, 99 pass
-(`m12-qar-ordering-restored.log`). The proof is behavioural rather than a call-order
-assertion, so the test guards the property the ordering exists to preserve.
-
-**Why it lives in the Claude provider.** The answer contract is per provider,
-not shared. Claude keeps an answer only when its key is a question's full text
-or its header and its value is a non-empty string. Codex's
-`mapCodexQuestionResponseByHeader` reads headers only, and an unmapped response
-**selects each question's first option** — a supported path a shared guard would
-have broken. OpenCode reads headers only as well. A first version of this patch
-sat in `AgentManager.respondToPermission`, which is the join point for all three,
-and so had to restate Claude's rule and scope itself with `provider === "claude"`.
-That restatement drifted twice before it was correct — it trimmed keys the
-normalizer does not trim, and read an empty `updatedInput.questions` array as an
-absent one.
-
-Both bugs are structurally impossible now. The check calls
-`resolveClaudeAskUserQuestionAnswers`, the same function the normalizer uses to
-produce the answers it delivers, so "would this deliver anything" is answered by
-the code that does the delivering rather than by a copy of it. The provider
-scoping is likewise structural: the guard is in the Claude provider, so no other
-provider can reach it.
-
-**Measured after the patch**, on the room's own MCP path, against a seat whose
-question text is literally `" Which colour? "`:
-
-| response                                             | result                                |
-| ---------------------------------------------------- | ------------------------------------- |
-| `{"behavior":"allow","selectedActionId":"Viridian"}` | rejected, still pending               |
-| `{"answers":{"Which colour?":"Viridian"}}`           | rejected, still pending               |
-| `{"questions":[],"answers":{"Colour":"Viridian"}}`   | rejected, still pending               |
-| `{"answers":{"Colour":1}}`                           | rejected, still pending               |
-| `{"answers":{" Which colour? ":"Ochre"}}`            | `success: true`, seat replied `Ochre` |
-
-**Known limit.** The WebSocket path (`session.ts handleAgentPermissionResponse`)
-catches the throw and emits an `activity_log` error rather than failing the
-caller's call, because upstream treats a permission response as a notification
-rather than a request. So `paseo permit allow` still prints `allowed` and exits
-0 for a rejected shape. The destructive half is closed on every path — the
-request survives and the agent is never told a falsehood — but CLI callers do
-not see the error. Fixing that needs a protocol change and is upstream's to
-make.
+## How the wakeup patches reached upstream
 
 `closed-wakeup` and `response-cap` are upstream's code now. #2879 carried all three and the
 maintainer closed it on 2026-08-11 as superseded by #3192 — _"which carries the closed-child
@@ -599,21 +571,39 @@ below, and keep the `.slp.test.ts` files only for whatever upstream did not take
 
 ### wakeup-each
 
-- **What:** the finish watcher re-arms after every wakeup instead of unsubscribing after
-  the first, so a caller keeps waking for every finish of a long-lived child across
-  multiple prompts. It disarms only when the child closes (`"was closed"`) or the caller
-  is archived. Watchers only ever exist for agent callers (`notifyOnFinish` +
-  `callerAgentId`), so this is derived — no `notifyMode` parameter, no schema or
-  plumbing changes in `create.ts` / `paseo-tools.ts`. An earlier revision threaded an
-  opt-in `notifyMode: "once" | "each"` param through the tool schemas; that shape is the
-  right artifact if upstream asks for this to be opt-in.
-- **Re-applying after #3177:** upstream's permission-prompt fix ([#3177](https://github.com/getpaseo/paseo/pull/3177), commit `334bf6237`) rewrote this watcher and added a `terminal` option to `notifySafely` — permission notifications pass `terminal: false` to stay armed. `"finished"` still defaults to terminal, so upstream still unsubscribes after the first finish and this patch is still needed. Re-apply it onto the new shape rather than restoring the old diff: it collapses to passing `{ terminal: false }` on the `"finished"` path, with the disarm left on `"was closed"` and caller-archived. Expect the merge conflict here to be semantic, not textual.
+- **What:** the finish watcher stays armed after a successful finish instead of
+  unsubscribing, so a caller wakes for every finish of a long-lived child across many
+  prompts. Since #6660 (`v0.12.0`) a turn settles on its terminal stream event, not on the
+  idle state: the watcher sends `finished` from the idle `turn_completed` branch. This patch
+  passes `{ terminal: false }` there and clears both per-cycle gates, `hasSeenRunning` and
+  `hasSeenTurn`, so the child's next observed turn notifies again and a repeated terminal
+  event without one notifies nothing. The watcher disarms on an idle `turn_canceled`
+  (`was canceled`), on `was closed`, on `errored`, and when the caller is archived, where the
+  patch calls `stop()`. Two markers, both in `agent-prompt.ts`. Watchers only ever exist for
+  agent callers (`notifyOnFinish` + `callerAgentId`), so this is derived: no `notifyMode`
+  parameter, no schema or plumbing change. An earlier revision threaded an opt-in
+  `notifyMode: "once" | "each"` through the tool schemas; that shape is the right artifact if
+  upstream asks for this to be opt-in.
+- **What it leaves to upstream:** #5164's acknowledgement mechanics. A successful follow-up
+  dispatch supersedes and stops the re-armed watcher, so a caller and child keep one live
+  observation; a rejected dispatch stops only its own; a new turn's watcher waits for the
+  turn to start.
+- **Re-applying:** this is a semantic patch on a state machine upstream keeps rewriting.
+  #3177 added the `terminal` option, and the patch collapsed to `{ terminal: false }` on the
+  finish; #6660 moved the finish from the idle state to the terminal completion event, and
+  the patch moved with it. Re-apply it onto whatever shape upstream has; do not restore an old
+  diff. The idle state alone must never send `finished`. The check under `Sync procedure`
+  reads the shape, and `agent-prompt.slp.test.ts` drives it with the events the manager
+  publishes, the idle state followed by the terminal stream event.
 - **Upstream status:** closed 2026-09-08 in the feature-PR sweep; the workflow is argued in Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669). [#2879](https://github.com/getpaseo/paseo/pull/2879) carried this patch and was closed on 2026-08-11 as superseded by #3192, which took the other two and left this one because it changed the default for every existing caller. #3455 proposed `notifyMode` on the agent-scoped `create_agent` and `send_agent_prompt` schemas, with `"once"` as the default and `"each"` as the re-arming mode. This branch keeps the derived form instead — see the note above the patch list.
 
 ### detached-wakeup
 
-- **What:** `create-agent/create.ts` passes `requireParentOwnership: !input.detached` instead of a
-  hardcoded `true`. The guard asks the watcher to check, at fire time, whether the child
+- **What:** `create-agent/create.ts` passes `requireParentOwnership: !(input.detached ?? false)`
+  instead of a hardcoded `true`, in the watcher registration #5039 (`v0.12.0`) arms before the
+  initial prompt is dispatched, so a child that finishes fast still reaches its caller and a
+  failed first prompt disarms it. Before `v0.12.0` the fork armed a second watcher after
+  dispatch; that block left at the v0.12.0 sync. The guard asks the watcher to check, at fire time, whether the child
   is still labelled as the caller's. For a child created detached, `resolveCreateAgentIntent`
   strips that label on purpose (`intent.ts`, `legacyDetached` branch), so the guard can
   never pass and the caller is silenced permanently — even though it is the agent that
@@ -792,13 +782,12 @@ in the cluster rationale, and inside four other patches' sections, so a reader
 scanning headings concluded it was gone.
 
 Scanning headings does not enumerate the patches anyway, and nothing in this file
-said so until now: five patches are documented as `##` sections _above_
-`## Patches`, and seven as `###` sections under it. At
-`HEAD=e92e5d29434b925647b0c6f1e53322f6073d977a`,
-`sed -n '/^## Patches$/,/^## Sync procedure$/p' PATCHES.md | rg -c '^### '
-measured **7** lower-level patch sections, so neither level alone lists them
-all. The roster is the marker manifest in `Sync procedure`, plus
-`archived-live-list`, which carries no marker. That mattered more than a missing heading
+said so until now: since the v0.12.0 sync four patches are documented as `##` sections
+_above_ `## Patches`, and eight as `###` sections under it:
+`sed -n '/^## Patches$/,/^## Sync procedure$/p' PATCHES.md | rg -c '^### '`
+measures **8**, so neither level alone lists them all. The roster is the marker manifest
+in `Sync procedure`, plus `archived-live-list` and `history-purpose-provider-contract`,
+which carry no marker. That mattered more than a missing heading
 usually does: it is the patch nearest the region upstream rewrote in #3742, so
 it is the one most likely to need re-applying by hand, and it had the least
 written intent to re-apply _from_.
@@ -852,10 +841,18 @@ section.
   archived Lead's and Peer's transcripts resurrected both, and the next sweep found two
   seats it had already closed. Whole-project ownership reconciliation is built on this
   call, so it can invent an owning Lead from an archived one.
-- **No `SLP-PATCH` marker, deliberately.** The diff is byte-identical to the upstream PR,
-  so if upstream takes it the files converge instead of conflicting — the same reasoning
-  recorded above for `detached-arg`'s and `question-answer-required`'s tests. Nothing here
-  needs re-applying by hand; if the PR lands, delete this section.
+- **No `SLP-PATCH` marker, deliberately.** Until `v0.12.0` the diff was byte-identical to the
+  upstream PR, so that if upstream took it the files would converge instead of conflicting.
+  #5039 rewrote the list assembly #3803 edits, so the `paseo-tools.ts` hunk here is now the
+  post-projection filter below, and the PR no longer applies as written; the storage read,
+  the projection option and the payload field are unchanged. If upstream takes an
+  equivalent, delete this section.
+- **Since `v0.12.0`:** `list_agents` builds its list with upstream's `AgentDirectory`
+  (#5039), which applies `includeArchived` to raw live snapshots before projecting them. A
+  live `ManagedAgent` carries no archive timestamp, so that predicate passes an archived
+  agent resumed for a history read. The patch keeps its own
+  `includeArchived || !agent.archivedAt` filter after projection in the MCP tool; the
+  directory looking as if it filters archives is not a reason to drop it.
 - **Rejected alternative, recorded because it is the tempting one:** carrying `archivedAt`
   on `ManagedAgent`. `unarchiveSnapshot` clears only the stored record and then notifies,
   so a managed copy survives the unarchive and reports a live agent as archived until it
@@ -888,11 +885,17 @@ serve one read. Measured on one host: eleven such runtimes left resident, ~1.36 
   the pi release was re-applied by hand around the new call. The bullets below describe the
   whole PR, #5132; where they name omp, opencode, plugin-provider, Claude or Codex, that
   code is upstream's on this branch.
-- **ACP plumbing is upstream's since the v0.11.0 sync.** #6228 (`a9fef4879`) threads
-  `purpose` into `ACPAgentSession` itself, to start a history read's process from the
-  home directory when the stored cwd is gone. It does not release that process after the
-  load. The patch in `acp-agent.ts` is now only the `resumePurpose === "history"` branch
-  that skips `applyConfiguredOverrides` and `releaseTransportAfterHistoryLoad()`.
+- **ACP release is upstream's since the v0.12.0 sync.** #6228 (`a9fef4879`, `v0.11.0`)
+  threads `purpose` into `ACPAgentSession`, and #6766 (`058375dac`, `v0.12.0`) releases a
+  history read's process with `releaseHistoryRuntime()`: it keeps the child registered when
+  the kill times out, so `close()` can retry, settles the commands-ready wait and marks the
+  session released. It calls `applyConfiguredOverrides()` first, so a session opened only to
+  be read is still sent mode, model, thinking and feature writes. The patch in
+  `acp-agent.ts` is now only the `resumePurpose === "history"` branch that calls upstream's
+  release and returns before the overrides; the fork's `releaseTransportAfterHistoryLoad()`
+  left. Its test, `purpose: %s resume sends these stored mode, model and thinking overrides`,
+  binds both halves: a history resume sends none of them, an interactive resume sends all
+  three.
 - **What:** `purpose: "history"` is now a real per-provider contract instead of an ignored
   hint. Claude and OMP already spawn nothing to serve a history read (Claude reads the
   session's own `.jsonl`; OMP's `streamHistory` reads the session file directly) — Claude
@@ -959,76 +962,13 @@ prompt rejects before the read begins`. Both mutants were executed: `pi/agent.ts
 - **Coverage:** `providers/pi/agent.test.ts` and `providers/acp-agent.test.ts` by
   explicit path (see the sync counts in `Sync procedure`).
 - **No `SLP-PATCH` marker.** The marker gate cannot see this patch, so a sync reads
-  its hunks: pi's `try`/`finally` release in `streamHistory()` and ACP's
-  `releaseTransportAfterHistoryLoad()` branch must both survive.
+  its hunks: pi's `try`/`finally` release in `streamHistory()` and ACP's history branch,
+  which returns before `applyConfiguredOverrides()`, must both survive.
 - **Upstream status: none, and the patch is kept.**
   [getpaseo/paseo#5132](https://github.com/getpaseo/paseo/pull/5132) is closed unmerged.
   Its OMP half landed with co-authorship as #5550; the maintainer's closing comment says
-  the pi, ACP, OpenCode and plugin changes are not included. The pi and ACP defects are
-  still present at `v0.11.0`, so this branch carries them with no upstream route.
-
-### schedule-claim-slots
-
-Added 2026-10-01. Upstream [#4904](https://github.com/getpaseo/paseo/pull/4904)
-(`fix(server): claim scheduled slots atomically`, author keithpk, head
-`f62ffc7af4dfd0a6ed76441074e3bab1e4ca56d5`, closes #2819), carried as written; keep the
-author credited and do not redesign it here.
-
-- **Why:** on this host schedule `61a54bf7` started its 2026-10-01T03:00Z slot twice, 413 ms
-  after the first run ended, and then moved `nextRunAt` two steps, skipping the next slot.
-  `tick()` decides "due" from a `store.list()` snapshot, `nextRunAt` only advances in
-  `finishRun()`, and the in-memory `runningScheduleIds` guard is dropped in the `finally`
-  right after it. A tick whose list read the file before `finishRun` wrote it re-runs the
-  stale slot. An `agent`-target schedule (`2cebfad6`) shows two runs for one slot as well.
-- **What:** a scheduled (non-manual) run now claims its slot in `claimDueRun()`, a single
-  serialized `store.update` that re-checks the schedule is still due and not running,
-  appends the running run and advances `nextRunAt` past `now` in the same write. A tick
-  holding a stale snapshot gets `null` and returns. `finishRun()` stops recomputing the
-  cursor from the stale one and only keeps it past `now`. Manual runs keep the old path.
-- **Sites:** five markers in `schedule/service.ts` (`ScheduleRunStartError`,
-  `advanceNextRunAtPast`, `runSchedule`, `claimDueRun`, `finishRun`). With the markers
-  removed, `service.ts` equals this branch's base `050c7bae0` with #4904's own diff
-  (`git diff 135a3b4c9 f62ffc7 -- packages/server/src/server/schedule/service.ts`) applied.
-  It is not byte-identical to the file at head `f62ffc7`: #4904's merge base with upstream
-  main is `135a3b4c9`, which predates #5301's store logger, so the head's constructor reads
-  `new ScheduleStore(join(options.paseoHome, "schedules"))` and this branch keeps the
-  `this.logger` argument.
-- **Coverage:** `schedule/service.test.ts`, no marker. #4904's two tests plus a changed
-  assertion: the overlapping-tick test checks the run count, every `scheduledFor` and
-  `nextRunAt` in one `toEqual`, so unpatched it shows both symptoms (two starts of the
-  `00:30` slot, `nextRunAt` `01:30`) where upstream's `toBe(1)` stopped at the first.
-  `advances the next scheduled slot past a run that crosses a cadence boundary` passes on
-  unpatched code too; it guards the `finishRun` change.
-- **Not covered:** the single-schedule window on this host (a tick whose `list()` resolves
-  after the first run's `finally`). It cannot be driven through `ScheduleService.tick()`
-  without stubbing `store.list`; a real list of up to 3000 files still resolved before the
-  `finally`. The claim fix covers it by the same path.
-
-### schedule-claim-in-flight
-
-Added 2026-10-01 after a cross-read of `schedule-claim-slots` (Reader d4bf7586). Room-local:
-it fixes a hole in #4904 as written, and the Human decided to carry #4904 unchanged plus
-this guard as a separate patch.
-
-- **Why:** in #4904's `runSchedule()` the scheduled path awaits `claimDueRun()` before it
-  adds the id to `runningScheduleIds`, and `runOnce()` refuses a manual run only by that
-  set. A manual run arriving during the claim's store write therefore starts a second run
-  (two starts, two persisted runs, reproduced). On base the id was added before any await.
-- **What:** the scheduled path adds the id and sets `isRunning` before awaiting the claim.
-  The existing `finally` releases it when the claim returns `null` or throws; on a
-  successful claim the id stays until the run finishes, so `runOnce` also still refuses
-  during execution. `runOnce` does no store read, and the claim logic and `finishRun` are
-  untouched. The tick's `has()` check and the `runSchedule` call have no await between
-  them, so two ticks cannot both add the id.
-- **Site:** one marker in `schedule/service.ts`, in `runSchedule`.
-- **Coverage:** `refuses a manual run while a scheduled claim is in flight` in
-  `schedule/service.test.ts`, no marker. It holds the first `ScheduleStore.update` (the
-  tick's claim) with a `vi.spyOn` that delegates to the real method, because the store is
-  not injectable; `tick()` and `runOnce()` are the real entry points. Unpatched it shows
-  `manualOutcome: "started"`, two runner starts and two persisted runs.
-- **When #4904 merges upstream:** re-check this patch against upstream's `runSchedule`.
-  If upstream still adds the id after the claim, keep it; if upstream reorders it, drop
-  the patch. Do not drop it automatically with `schedule-claim-slots`.
+  the pi, ACP, OpenCode and plugin changes are not included. The pi defect and the ACP
+  overrides are still present at `v0.12.0`, so this branch carries them with no upstream route.
 
 ## Sync procedure
 
@@ -1106,6 +1046,10 @@ against its upstream base went from 39 files, +3224/−78 (at `0a71258c1` over
 `d6861f81e`, `packages/` and `docs/`) to 29 files, +2483/−63 (over `v0.10.0`).
 The only fork-only file left in Set B is `native-tools-gate.ts`.
 
+After the v0.12.0 sync, with `BASE` = `v0.12.0`, Set A returns **26** files and Set B
+**23**, and the fork's code diff over `packages/` is +2167/−45. `comm -23` below leaves
+**14** patched files with nothing to grep for.
+
 Set A is wider than the marker set on purpose, and by more than you would guess.
 Ask it, do not estimate it:
 
@@ -1151,17 +1095,30 @@ T=$(printf '%s\n' "$out" | head -1)
 git grep -c  "SLP-PATCH(" "$T" -- packages/ | awk -F: '{n+=$NF} END {print n}'
 git grep -oh "SLP-PATCH([a-z-]*)" "$T" -- packages/ | sort -u | wc -l
 
-# The wakeup-each / timeline_replacement shape, without checking anything out.
+# The wakeup-each watcher's shape, without checking anything out.
 git cat-file -p "$T:packages/server/src/server/agent/agent-prompt.ts" \
-  | grep -n 'SLP-PATCH(wakeup-each)\|timeline_replacement\|event.event.type ==='
+  | grep -nE 'SLP-PATCH\(wakeup-each\)|agent_state|observeState|timeline_replacement|event\.event\.type|hasSeenRunning|hasSeenTurn|waitForTurnStart|dispatchResult|supersed|terminal: false'
 ```
 
-The last one is the check no marker count can make. Upstream guards
-`timeline_replacement` with an early `return` inside `setupFinishNotification`,
-and that variant carries no `.event`. The guard must land **above** every
-`event.event.type` read; below them, the first replacement event throws inside
-the watcher that makes a caller hear its children finish, and every marker is
-still present.
+The last one is the check no marker count can make, and it is read, not counted. Read the
+control flow around the lines it prints:
+
+- The `agent_state` and `timeline_replacement` variants return before any
+  `event.event.type` read. A replacement carries no `.event`; read below the guard, the
+  first one throws inside the watcher that makes a caller hear its children finish, and
+  every marker is still present.
+- The idle state alone sends nothing.
+- `turn_completed` notifies only with the child idle and a running turn observed, then
+  clears both `hasSeenRunning` and `hasSeenTurn` and sends `finished` with
+  `{ terminal: false }`. A repeated terminal event with no new turn sends nothing.
+- An idle `turn_canceled` is the one terminal `was canceled`; a cancellation while the child
+  is still running sends nothing. `errored` and `was closed` stay terminal; permission
+  checkpoints stay nonterminal.
+- The archived-caller branch calls `stop()` before it returns.
+- #5164's mechanics are upstream's, unchanged: a failed dispatch removes only its own
+  observer, a successful one supersedes earlier observations of the pair, a new turn's
+  observer waits for the turn to start, and the `dispatchResult === "turn_started"` stop
+  stays.
 
 Then merge:
 
@@ -1169,8 +1126,8 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured after the v0.11.0 sync (2026-10-07): expect 13
-# names across 36 code/test sites in 13 files, and use the per-name manifest
+# Marker gate. Measured after the v0.12.0 sync (2026-10-19): expect 10
+# names across 28 code/test sites in 11 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
 # changes whenever the prose does; include it and the gate can never pass on a
@@ -1178,19 +1135,18 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # path, so sort -u would dedupe path:name pairs and return one line per file,
 # not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 13
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 10
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
-#    6 native-tools-injection-independent     2 force-cancel-releases-foreground
-#    5 schedule-claim-slots                   2 detached-arg
-#    4 wakeup-each                            3 interrupt-releases-foreground
-#    3 replace-awaits-teardown                1 dispose-releases-foreground
+#    6 native-tools-injection-independent     3 interrupt-releases-foreground
+#    4 wakeup-each                            2 force-cancel-releases-foreground
+#    3 replace-awaits-teardown                2 detached-arg
+#    3 mcp-protocol-version-clip              1 dispose-releases-foreground
 #    3 detached-wakeup                        1 dead-run-settles
-#    3 mcp-protocol-version-clip              1 schedule-claim-in-flight
-#    2 question-answer-required
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
-# archived-live-list is absent from this manifest by design -- it carries no
-# marker, so its survival check is behavioural (see its section below).
+# archived-live-list and history-purpose-provider-contract are absent from this
+# manifest by design -- they carry no marker, so their survival checks are
+# behavioural (see their sections).
 
 npm ci --ignore-scripts       # the lockfile moves on any non-patch bump;
                               # building without it resolves the old graph
@@ -1225,33 +1181,57 @@ npm run typecheck             # the WHOLE workspace, not typecheck:server.
                               # regardless, so a server-only check just moves
                               # the failure to your first commit.
 
-# Every test run gets empty scratch homes, under ~/.cache rather than /tmp,
-# and no seat identity. Code that is passed no home falls back to the
+# Every test run goes through vt, which refuses a call that names no existing
+# test file and gives each run fresh scratch homes under ~/.cache, not /tmp, and
+# no seat identity. vitest reads a positional argument as a substring filter, so
+# a stray `--` or a typo runs the whole workspace: the v0.12.0 sync's measurement
+# did exactly that once. Code that is passed no home falls back to the
 # environment's PASEO_HOME (packages/server/src/utils/worktree.ts:867,871), which
 # in a seat is the live ~/.paseo; CLAUDE_CONFIG_DIR and TMPDIR reach the live
-# Claude history and a quota'd tmpfs the same way.
-scratch=$(mktemp -d ~/.cache/paseo-sync-test.XXXXXX)
-mkdir -p "$scratch"/{paseo-home,claude,tmp}
-export PASEO_HOME="$scratch/paseo-home" CLAUDE_CONFIG_DIR="$scratch/claude" TMPDIR="$scratch/tmp"
-unset PASEO_AGENT_ID PASEO_AGENT_CWD
+# Claude history and a quota'd tmpfs the same way. PASEO_HOME alone does not
+# isolate a run: two e2e files resolve the local speech model directory from
+# homedir() unless PASEO_LOCAL_MODELS_DIR is set, and that stray run wrote
+# ~/.paseo/models/local-speech/silero-vad/silero_vad.onnx. So vt sets HOME and
+# PASEO_LOCAL_MODELS_DIR to scratch too. Never call vitest any other way here.
+vt() {
+  local a f=0
+  for a in "$@"; do
+    case "$a" in
+      --) echo "vt: refused: a bare --"; return 64 ;;
+      -*) ;;
+      *.test.ts) [ -f "$a" ] || { echo "vt: refused: no file $a"; return 64; }; f=1 ;;
+      *) echo "vt: refused: $a is not a test file"; return 64 ;;
+    esac
+  done
+  [ "$f" = 1 ] || { echo "vt: refused: no test file named"; return 64; }
+  local scratch; scratch=$(mktemp -d ~/.cache/paseo-sync-test.XXXXXX) || return 70
+  mkdir -p "$scratch"/{paseo-home,claude,tmp,home,local-models}
+  env -u PASEO_AGENT_ID -u PASEO_AGENT_CWD \
+    PASEO_HOME="$scratch/paseo-home" CLAUDE_CONFIG_DIR="$scratch/claude" \
+    TMPDIR="$scratch/tmp" HOME="$scratch/home" PASEO_LOCAL_MODELS_DIR="$scratch/local-models" \
+    ./node_modules/.bin/vitest run "$@"
+}
+vt                            # shows the refusal once, before the first run
 
-npx vitest run packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/agent-prompt.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
-npx vitest run packages/server/src/server/native-tools-gate.slp.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/create-agent/create.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/provider-registry-wrap.test.ts --bail=1
-npx vitest run packages/server/src/server/agent/mcp-server.test.ts
-npx vitest run packages/server/src/server/agent/providers/claude/agent.test.ts
-npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
-npx vitest run packages/server/src/server/agent/agent-manager.test.ts
-npx vitest run packages/server/src/server/agent/mcp-parity.e2e.test.ts   # diff vs baseline
-npx vitest run packages/server/src/server/agent/agent-mcp.e2e.test.ts     # mcp-protocol-version-clip
-npx vitest run packages/server/src/server/agent/providers/pi/agent.test.ts        # history-purpose (pi)
-npx vitest run packages/server/src/server/agent/providers/acp-agent.test.ts       # history-purpose (acp)
-npx vitest run packages/server/src/server/agent/providers/generic-acp-agent.test.ts
-npx vitest run packages/server/src/server/schedule/service.test.ts                # schedule-claim-slots, schedule-claim-in-flight
-npx vitest run packages/server/src/server/daemon-e2e/claude-provider-config-dir-history.e2e.test.ts
+vt packages/server/src/server/agent/agent-prompt.slp.test.ts --bail=1
+vt packages/server/src/server/agent/agent-prompt.test.ts --bail=1
+vt packages/server/src/server/agent/create-agent/create.slp.test.ts --bail=1
+vt packages/server/src/server/native-tools-gate.slp.test.ts --bail=1
+vt packages/server/src/server/agent/create-agent/create.test.ts --bail=1
+vt packages/server/src/server/agent/provider-registry-wrap.test.ts --bail=1
+vt packages/server/src/server/agent/mcp-server.test.ts
+vt packages/server/src/server/agent/providers/claude/agent.test.ts
+vt packages/server/src/server/agent/providers/claude/question-response.test.ts    # #6936, retired question-answer-required
+vt packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
+vt packages/server/src/server/agent/agent-manager.test.ts
+vt packages/server/src/server/agent/mcp-parity.e2e.test.ts --testTimeout=30000    # below a 1-minute load of 16
+vt packages/server/src/server/agent/agent-mcp.e2e.test.ts     # mcp-protocol-version-clip
+vt packages/server/src/server/agent/providers/pi/agent.test.ts        # history-purpose (pi)
+vt packages/server/src/server/agent/providers/acp-agent.test.ts       # history-purpose (acp)
+vt packages/server/src/server/agent/providers/generic-acp-agent.test.ts
+vt packages/server/src/server/agent/providers/generic-acp-agent.archived-history.test.ts  # #6766's release
+vt packages/server/src/server/schedule/service.test.ts
+vt packages/server/src/server/daemon-e2e/claude-provider-config-dir-history.e2e.test.ts
 
 npm run format:check
 
@@ -1264,51 +1244,36 @@ npm run lint
 git push origin slp/patches
 ```
 
-Measured at the v0.11.0 sync (2026-10-07, at `9f0f820bd`), each file by
-explicit path in scratch homes. Every file passed completely except
-`mcp-parity.e2e`, below: `agent-prompt.slp` 2, `agent-prompt` 14, `create.slp` 2,
-`native-tools-gate.slp` 4, `create` 10, `provider-registry-wrap` 4, `mcp-server` 126,
-`claude/agent` 107, `codex-app-server-agent` 189, `agent-manager` 195, `pi/agent` 123,
-`acp-agent` 117, `generic-acp-agent` 1, `schedule/service` 63,
-`claude-provider-config-dir-history.e2e` 2 and `agent-mcp.e2e` 12. Against the
-beta.5 sync's names, the only differences are `acp-agent`'s seven new upstream
-tests, two from #6213 and five from #6273. `npm run typecheck` exit 0,
-`npm run format:check` clean, and `npm run lint` with 0 warnings and 0 errors.
+Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit path, at a
+1-minute load of 1.4 to 4.7. Every file passed completely: `agent-prompt.slp` 10,
+`agent-prompt` 17, `create.slp` 4, `native-tools-gate.slp` 4, `create` 11,
+`provider-registry-wrap` 4, `mcp-server` 201, `claude/agent` 94, `claude/question-response` 12,
+`codex-app-server-agent` 193, `agent-manager` 208, `mcp-parity.e2e` 35 (35 at the 5 s default
+too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
+`generic-acp-agent.archived-history` 5, `schedule/service` 71 and
+`claude-provider-config-dir-history.e2e` 2. `npm run build:server` and `npm run typecheck`
+exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
+Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus
+name is a kept, adapted or new fork test.
 
-- `mcp-parity.e2e` at the 5 s default failed Suite E's four baseline names plus a
-  Suite D timeout (`list_providers returns providers`). With
-  `--testTimeout=30000` only Suite E's four failed.
-- `agent-mcp.e2e` passed 12 of 12 at a 1-minute load of 11 to 24, but slowly: its
-  tests ran 2 to 48 times slower than at v0.10.0, and `create_workspace with local
-isolation` took 24 s of its 30 s. At the beta.5 sync, under more load, three
-  `create_agent` tests hit that timeout in both runs. This file builds its daemons
-  with `createPaseoDaemon` directly, which starts all eleven built-in plugins
-  (#5465, #5714): each is compiled with esbuild and run in-process, with no child
-  process (`packages/server/src/server/plugins/runtime.ts:346-363`).
-  `test-utils/paseo-daemon.ts` passes an empty `BuiltinPluginLoader`. At beta.5, a
-  scratch copy of the file that did the same passed all three at v0.10.0's
-  durations. Read a timeout here as that cost, not as a patch regression.
-  `mcp-protocol-version-clip`'s four tests passed in every run.
+- `agent-mcp.e2e` builds its daemons with `createPaseoDaemon` directly, which starts every
+  built-in plugin (#5465, #5714): each is compiled with esbuild and run in-process
+  (`packages/server/src/server/plugins/runtime.ts`). `test-utils/paseo-daemon.ts` passes an
+  empty `BuiltinPluginLoader`. Under load its `create_agent` tests have hit their 30 s
+  timeout at earlier syncs; read a timeout here as that cost, not as a patch regression.
 
 Order matters. Typecheck first — it fails fastest and on the class of breakage
 a merge introduces. Then the `.slp.` files, which this fork owns and which are
 the cheapest signal. Then the upstream-owned suites, which are where a patch
 contradicting upstream intent surfaces.
 
-`mcp-parity.e2e.test.ts` is the only one without `--bail=1`, because it fails
-in this environment before and after a sync. **Re-measure the baseline before
-merging** — without it you cannot tell a pre-existing failure from one the merge
-caused. Measured twice on 2026-08-26 at `8fdca94ea`, 33 tests:
-
-| Suite              | Failing                                                                                                                                                                                | Kind                          | Stable?                   |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------- |
-| E (worktree tools) | `list_worktrees on empty repo`, `create_worktree and list_worktrees`, `archive_worktree removes worktree`, `archive_worktree succeeds when caller cwd is inside the archived worktree` | `ZodError` / `AssertionError` | yes — 4/4 both runs       |
-| D (provider tools) | `list_providers returns providers`, `list_profiles returns configured agent profiles, including notes`                                                                                 | `Test timed out in 5000ms`    | **no** — 2 failed, then 1 |
-
-So the gate is not a failure count. **Suite E's four names are the baseline.**
-A timeout in any suite is machine load against a 5 s default, not merge damage:
-re-run with `--testTimeout=30000` before concluding. Anything else is the
-merge's: a _non-timeout_ failure outside E, or a fifth name in E.
+`mcp-parity.e2e.test.ts` runs without `--bail=1`, at `--testTimeout=30000`, and below a
+1-minute load of 16. Until `v0.11.0` it failed four Suite E worktree-tool names in this
+environment before and after every sync, and those four names were its baseline. They do not
+exist at `v0.12.0`: upstream replaced them, and unpatched `v0.12.0` passes 33 of 33 at
+`--testTimeout=30000`. **So every failure at 30 s is the merge's.** A timeout at the 5 s
+default is machine load (Suite D's `list_providers returns providers` has timed out there
+before); re-run it at 30 s before reading it.
 
 Two of these were missing from this list until 2026-08-26:
 `provider-registry-wrap.test.ts` and `mcp-server.test.ts` — the two covering
@@ -1329,20 +1294,29 @@ section when a patch lands upstream.
 
 ### After the push
 
-A sync reaches no seat until the room activates it. Each step is owned by the room
-repository (`~/Sites/AI/airoom`), so this list links out rather than restating them:
+A sync reaches no seat until the room activates it. The room repository (`~/Sites/AI/airoom`)
+owns each step, and its `runtime/paseo/README.md` holds the commands; this list gives the
+order, which is the safeguard:
 
-1. **Stop, advance, rebuild, start.** The daemon serves whatever `packages/server/dist`
-   holds at start time, and `npm ci` replaces `node_modules` under a running daemon, so
-   stop it through the room entrypoint (`paseo-daemon.sh stop`), fast-forward this
-   clone's `slp/patches` to the accepted sync, run `npm ci --ignore-scripts`,
-   `npm run postinstall`, `npm run build:server && npm run build:daemon-web-ui`, then
-   `paseo-daemon.sh start`. The room's `AGENTS.md` R3 applies first: every active
-   schedule targeting a seat the stop closes is dispositioned.
-2. **Move the room's revision record.** `runtime/paseo/revision.json` names the clone
-   revision the room runs; bump it in a room PR, merge and publish it, then run
-   `room-seat-preflight`, which reads the clone back against that record.
-3. **Read what reached seats without a restart.** Seats reach this repository's
-   `skills/` through membership links into the clone's working tree, so a skill change
-   is live the moment the clone advances. Check with
-   `git diff --name-only <old-revision>..HEAD -- skills/`.
+1. **Land the sync** by fast-forwarding `slp/patches` to the reviewed head.
+2. **Advance this clone's git HEAD, with the daemon still running.** No `npm` yet: `npm ci`
+   replaces `node_modules` under a running daemon. Seats reach this repository's `skills/`
+   through membership links into the clone's working tree, so a skill change is live from
+   here, before any restart; read it with `git diff --name-only <old-revision>..HEAD --
+skills/`, and open no seat until the restart is done.
+3. **Merge and publish the room PR** that moves `runtime/paseo/revision.json` to the new head
+   and carries the room code the new daemon needs, the recorder's plugin range first.
+   `room-seat-preflight` compares this clone's HEAD with `revision.json`, so it passes against
+   the daemon still running the old build.
+4. **Stop, build, start.** The room's `AGENTS.md` R3 applies before the stop: every active
+   schedule targeting a seat the stop closes is dispositioned. Stop through the room
+   entrypoint (`paseo-daemon.sh stop`), run `npm ci --ignore-scripts`, `npm run postinstall`,
+   `npm run build:server && npm run build:daemon-web-ui`, then `paseo-daemon.sh start`.
+5. **Read the running version.** `paseo daemon status` and the daemon log's `daemonVersion`
+   must name the new release. The preflight in step 3 read HEAD only, so this read is what
+   catches a start that served the old build.
+
+The room publishes before the stop, not after it, because the daemon serves whatever
+`packages/server/dist` holds at start and loads the room's plugins then: its first start
+must find room code that admits it, which a revision bump published after the restart
+cannot give.
