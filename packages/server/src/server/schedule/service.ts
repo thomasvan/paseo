@@ -1,3 +1,4 @@
+import { formatSystemNotificationPrompt } from "../agent/agent-messages/index.js";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -7,11 +8,7 @@ import type { AgentSessionConfig } from "../agent/agent-sdk-types.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import { curateAgentActivity } from "../agent/activity-curator.js";
 import { ensureAgentLoaded } from "../agent/agent-loading.js";
-import {
-  formatSystemNotificationPrompt,
-  startAgentRun,
-  type AgentRunController,
-} from "../agent/agent-prompt.js";
+import { startAgentRun, type AgentRunController } from "../agent/agent-prompt.js";
 import { resolveCreateAgentTitles } from "../agent/create-agent-title.js";
 import { type BoundCreateAgentCommand, formatProviderModel } from "../agent/create-agent/create.js";
 import type { PersistedWorkspaceRecord } from "../workspace-registry.js";
@@ -41,15 +38,20 @@ export class ScheduleTargetGoneError extends Error {
   }
 }
 
-// SLP-PATCH(schedule-claim-slots): upstream #4904
-export class ScheduleRunStartError extends Error {
-  constructor(public readonly scheduleId: string) {
-    super(`Failed to start schedule run: ${scheduleId}`);
-    this.name = "ScheduleRunStartError";
+export class ScheduleNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Schedule not found: ${id}`);
+    this.name = "ScheduleNotFoundError";
   }
 }
 
-// SLP-PATCH(schedule-claim-slots): upstream #4904
+export class ScheduleStateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScheduleStateConflictError";
+  }
+}
+
 function advanceNextRunAtPast(
   cadence: StoredSchedule["cadence"],
   nextRunAt: Date,
@@ -170,7 +172,7 @@ function shouldCompleteSchedule(schedule: StoredSchedule, now: Date): boolean {
 
 function requireSchedule(schedule: StoredSchedule | null, id: string): StoredSchedule {
   if (!schedule) {
-    throw new Error(`Schedule not found: ${id}`);
+    throw new ScheduleNotFoundError(id);
   }
   return schedule;
 }
@@ -404,10 +406,7 @@ export class ScheduleService {
 
   async inspect(id: string): Promise<StoredSchedule> {
     const schedule = await this.store.get(id);
-    if (!schedule) {
-      throw new Error(`Schedule not found: ${id}`);
-    }
-    return schedule;
+    return requireSchedule(schedule, id);
   }
 
   async logs(id: string): Promise<ScheduleRun[]> {
@@ -418,7 +417,7 @@ export class ScheduleService {
   async pause(id: string): Promise<StoredSchedule> {
     const paused = await this.store.update(id, (schedule) => {
       if (schedule.status === "completed") {
-        throw new Error(`Schedule ${id} is already completed`);
+        throw new ScheduleStateConflictError(`Schedule ${id} is already completed`);
       }
       if (schedule.status === "paused") {
         return schedule;
@@ -438,7 +437,7 @@ export class ScheduleService {
   async resume(id: string): Promise<StoredSchedule> {
     const resumed = await this.store.update(id, (schedule) => {
       if (schedule.status === "completed") {
-        throw new Error(`Schedule ${id} is already completed`);
+        throw new ScheduleStateConflictError(`Schedule ${id} is already completed`);
       }
       if (schedule.status === "active") {
         return schedule;
@@ -558,10 +557,10 @@ export class ScheduleService {
   async runOnce(id: string): Promise<StoredSchedule> {
     const schedule = await this.inspect(id);
     if (schedule.status === "completed") {
-      throw new Error(`Schedule ${id} is already completed`);
+      throw new ScheduleStateConflictError(`Schedule ${id} is already completed`);
     }
     if (this.runningScheduleIds.has(id)) {
-      throw new Error(`Schedule ${id} is already running`);
+      throw new ScheduleStateConflictError(`Schedule ${id} is already running`);
     }
     await this.runSchedule(schedule, this.now(), { manual: true });
     return this.inspect(id);
@@ -645,6 +644,9 @@ export class ScheduleService {
           error: "Daemon restarted before the scheduled run completed",
         };
         updated = { ...updated, runs };
+        if (shouldCompleteSchedule(updated, now)) {
+          updated = completeSchedule(updated, now);
+        }
         dirty = true;
       }
 
@@ -714,15 +716,12 @@ export class ScheduleService {
     options?: { manual?: boolean },
   ): Promise<void> {
     const manual = options?.manual === true;
-    // SLP-PATCH(schedule-claim-slots): a scheduled run claims its slot in the store before it starts
-    let scheduleWithRun: StoredSchedule | null = null;
-    let runId: string | null = null;
-    let isRunning = false;
-
+    // Reserve before store I/O; persisted history cannot prove a run is still alive.
+    this.runningScheduleIds.add(schedule.id);
     try {
+      let runId: string;
+      let scheduleWithRun: StoredSchedule;
       if (manual) {
-        this.runningScheduleIds.add(schedule.id);
-        isRunning = true;
         runId = randomUUID();
         const runningRun: ScheduleRun = {
           id: runId,
@@ -736,11 +735,6 @@ export class ScheduleService {
         };
         scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
       } else {
-        // SLP-PATCH(schedule-claim-in-flight): hold the id across the claim's store write, so
-        // runOnce() refuses a manual run that arrives meanwhile. The finally below releases it
-        // when the claim returns null or throws.
-        this.runningScheduleIds.add(schedule.id);
-        isRunning = true;
         const claimed = await this.claimDueRun(schedule.id, now);
         if (!claimed) {
           return;
@@ -748,42 +742,35 @@ export class ScheduleService {
         ({ schedule: scheduleWithRun, runId } = claimed);
       }
 
-      if (!scheduleWithRun || !runId) {
-        throw new ScheduleRunStartError(schedule.id);
+      try {
+        const result = await this.runner(scheduleWithRun, runId);
+        await this.finishRun({
+          scheduleId: schedule.id,
+          runId,
+          status: "succeeded",
+          agentId: result.agentId,
+          output: result.output,
+          error: null,
+          targetGone: false,
+          manual,
+        });
+      } catch (error) {
+        await this.finishRun({
+          scheduleId: schedule.id,
+          runId,
+          status: "failed",
+          agentId: null,
+          output: null,
+          error: error instanceof Error ? error.message : String(error),
+          targetGone: error instanceof ScheduleTargetGoneError,
+          manual,
+        });
       }
-      const result = await this.runner(scheduleWithRun, runId);
-      await this.finishRun({
-        scheduleId: schedule.id,
-        runId,
-        status: "succeeded",
-        agentId: result.agentId,
-        output: result.output,
-        error: null,
-        targetGone: false,
-        manual,
-      });
-    } catch (error) {
-      if (!runId) {
-        throw error;
-      }
-      await this.finishRun({
-        scheduleId: schedule.id,
-        runId,
-        status: "failed",
-        agentId: null,
-        output: null,
-        error: error instanceof Error ? error.message : String(error),
-        targetGone: error instanceof ScheduleTargetGoneError,
-        manual,
-      });
     } finally {
-      if (isRunning) {
-        this.runningScheduleIds.delete(schedule.id);
-      }
+      this.runningScheduleIds.delete(schedule.id);
     }
   }
 
-  // SLP-PATCH(schedule-claim-slots): upstream #4904
   private async claimDueRun(
     scheduleId: string,
     now: Date,
@@ -794,18 +781,21 @@ export class ScheduleService {
         schedule.status !== "active" ||
         !schedule.nextRunAt ||
         shouldCompleteSchedule(schedule, now) ||
-        new Date(schedule.nextRunAt).getTime() > now.getTime() ||
-        schedule.runs.some((run) => run.status === "running")
+        new Date(schedule.nextRunAt).getTime() > now.getTime()
       ) {
         return schedule;
       }
 
       const scheduledFor = schedule.nextRunAt;
-      const nextRunAt = advanceNextRunAtPast(
-        schedule.cadence,
-        computeNextRunAt(schedule.cadence, new Date(scheduledFor)),
-        now,
-      );
+      const isFinalRun =
+        schedule.maxRuns !== null && countCompletedRuns(schedule) + 1 >= schedule.maxRuns;
+      const nextRunAt = isFinalRun
+        ? null
+        : advanceNextRunAtPast(
+            schedule.cadence,
+            computeNextRunAt(schedule.cadence, new Date(scheduledFor)),
+            now,
+          ).toISOString();
 
       // Claim the due slot and advance its cursor in the same serialized update.
       // A tick can hold a stale list while another tick finishes this schedule.
@@ -822,7 +812,7 @@ export class ScheduleService {
       };
       const updated: StoredSchedule = {
         ...schedule,
-        nextRunAt: nextRunAt.toISOString(),
+        nextRunAt,
         updatedAt: now.toISOString(),
         runs: [...schedule.runs, runningRun],
       };
@@ -892,17 +882,17 @@ export class ScheduleService {
           ...updated,
           nextRunAt: null,
         };
-      } else if (updated.nextRunAt) {
-        // SLP-PATCH(schedule-claim-slots): upstream #4904
+      } else {
+        // A final slot has no successor until its run limit is raised or cleared.
+        // Every runner invocation has a recorded run with this id.
+        const finishedRun = completedRuns.find((run) => run.id === params.runId)!;
+        const nextRunAt = updated.nextRunAt
+          ? new Date(updated.nextRunAt)
+          : computeNextRunAt(updated.cadence, new Date(finishedRun.scheduledFor));
+        // Move an overdue cursor past a long run without advancing a future one twice.
         updated = {
           ...updated,
-          // A long run can cross one or more cadence boundaries. Persist a
-          // future cursor so the next tick cannot immediately launch a catch-up run.
-          nextRunAt: advanceNextRunAtPast(
-            updated.cadence,
-            new Date(updated.nextRunAt),
-            now,
-          ).toISOString(),
+          nextRunAt: advanceNextRunAtPast(updated.cadence, nextRunAt, now).toISOString(),
         };
       }
 
@@ -1010,7 +1000,6 @@ export class ScheduleService {
         features: config.featureValues,
         unattended: true,
         promptFailure: "return-error",
-        background: true,
         notifyOnFinish: false,
       });
       const agent = created.snapshot;

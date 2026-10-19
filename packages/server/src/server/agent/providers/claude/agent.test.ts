@@ -9,7 +9,6 @@ import * as executableUtils from "../../../../executable-resolution/executable-r
 import { buildAgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import {
   ClaudeAgentClient,
-  claudeQuestionAnswerRejection,
   convertClaudeHistoryEntry,
   normalizeClaudeAskUserQuestionRequestInput,
   normalizeClaudeAskUserQuestionUpdatedInput,
@@ -19,7 +18,6 @@ import {
 import { claudeProjectDirSync } from "./project-dir.js";
 import { streamSession } from "../test-utils/session-stream-adapter.js";
 import type {
-  AgentPermissionRequest,
   AgentPromptInput,
   AgentSession,
   AgentTimelineItem,
@@ -428,6 +426,14 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     try {
       const client = new ClaudeAgentClient({
         logger,
+        discoverModels: async () => [
+          {
+            value: "mythos",
+            resolvedModel: "claude-mythos-5-1",
+            displayName: "Mythos",
+            description: "",
+          },
+        ],
         resolveBinary: async () => "/test/claude/bin",
         resolveVersion: async () => "2.1.219",
         runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
@@ -440,6 +446,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
 
       expect(models.map((m) => m.id)).toEqual([
         "claude-opus-5",
+        "claude-mythos-5-1",
         "claude-fable-5-1",
         "claude-fable-5",
         "claude-fable-5[1m]",
@@ -474,6 +481,14 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     try {
       const client = new ClaudeAgentClient({
         logger,
+        discoverModels: async () => [
+          {
+            value: "mythos",
+            resolvedModel: "claude-mythos-5-1",
+            displayName: "Mythos",
+            description: "",
+          },
+        ],
         resolveVersion: async () => {
           throw new Error("unrecognized version output");
         },
@@ -497,8 +512,16 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     try {
       const client = new ClaudeAgentClient({
         logger,
+        discoverModels: async () => [
+          {
+            value: "mythos",
+            resolvedModel: "claude-mythos-5-1",
+            displayName: "Mythos",
+            description: "",
+          },
+        ],
         resolveBinary: async () => "/test/claude/bin",
-        resolveVersion: async () => "2.1.284",
+        resolveVersion: async () => "2.1.293",
         runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
       });
       const { models } = await client.fetchCatalog({
@@ -511,12 +534,29 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
       };
 
       expect(getThinkingIds("claude-opus-5")).toContain("ultracode");
+      expect(getThinkingIds("claude-mythos-5-1")).toEqual([
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultracode",
+      ]);
       expect(getThinkingIds("claude-fable-5-1")).toContain("ultracode");
       expect(getThinkingIds("claude-fable-5")).toContain("ultracode");
       expect(getThinkingIds("claude-opus-4-8[1m]")).toContain("ultracode");
       expect(getThinkingIds("claude-opus-4-8")).toContain("ultracode");
       expect(getThinkingIds("claude-sonnet-5")).toContain("xhigh");
       expect(getThinkingIds("claude-sonnet-5")).toContain("ultracode");
+      expect(getThinkingIds("claude-haiku-5-5")).toEqual([
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultracode",
+      ]);
       expect(getThinkingIds("claude-sonnet-5-5")).toContain("xhigh");
       expect(getThinkingIds("claude-sonnet-5-5")).not.toContain("off");
       expect(getThinkingIds("claude-opus-4-7[1m]")).toContain("ultracode");
@@ -533,6 +573,36 @@ describe("ClaudeAgentClient binary resolution", () => {
 
   test("resolves the installed Claude Code version", async () => {
     await expect(resolveClaudeCodeVersion()).resolves.toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("rejects a wrapper command's own version output instead of reading it as Claude Code's", async () => {
+    const wrapperDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-version-"));
+    const wrapperPath = path.join(wrapperDir, "wrapper");
+    await fs.writeFile(wrapperPath, 'console.log("cux 0.4.1");\n');
+    try {
+      await expect(
+        resolveClaudeCodeVersion({
+          command: { mode: "replace", argv: [process.execPath, wrapperPath] },
+        }),
+      ).rejects.toThrow("Unable to parse Claude Code version from --version output");
+    } finally {
+      await fs.rm(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves the version when the command forwards the Claude Code banner", async () => {
+    const wrapperDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-version-"));
+    const wrapperPath = path.join(wrapperDir, "wrapper");
+    await fs.writeFile(wrapperPath, 'console.log("2.1.302 (Claude Code)");\n');
+    try {
+      await expect(
+        resolveClaudeCodeVersion({
+          command: { mode: "replace", argv: [process.execPath, wrapperPath] },
+        }),
+      ).resolves.toBe("2.1.302");
+    } finally {
+      await fs.rm(wrapperDir, { recursive: true, force: true });
+    }
   });
 
   test("loads user, project, and local Claude settings", async () => {
@@ -1225,6 +1295,8 @@ describe("ClaudeAgentSession features", () => {
 
   test.each([
     ["supported model", "claude-opus-4-8", { type: "disabled" }, undefined],
+    ["Mythos 5.1", "claude-mythos-5-1", { type: "adaptive", display: "summarized" }, "high"],
+    ["Haiku 5.5", "claude-haiku-5-5", { type: "disabled" }, undefined],
     ["unsupported model", "claude-fable-5", { type: "adaptive", display: "summarized" }, "high"],
     ["custom model", "openrouter/anthropic/claude-opus-4-8", undefined, undefined],
     ["provider default", null, undefined, undefined],
@@ -1520,91 +1592,6 @@ describe("normalizeClaudeAskUserQuestionUpdatedInput", () => {
             },
           ],
           answers: { "Which provider should I use?": "Claude" },
-        },
-        updatedPermissions: undefined,
-      });
-    } finally {
-      await session.close();
-    }
-  });
-
-  test("a rejected question answer leaves the request answerable by a corrected retry", async () => {
-    // The question-answer-required rule guards this: the deliverability check runs
-    // before the request is deleted, so a non-deliverable answer costs the caller a
-    // retry rather than the request. Upstream consumed the request on entry and the
-    // retry failed with "No pending permission request".
-    const client = new ClaudeAgentClient({
-      logger: createTestLogger(),
-      resolveBinary: async () => "/test/claude/bin",
-    });
-    const session = await client.createSession({
-      provider: "claude",
-      cwd: process.cwd(),
-    });
-
-    const request = {
-      id: "permission-question-retry",
-      provider: "claude",
-      name: "AskUserQuestion",
-      kind: "question",
-      input: {
-        questions: [
-          {
-            question: "Which colour?",
-            header: "Colour",
-            options: [],
-            multiSelect: false,
-          },
-        ],
-      },
-    };
-
-    const resultPromise = new Promise<unknown>((resolve, reject) => {
-      (
-        session as unknown as {
-          pendingPermissions: Map<
-            string,
-            {
-              request: typeof request;
-              resolve: (value: unknown) => void;
-              reject: (error: Error) => void;
-            }
-          >;
-        }
-      ).pendingPermissions.set(request.id, { request, resolve, reject });
-    });
-
-    try {
-      // A non-deliverable answer: allow with no answers at all.
-      await expect(
-        session.respondToPermission(request.id, {
-          behavior: "allow",
-          updatedInput: {},
-        }),
-      ).rejects.toThrow(/Permission request/);
-
-      // The request survived the rejection: a corrected retry is accepted and the
-      // waiting agent gets the answer. If the request had been consumed, this would
-      // throw "No pending permission request with id ...".
-      await expect(
-        session.respondToPermission(request.id, {
-          behavior: "allow",
-          updatedInput: { answers: { Colour: "Viridian" } },
-        }),
-      ).resolves.toBeUndefined();
-
-      await expect(resultPromise).resolves.toEqual({
-        behavior: "allow",
-        updatedInput: {
-          questions: [
-            {
-              question: "Which colour?",
-              header: "Colour",
-              options: [],
-              multiSelect: false,
-            },
-          ],
-          answers: { "Which colour?": "Viridian" },
         },
         updatedPermissions: undefined,
       });
@@ -2178,13 +2165,15 @@ describe("ClaudeAgentSession context window usage", () => {
   }
 
   function createMessageDeltaEvent(outputTokens: number): Record<string, unknown> {
+    return createMessageDeltaUsageEvent({ output_tokens: outputTokens });
+  }
+
+  function createMessageDeltaUsageEvent(usage: Record<string, unknown>): Record<string, unknown> {
     return {
       type: "stream_event",
       event: {
         type: "message_delta",
-        usage: {
-          output_tokens: outputTokens,
-        },
+        usage,
       },
       session_id: "session-1",
     };
@@ -2846,6 +2835,7 @@ describe("ClaudeAgentSession context window usage", () => {
           type: "usage_updated",
           provider: "claude",
           usage: {
+            contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 150,
           },
         }),
@@ -2881,7 +2871,13 @@ describe("ClaudeAgentSession context window usage", () => {
 
   test("selected 1M Claude models seed active context window usage from the catalog", async () => {
     const session = await createSessionForTurns(
-      [[createInitMessage(), createMessageStartEvent(), createSuccessResult()]],
+      [
+        [
+          { ...createInitMessage(), model: "claude-sonnet-5[1m]" },
+          createMessageStartEvent(),
+          createSuccessResult(),
+        ],
+      ],
       { model: "claude-sonnet-5[1m]" },
     );
 
@@ -2921,10 +2917,126 @@ describe("ClaudeAgentSession context window usage", () => {
           type: "usage_updated",
           provider: "claude",
           usage: {
+            contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 175,
           },
         }),
       );
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("message_delta input usage replaces an empty message_start count", async () => {
+    // Translating gateways (LiteLLM in front of an OpenAI-compatible backend) do not know the
+    // prompt size when message_start is emitted, so they report input_tokens: 0 there and send
+    // the cumulative counts on message_delta, as the Anthropic Messages API allows.
+    const session = await createSessionForTurns([
+      [
+        createInitMessage(),
+        createMessageStartEvent({
+          input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        }),
+        createMessageDeltaUsageEvent({ input_tokens: 20_236, output_tokens: 64 }),
+        createSuccessResult({
+          usage: {
+            input_tokens: 20_236,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            output_tokens: 64,
+            iterations: [],
+          },
+        }),
+      ],
+    ]);
+
+    try {
+      const events = await collectStreamEvents(session);
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "usage_updated",
+          provider: "claude",
+          usage: {
+            contextWindowMaxTokens: 200_000,
+            contextWindowUsedTokens: 20_300,
+          },
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "turn_completed",
+          usage: expect.objectContaining({
+            inputTokens: 20_236,
+            outputTokens: 64,
+            contextWindowUsedTokens: 20_300,
+          }),
+        }),
+      );
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("message_delta without cache counters keeps the message_start cache usage", async () => {
+    const session = await createSessionForTurns([
+      [
+        createInitMessage(),
+        createMessageStartEvent({
+          input_tokens: 5,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 1_000,
+        }),
+        createMessageDeltaUsageEvent({ input_tokens: 5, output_tokens: 64 }),
+        createSuccessResult(),
+      ],
+    ]);
+
+    try {
+      const events = await collectStreamEvents(session);
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "usage_updated",
+          provider: "claude",
+          usage: {
+            contextWindowMaxTokens: 200_000,
+            contextWindowUsedTokens: 1_069,
+          },
+        }),
+      );
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("message_delta before this request's message_start does not seed usage", async () => {
+    // A canceled request can leave its terminal message_delta queued behind the next turn.
+    // Nothing is known about the new request until its message_start, so that straggler
+    // must not produce a usage_updated event or leak into the next request's counters.
+    const session = await createSessionForTurns([
+      [
+        createInitMessage(),
+        createMessageDeltaUsageEvent({ input_tokens: 20_236, output_tokens: 64 }),
+        createMessageStartEvent({
+          input_tokens: 40,
+          cache_creation_input_tokens: 5,
+          cache_read_input_tokens: 10,
+        }),
+        createMessageDeltaEvent(7),
+        createSuccessResult(),
+      ],
+    ]);
+
+    try {
+      const events = await collectStreamEvents(session);
+
+      const usedTokens = events
+        .filter((event) => event.type === "usage_updated")
+        .map((event) => event.usage.contextWindowUsedTokens);
+      expect(usedTokens).toEqual([55, 62]);
     } finally {
       await session.close();
     }
@@ -2954,6 +3066,7 @@ describe("ClaudeAgentSession context window usage", () => {
           type: "usage_updated",
           provider: "claude",
           usage: {
+            contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 55,
           },
         }),
@@ -2963,6 +3076,7 @@ describe("ClaudeAgentSession context window usage", () => {
           type: "usage_updated",
           provider: "claude",
           usage: {
+            contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 62,
           },
         }),
@@ -3000,6 +3114,7 @@ describe("ClaudeAgentSession context window usage", () => {
           type: "usage_updated",
           provider: "claude",
           usage: {
+            contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 704,
           },
         }),
@@ -3578,134 +3693,5 @@ describe("Claude question permission notifications", () => {
 
     expect(request.title).toBeUndefined();
     expect(request.description).toBeUndefined();
-  });
-});
-
-describe("claudeQuestionAnswerRejection", () => {
-  const questionRequest = (...questions: unknown[]): AgentPermissionRequest =>
-    ({
-      id: "permission-1",
-      provider: "claude",
-      name: "AskUserQuestion",
-      kind: "question",
-      input: {
-        questions: questions.length
-          ? questions
-          : [{ question: "Which colour?", header: "Colour", options: [] }],
-      },
-    }) as unknown as AgentPermissionRequest;
-
-  // A question whose text carries padding: `readNonEmptyString` tests the
-  // trimmed value for emptiness but returns the original, so the padding is
-  // part of the key.
-  const paddedRequest = questionRequest({ question: " Which colour? ", header: " Colour " });
-
-  const rejected: Array<[string, AgentPermissionRequest, Record<string, unknown>]> = [
-    // The shape the incident used: valid as a string, read only for `plan` kinds.
-    ["selectedActionId instead of answers", questionRequest(), { selectedActionId: "Viridian" }],
-    ["updatedInput without answers", questionRequest(), { updatedInput: { choice: "Viridian" } }],
-    ["an empty answers map", questionRequest(), { updatedInput: { answers: {} } }],
-    ["an answers array", questionRequest(), { updatedInput: { answers: ["Viridian"] } }],
-    ["a key matching no question", questionRequest(), { updatedInput: { answers: { Hue: "V" } } }],
-    ["a blank answer", questionRequest(), { updatedInput: { answers: { Colour: "  " } } }],
-    ["a non-string answer", questionRequest(), { updatedInput: { answers: { Colour: 1 } } }],
-    [
-      "a trimmed key for a padded question",
-      paddedRequest,
-      {
-        updatedInput: { answers: { "Which colour?": "V" } },
-      },
-    ],
-    // `Array.isArray([])` is true, so an empty echoed list wins over the
-    // request's own questions and maps nothing.
-    [
-      "an empty echoed question list",
-      questionRequest(),
-      {
-        updatedInput: { questions: [], answers: { Colour: "V" } },
-      },
-    ],
-  ];
-
-  for (const [label, request, response] of rejected) {
-    test(`rejects ${label}`, () => {
-      expect(claudeQuestionAnswerRejection(request, { behavior: "allow", ...response })).toContain(
-        "still pending",
-      );
-    });
-  }
-
-  const accepted: Array<[string, AgentPermissionRequest, Record<string, unknown>]> = [
-    ["keyed by header", questionRequest(), { updatedInput: { answers: { Colour: "V" } } }],
-    [
-      "keyed by full question text",
-      questionRequest(),
-      {
-        updatedInput: { answers: { "Which colour?": "V" } },
-      },
-    ],
-    [
-      "keyed by a padded question's exact text",
-      paddedRequest,
-      {
-        updatedInput: { answers: { " Which colour? ": "V" } },
-      },
-    ],
-    [
-      "keyed by a padded header",
-      paddedRequest,
-      {
-        updatedInput: { answers: { " Colour ": "V" } },
-      },
-    ],
-    // The normalizer keeps whatever it can map, so a partial answer delivers.
-    [
-      "answering one of two questions",
-      questionRequest(
-        { question: "Which colour?", header: "Colour" },
-        { question: "Ship it?", header: "Ship" },
-      ),
-      { updatedInput: { answers: { Ship: "Yes" } } },
-    ],
-    [
-      "questions the caller echoed back",
-      questionRequest(),
-      {
-        updatedInput: {
-          questions: [{ question: "Ship it?", header: "Ship" }],
-          answers: { Ship: "Y" },
-        },
-      },
-    ],
-  ];
-
-  for (const [label, request, response] of accepted) {
-    test(`accepts an answer ${label}`, () => {
-      expect(claudeQuestionAnswerRejection(request, { behavior: "allow", ...response })).toBeNull();
-    });
-  }
-
-  test("leaves deny alone, which needs no answers", () => {
-    expect(claudeQuestionAnswerRejection(questionRequest(), { behavior: "deny" })).toBeNull();
-  });
-
-  test("leaves non-question requests alone", () => {
-    const toolRequest = { ...questionRequest(), kind: "tool" } as AgentPermissionRequest;
-    expect(claudeQuestionAnswerRejection(toolRequest, { behavior: "allow" })).toBeNull();
-  });
-
-  test("names the keys the request accepts, padding included", () => {
-    const message = claudeQuestionAnswerRejection(paddedRequest, { behavior: "allow" });
-    expect(message).toContain('" Which colour? "');
-    expect(message).toContain('" Colour "');
-  });
-
-  test("names the echoed keys when the caller supplied their own questions", () => {
-    const message = claudeQuestionAnswerRejection(questionRequest(), {
-      behavior: "allow",
-      updatedInput: { questions: [{ question: "Ship it?", header: "Ship" }], answers: {} },
-    });
-    expect(message).toContain("Ship it?");
-    expect(message).not.toContain("Which colour?");
   });
 });
