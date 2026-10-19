@@ -987,11 +987,13 @@ getpaseo/paseo, so there is no upstream PR.
   written in two of its six runs (exit 2), and a field holding a literal `&amp;` came back
   double-encoded in most runs. The table is the room's `~/.cache/paseo-sync-v0.12/proofs/E-table.md`.
 - **The one escape kept:** only the envelope's own tag can end an envelope or open a second
-  one, so a raw body escapes that tag sequence alone, in any letter case: `<` before
-  `paseo-system` or `/paseo-system` becomes `&lt;`, and an `&lt;` or `&amp;…lt;` already
-  there gains one `amp;`. The parser reverses exactly that, so a body that already holds the
-  escaped form round-trips byte for byte, and it refuses a raw body that carries an
-  unescaped envelope tag, so a body cannot read as a second sender.
+  one, so a raw body escapes that tag sequence alone: `<` before `paseo-system` or
+  `/paseo-system`, the tag in any letter case, becomes `&lt;`, and an `&lt;` or `&amp;…lt;`
+  already there gains one `amp;`. The entities match only in lower case, the case the
+  escape writes, so any other spelling (`&LT;`, `&Lt;`, `&AMP;lt;`) is never touched in
+  either direction. The parser reverses exactly that escape, so every body round-trips byte
+  for byte, whatever the case of its entities or tags, and it refuses a raw body that
+  carries an unescaped envelope tag, so a body cannot read as a second sender.
 - **What it leaves alone:** an envelope without `body="raw"` decodes as upstream wrote it,
   so history an unpatched v0.12 daemon wrote still projects as before. The human send path
   is upstream's: `prepareAgentMessage` with no source still quotes a pasted envelope, raw or
@@ -1297,7 +1299,7 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 `codex-app-server-agent` 193, `agent-manager` 208, `mcp-parity.e2e` 35 (35 at the 5 s default
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
-`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 21.
+`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28.
 `npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus

@@ -68,14 +68,18 @@ function unescapeXml(value: string): string | null {
 // as the sender wrote it. Upstream XML-escapes every body, so a model receives
 // `&lt;sha&gt;` and `&amp;&amp;` and has run the entity form as a command. Only the
 // envelope's own tag can end or open an envelope, so a raw body escapes that tag
-// sequence alone, reversibly: `<` before it becomes `&lt;`, and an existing
-// `&lt;`/`&amp;…lt;` before it gains one `amp;`, so a body that already holds the
-// escaped form still round-trips byte for byte. `body="raw"` tells the parser which
-// decoding applies; history written without it decodes as before. The human send
-// path (kind user-message, which quotes a pasted envelope) keeps the full escape.
-const ENVELOPE_TAG = /(&(?:amp;)*lt;|<)(\/?paseo-system)/gi;
-const ESCAPED_ENVELOPE_TAG = /&((?:amp;)*)lt;(\/?paseo-system)/gi;
-const RAW_ENVELOPE_TAG = /<\/?paseo-system/i;
+// sequence alone, reversibly: `<` before the tag, in any letter case, becomes `&lt;`,
+// and an existing `&lt;`/`&amp;…lt;` before it gains one `amp;`, so a body that
+// already holds the escaped form still round-trips byte for byte. The tag matches in
+// any case but the entities only in lower case, the case this escape writes: any
+// other spelling (`&LT;`, `&AMP;lt;`) is never touched either way, so it round-trips
+// too and opens no tag. `body="raw"` tells the parser which decoding applies; history
+// written without it decodes as before. The human send path (kind user-message, which
+// quotes a pasted envelope) keeps the full escape.
+const TAG = "\\/?[Pp][Aa][Ss][Ee][Oo]-[Ss][Yy][Ss][Tt][Ee][Mm]";
+const ENVELOPE_TAG = new RegExp(`(&(?:amp;)*lt;|<)(${TAG})`, "g");
+const ESCAPED_ENVELOPE_TAG = new RegExp(`&((?:amp;)*)lt;(${TAG})`, "g");
+const RAW_ENVELOPE_TAG = new RegExp(`<${TAG}`);
 
 function escapeEnvelopeTags(value: string): string {
   return value.replace(ENVELOPE_TAG, (_, lead: string, tag: string) =>
