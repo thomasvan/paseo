@@ -45,10 +45,10 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
     .addOption(
-      new Option(
-        "--behavior <behavior>",
-        "Active-turn behavior (agent default: steer; otherwise: interrupt)",
-      ).choices(["interrupt", "steer"]),
+      new Option("--behavior <behavior>", "Active-turn behavior (default: interrupt)").choices([
+        "interrupt",
+        "steer",
+      ]),
     )
     .option("--no-wait", "Return immediately without waiting for completion");
 }
@@ -204,7 +204,10 @@ export async function runSendCommand(
     await client.sendAgentMessage(agentIdArg, promptInput, {
       images,
       sourceAgentId,
-      activeTurnBehavior: options.behavior ?? (sourceAgentId ? "steer" : "interrupt"),
+      // SLP-PATCH(agent-send-interrupt): upstream (#5164) steers when
+      // PASEO_AGENT_ID is set. Every send interrupts unless --behavior steer.
+      // Sent explicitly, so a daemon's default for an absent field cannot steer.
+      activeTurnBehavior: options.behavior ?? "interrupt",
     });
 
     // If --no-wait, return immediately

@@ -4262,13 +4262,16 @@ class HeldTurnAgentClient implements AgentClient {
 }
 
 describe("send_agent_prompt MCP tool", () => {
+  // SLP-PATCH(agent-send-interrupt): an agent-scoped send with no behavior
+  // interrupts (upstream: steers), and the unavailable-steer fallback row asks
+  // for steer explicitly, since the default no longer reaches it.
   it.each([
-    { agentScoped: true, behavior: undefined, available: true, steered: true },
+    { agentScoped: true, behavior: undefined, available: true, steered: false },
     { agentScoped: true, behavior: "interrupt", available: true, steered: false },
     { agentScoped: true, behavior: "steer", available: true, steered: true },
     { agentScoped: false, behavior: undefined, available: true, steered: false },
     { agentScoped: false, behavior: "steer", available: true, steered: true },
-    { agentScoped: true, behavior: undefined, available: false, steered: false },
+    { agentScoped: true, behavior: "steer", available: false, steered: false },
   ] as const)(
     "dispatches behavior $behavior for agent-scoped=$agentScoped, steering available=$available",
     async ({ agentScoped, behavior, available, steered }) => {
@@ -4367,6 +4370,8 @@ describe("send_agent_prompt MCP tool", () => {
         const sending = send({
           agentId: child.id,
           prompt: "New message",
+          // SLP-PATCH(agent-send-interrupt): agent sends no longer steer by default.
+          activeTurnBehavior: "steer",
           notifyOnFinish: true,
         });
         if (rejected) {
@@ -4381,6 +4386,8 @@ describe("send_agent_prompt MCP tool", () => {
           await send({
             agentId: child.id,
             prompt: "Retry after rejection",
+            // SLP-PATCH(agent-send-interrupt): agent sends no longer steer by default.
+            activeTurnBehavior: "steer",
           });
           client.sessions[1]!.finishTurn();
         } else {
@@ -4446,6 +4453,8 @@ describe("send_agent_prompt MCP tool", () => {
         const sending = send({
           agentId: child.id,
           prompt: "New message",
+          // SLP-PATCH(agent-send-interrupt): agent sends no longer steer by default.
+          activeTurnBehavior: "steer",
           notifyOnFinish: true,
         });
         expect(await sending).toMatchObject({

@@ -293,7 +293,7 @@ paseo send <id> --no-wait "run this task"
 paseo send <id> --behavior interrupt "stop and do this instead"
 ```
 
-Agent-originated sends (`PASEO_AGENT_ID` set) default to steering the running turn. Other sends default to interrupting it. Use `--behavior steer` or `--behavior interrupt` to override the default. Steering uses the same fallback as the client: if steering is unavailable, the running turn is interrupted and replaced.
+Sends interrupt the running turn by default, including agent-originated sends (`PASEO_AGENT_ID` set). Use `--behavior steer` to join the running turn instead. Steering uses the same fallback as the client: if steering is unavailable, the running turn is interrupted and replaced.
 
 ## Viewing logs
 

@@ -1232,8 +1232,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     .object(legacyTopLevelCreateAgentInputSchema)
     .strict();
   const commonSendAgentPromptInputSchema = {
+    // SLP-PATCH(agent-send-interrupt): the default this text states is set in the handler.
     activeTurnBehavior: ActiveTurnBehaviorSchema.optional().describe(
-      'How to send into a running turn: "steer" joins it, falling back to interrupt when unavailable; "interrupt" replaces it. Defaults to steer for agent callers and interrupt otherwise.',
+      'How to send into a running turn: "steer" joins it, falling back to interrupt when unavailable; "interrupt" replaces it. Defaults to interrupt.',
     ),
     agentId: z.string(),
     prompt: z.string(),
@@ -1992,7 +1993,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       prompt,
       sessionMode,
       notifyOnFinish = Boolean(callerAgentId),
-      activeTurnBehavior = callerAgentId ? "steer" : "interrupt",
+      // SLP-PATCH(agent-send-interrupt): upstream (#5164) defaults agent callers
+      // to steer. A steered correction can be ignored by a turn that finishes its
+      // original task, and the sender never learns, so every caller interrupts
+      // unless it asks to steer.
+      activeTurnBehavior = "interrupt",
     }) => {
       let stopNotification: (() => void) | undefined;
       let acceptDispatch!: (result: PromptDispatchDisposition | false) => void;

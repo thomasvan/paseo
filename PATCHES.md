@@ -22,9 +22,10 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
 `provider-registry.ts`).
 
-Four patches keep their tests in fork-only `.slp.test.ts` files upstream does
+Five patches keep their tests in fork-only `.slp.test.ts` files upstream does
 not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`,
-`native-tools-gate.slp.test.ts` and `agent-message-raw-body.slp.test.ts`.
+`native-tools-gate.slp.test.ts`, `agent-message-raw-body.slp.test.ts` and, in the CLI
+package, `commands/agent/send.slp.test.ts`.
 (`native-tools-optin.slp.test.ts` was the third until the 2026-09-07 sync retired its
 patch; `native-tools-gate.slp.test.ts` replaced it there.)
 
@@ -51,7 +52,7 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Patches that landed upstream have left, and their sections with them. **Thirteen patches
+Patches that landed upstream have left, and their sections with them. **Fourteen patches
 remain here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
@@ -64,7 +65,8 @@ dropped `claude-history-follows-provider-env` (upstream shipped it as #5437) and
 sync dropped `acp-provider-mcp-servers` for fifteen, the v0.11.0 sync kept
 all fifteen, and the v0.12.0 sync retired `question-answer-required`,
 `schedule-claim-slots` and `schedule-claim-in-flight` for twelve, and
-`agent-message-raw-body` made it thirteen on 2026-10-20, which is
+`agent-message-raw-body` made it thirteen on 2026-10-20 and
+`agent-send-interrupt` fourteen the same day, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-10-19**, tag `v0.12.0` at
@@ -267,6 +269,7 @@ breakage and is not. The patch table:
 | [#4694](https://github.com/getpaseo/paseo/pull/4694) | — dropped `claude-history-follows-provider-env`                                                                                                   | `providers/claude/agent.ts`                                                                                                                                                               | closed 2026-09-26 as superseded by [#5437](https://github.com/getpaseo/paseo/pull/5437), landed `76a9781ba`, in `v0.10.0`; patch dropped at the v0.10.0 sync                                      |
 | [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | this branch carries two of the PR's five providers — `acp-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736; omp, opencode and plugin-provider dropped at the v0.10.0 sync) | closed unmerged — the OMP half landed as [#5550](https://github.com/getpaseo/paseo/pull/5550) (`264f6e1cc`); the pi and ACP halves were not included. **No marker**; kept, with no upstream route |
 | [#4904](https://github.com/getpaseo/paseo/pull/4904) | — retired `schedule-claim-slots`, `schedule-claim-in-flight`                                                                                      | `schedule/service.ts`                                                                                                                                                                     | closed unmerged — superseded by [#6532](https://github.com/getpaseo/paseo/pull/6532), landed `ee0d901ef` with keithpk's credit, in `v0.12.0`; both patches retired at the v0.12.0 sync            |
+| —                                                    | `agent-send-interrupt`                                                                                                                            | `tools/paseo-tools.ts`, `cli/src/commands/agent/send.ts`                                                                                                                                  | not opened upstream: the room decided nothing goes to getpaseo/paseo                                                                                                                              |
 | —                                                    | `agent-message-raw-body`                                                                                                                          | `agent-messages/index.ts`                                                                                                                                                                 | not opened upstream: the room decided nothing goes to getpaseo/paseo                                                                                                                              |
 
 **Re-verified 2026-10-19** against tag `v0.12.0` (`cafe4b01c`): of the fifteen, upstream
@@ -1016,6 +1019,46 @@ getpaseo/paseo, so there is no upstream PR.
   other way that gives the model the sender's bytes, re-run the room's proof E on the new
   pin before dropping this patch.
 
+### agent-send-interrupt
+
+Added 2026-10-20, on `slp/agent-send-interrupt`, by the room's plan
+`plans/agent-send-interrupt.md` (AI-airoom `f4bc11420`). Room-local, no upstream PR.
+
+- **What:** an agent's send into a running turn interrupts it unless the sender asks for
+  `steer`. Upstream #5164 (`v0.12.0`) made `steer` the default for agent callers on both
+  agent-send paths: MCP `send_agent_prompt` with an agent-scoped server (`callerAgentId`),
+  and `paseo send` with `PASEO_AGENT_ID` set. Both now default to `interrupt`, as top-level
+  sends already did. An explicit `activeTurnBehavior: "steer"` or `--behavior steer` still
+  steers, with upstream's fallback to interrupt-and-replace when the provider reports steering
+  unavailable.
+- **Why it matters here:** a steered correction can be ignored by a codex turn that finishes
+  its original task, and the sender learns nothing. The room's Phase B measured 11 misses in
+  27 steered sends and 0 in 33 interrupting ones (AI-airoom#849).
+- **Where the default is decided:** at each sender, because the daemon cannot tell an
+  explicit `steer` from a defaulted one. The CLI always sends the field, so a daemon whose
+  default for an absent field differs cannot steer it.
+- **What it leaves alone:** sends the daemon makes itself keep the `steer` they pass
+  explicitly. A finish notification (`setupFinishNotification`) steers into the caller's
+  running turn, so a child finishing does not abort the work of the agent that waits on it. A
+  schedule fire refuses an agent with a run in flight, and its `steer` only governs the race
+  between that check and the dispatch. The `send_agent_message_request` RPC, the app composer,
+  review feedback, the Hub and voice input are top-level and unchanged: the RPC still
+  defaults an absent field to `interrupt` and honours an explicit one.
+- **Known limit:** an unpatched `paseo` CLI (upstream `v0.12`) on a seat's `PATH` still
+  sends an explicit `steer` for `PASEO_AGENT_ID` callers, and this daemon honours it.
+- **Sites:** three markers in code (`paseo-tools.ts`: the handler default and the schema
+  text; `cli/src/commands/agent/send.ts`) and four in `mcp-server.test.ts`, where upstream's
+  dispatch table now expects an agent-scoped send with no behavior to interrupt, its
+  unavailable-steer row asks for `steer` explicitly, and the steer-acknowledgement tests ask
+  for `steer` on the sends they mean to steer. `skills/paseo/SKILL.md`,
+  `public-docs/cli.md` and `public-docs/orchestration-workflows.md` state the new default.
+- **Coverage:** upstream's `send_agent_prompt` dispatch table in `mcp-server.test.ts` drives
+  the tool through its input schema into a real `AgentManager`; the CLI's
+  `send.slp.test.ts` drives `paseo send` and `paseo agent send` through commander and records
+  what reaches `sendAgentMessage`.
+- **Retirement and revisit:** if upstream returns the agent default to `interrupt`, drop the
+  patch; if it moves the decision into the daemon, re-apply it there.
+
 ## Sync procedure
 
 First, derive the patch-owned file manifest, then check whether upstream touched
@@ -1172,8 +1215,8 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured after agent-message-raw-body (2026-10-20): expect 11
-# names across 30 code/test sites in 12 files, and use the per-name manifest
+# Marker gate. Measured after agent-send-interrupt (2026-10-20): expect 12
+# names across 37 code/test sites in 14 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
 # changes whenever the prose does; include it and the gate can never pass on a
@@ -1181,14 +1224,14 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # path, so sort -u would dedupe path:name pairs and return one line per file,
 # not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 11
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 12
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
-#    6 native-tools-injection-independent     3 interrupt-releases-foreground
-#    4 wakeup-each                            2 force-cancel-releases-foreground
-#    3 replace-awaits-teardown                2 detached-arg
+#    7 agent-send-interrupt                   3 detached-wakeup
+#    6 native-tools-injection-independent     2 force-cancel-releases-foreground
+#    4 wakeup-each                            2 detached-arg
+#    3 replace-awaits-teardown                2 agent-message-raw-body
 #    3 mcp-protocol-version-clip              1 dispose-releases-foreground
-#    3 detached-wakeup                        1 dead-run-settles
-#    2 agent-message-raw-body
+#    3 interrupt-releases-foreground          1 dead-run-settles
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list and history-purpose-provider-contract are absent from this
@@ -1278,6 +1321,7 @@ vt packages/server/src/server/agent/providers/acp-agent.test.ts       # history-
 vt packages/server/src/server/agent/providers/generic-acp-agent.test.ts
 vt packages/server/src/server/agent/providers/generic-acp-agent.archived-history.test.ts  # #6766's release
 vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts --bail=1   # agent-message-raw-body
+vt packages/cli/src/commands/agent/send.slp.test.ts --bail=1   # agent-send-interrupt
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/daemon-e2e/claude-provider-config-dir-history.e2e.test.ts
 
@@ -1299,7 +1343,7 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 `codex-app-server-agent` 193, `agent-manager` 208, `mcp-parity.e2e` 35 (35 at the 5 s default
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
-`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28.
+`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28; CLI `send.slp` (added 2026-10-20) 7.
 `npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus
