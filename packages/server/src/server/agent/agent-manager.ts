@@ -3167,8 +3167,6 @@ export class AgentManager {
       // session clears its foreground slot only on a turn end that a
       // force-cancel means is never coming. Release it here, before awaiting
       // settlement so a settle that never arrives cannot strand the slot.
-      // (2026-09-07 sync: upstream reworked run tracking into AgentRunState, so
-      // the canceled run's turn id is `runTurnId` above, not `run.turnId`.)
       if (agent.session.releaseForegroundTurn?.(runTurnId)) {
         this.logger.warn(
           { agentId, provider: agent.provider, turnId: runTurnId },

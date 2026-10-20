@@ -209,11 +209,9 @@ export async function createAgentCommand(
           // SLP-PATCH(detached-wakeup): the ownership guard asks "is this child
           // still labelled as mine?" at fire time. For a child created detached,
           // `resolveCreateAgentIntent` strips that label on purpose, so the guard
-          // can never pass and the caller is silenced permanently — even though it
-          // is the one that asked for the child and passed notifyOnFinish. Measured:
-          // a Supervisor staffed a detached Lead, the Lead finished, and 23m46s of
-          // silence followed until an unrelated heartbeat swept. Don't ask about
-          // parent ownership for a child that was deliberately given no parent.
+          // could never pass and the caller, which asked for the child and passed
+          // notifyOnFinish, would never hear it finish. A child deliberately
+          // given no parent is not asked about parent ownership.
           requireParentOwnership: !(input.detached ?? false),
           logger: dependencies.logger,
         })

@@ -26,30 +26,19 @@ describe("paseo send active-turn behavior", () => {
     vi.restoreAllMocks();
   });
 
-  // The daemon gets an explicit behavior every time: an agent sender
-  // (PASEO_AGENT_ID set) interrupts like everyone else unless it asks to steer.
-  it.each([
-    { path: ["send"], caller: "agent-a", flag: [], sent: "interrupt" },
-    { path: ["agent", "send"], caller: "agent-a", flag: [], sent: "interrupt" },
-    { path: ["send"], caller: "agent-a", flag: ["--behavior", "steer"], sent: "steer" },
-    { path: ["send"], caller: "agent-a", flag: ["--behavior", "interrupt"], sent: "interrupt" },
-    { path: ["send"], caller: undefined, flag: [], sent: "interrupt" },
-    { path: ["agent", "send"], caller: undefined, flag: [], sent: "interrupt" },
-    { path: ["send"], caller: undefined, flag: ["--behavior", "steer"], sent: "steer" },
-  ] as const)(
-    "$path with caller $caller and flags $flag sends activeTurnBehavior $sent",
-    async ({ path, caller, flag, sent }) => {
-      vi.stubEnv("PASEO_AGENT_ID", caller ?? "");
-      await createCli().parseAsync([...path, "target-agent", "correction", "--no-wait", ...flag], {
-        from: "user",
-      });
+  // An agent sender (PASEO_AGENT_ID set) interrupts like everyone else unless it
+  // asks to steer, and the behavior is always sent, so no daemon default applies.
+  it("an agent's send with no --behavior sends activeTurnBehavior interrupt", async () => {
+    vi.stubEnv("PASEO_AGENT_ID", "agent-a");
+    await createCli().parseAsync(["send", "target-agent", "correction", "--no-wait"], {
+      from: "user",
+    });
 
-      expect(sendAgentMessage).toHaveBeenCalledTimes(1);
-      expect(sendAgentMessage).toHaveBeenCalledWith(
-        "target-agent",
-        "correction",
-        expect.objectContaining({ sourceAgentId: caller, activeTurnBehavior: sent }),
-      );
-    },
-  );
+    expect(sendAgentMessage).toHaveBeenCalledTimes(1);
+    expect(sendAgentMessage).toHaveBeenCalledWith(
+      "target-agent",
+      "correction",
+      expect.objectContaining({ sourceAgentId: "agent-a", activeTurnBehavior: "interrupt" }),
+    );
+  });
 });

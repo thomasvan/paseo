@@ -663,8 +663,8 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         if (agentManager.getAgent(childAgentId)?.lifecycle !== "idle") return;
         if (event.event.type === "turn_completed" && hasSeenRunning) {
           // SLP-PATCH(wakeup-each): upstream stops the watcher at the first
-          // finish. SLP drives one long-lived child across many prompts and the
-          // caller has to hear every one, so reset both per-cycle gates and keep
+          // finish. A caller that drives one long-lived child across many
+          // prompts has to hear every one, so reset both per-cycle gates and keep
           // the subscription: the child's next observed turn notifies again, and
           // a repeated terminal event without one notifies nothing. Disarming is
           // left to "was canceled", "was closed", "errored" and caller archival.

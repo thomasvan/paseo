@@ -204,9 +204,10 @@ export async function runSendCommand(
     await client.sendAgentMessage(agentIdArg, promptInput, {
       images,
       sourceAgentId,
-      // SLP-PATCH(agent-send-interrupt): upstream (#5164) steers when
-      // PASEO_AGENT_ID is set. Every send interrupts unless --behavior steer.
-      // Sent explicitly, so a daemon's default for an absent field cannot steer.
+      // SLP-PATCH(agent-send-interrupt): every send interrupts unless
+      // --behavior steer, an agent's included (upstream steers when
+      // PASEO_AGENT_ID is set). Sent explicitly, so a daemon's default for an
+      // absent field cannot steer.
       activeTurnBehavior: options.behavior ?? "interrupt",
     });
 

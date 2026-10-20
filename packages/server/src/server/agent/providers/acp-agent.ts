@@ -1894,19 +1894,11 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         throw new Error(`${this.provider} does not support ACP session resume`);
       }
 
-      if (this.resumePurpose === "history") {
-        // A history read only needs the persistedHistory captured above by
-        // loadSession/resume; mode, model and thinking-option overrides are
-        // interactive setup that would otherwise send further requests
-        // (some of them mutating, e.g. setMode) to a session opened only to
-        // be read. Skip them and release the process now rather than
-        // holding it for the rest of this agent's (unbounded) resumed
-        // lifetime.
-        await this.releaseHistoryRuntime();
-        return;
-      }
-
       await this.applyConfiguredOverrides();
+
+      if (this.resumePurpose === "history") {
+        await this.releaseHistoryRuntime();
+      }
     } catch (error) {
       await this.closeAfterInitializationFailure(error);
     }

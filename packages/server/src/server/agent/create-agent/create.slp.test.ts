@@ -1,6 +1,6 @@
 // SLP-PATCH coverage (detached-wakeup).
-// Lives in its own file so create.test.ts stays byte-identical with upstream
-// and can never conflict on merge — see PATCHES.md.
+// Lives in its own file so create.test.ts stays upstream's and never conflicts
+// on merge.
 import { beforeEach, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
@@ -13,12 +13,9 @@ const mocks = vi.hoisted(() => ({
   setupFinishNotification: vi.fn(),
 }));
 
-// The watcher itself is upstream's and is covered by agent-prompt.test.ts. What
-// this file pins down is the registration the create path makes: its argument,
-// and that it is armed before the initial prompt is dispatched, so a child that
-// finishes fast still reaches its caller. Both modules are stubbed so each call
-// records its place in `steps`; the stub watcher returns a stop function so the
-// create path's cleanup on a failed first prompt is observable.
+// The create path's watcher registration: its argument, and its place around the
+// first prompt. Each stubbed call records itself in `steps`, and the stub
+// watcher returns a stop function so the cleanup of a failed prompt shows.
 vi.mock("../agent-prompt.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agent-prompt.js")>();
   return {
@@ -42,25 +39,18 @@ beforeEach(() => {
   });
 });
 
-function createCallerAgent(): ManagedAgent {
+function agent(id: string): ManagedAgent {
   return {
-    id: "caller-agent",
+    id,
     provider: "claude",
-    cwd: "/tmp/paseo-slp-create-test",
-    workspaceId: "ws-slp",
+    cwd: "/tmp/paseo-create-test",
     runtimeInfo: null,
   } as unknown as ManagedAgent;
 }
 
 async function createChild(options: { detached: boolean; promptFailure?: "throw" }): Promise<void> {
-  const caller = createCallerAgent();
-  const child = {
-    id: "child-agent",
-    provider: "claude",
-    cwd: "/tmp/paseo-slp-create-test",
-    workspaceId: "ws-slp",
-    runtimeInfo: null,
-  } as unknown as ManagedAgent;
+  const caller = agent("caller-agent");
+  const child = agent("child-agent");
 
   const dependencies: Parameters<typeof createAgentCommand>[0] = {
     agentManager: {
@@ -77,8 +67,8 @@ async function createChild(options: { detached: boolean; promptFailure?: "throw"
   await createAgentCommand(dependencies, {
     kind: "mcp",
     provider: "claude",
-    cwd: "/tmp/paseo-slp-create-test",
-    workspaceId: "ws-slp",
+    cwd: "/tmp/paseo-create-test",
+    workspaceId: "ws-test",
     title: "child",
     initialPrompt: "go",
     background: true,
@@ -89,41 +79,26 @@ async function createChild(options: { detached: boolean; promptFailure?: "throw"
   });
 }
 
-// SLP-PATCH(detached-wakeup)
-test("a deliberately detached child does not have its wakeup gated on parent ownership", async () => {
-  // resolveCreateAgentIntent strips the parent label for a detached child, so
-  // asking the watcher to verify parent ownership at fire time guarantees the
-  // caller is never notified. SLP Leads are spawned detached, which is how a
-  // Supervisor ended up waiting 23m46s on a Lead that had already finished.
-  await createChild({ detached: true });
+// A child created detached has no parent label to check at fire time, so its
+// caller is notified without the ownership guard; a parented child keeps it.
+test.each([
+  { child: "a detached child", detached: true, requireParentOwnership: false },
+  { child: "a parented child", detached: false, requireParentOwnership: true },
+])(
+  "$child is watched with requireParentOwnership $requireParentOwnership",
+  async ({ detached, requireParentOwnership }) => {
+    await createChild({ detached });
 
-  expect(mocks.setupFinishNotification).toHaveBeenCalledTimes(1);
-  expect(mocks.setupFinishNotification.mock.calls[0]?.[0]).toMatchObject({
-    childAgentId: "child-agent",
-    callerAgentId: "caller-agent",
-    requireParentOwnership: false,
-  });
-});
+    expect(mocks.setupFinishNotification).toHaveBeenCalledTimes(1);
+    expect(mocks.setupFinishNotification.mock.calls[0]?.[0]).toMatchObject({
+      childAgentId: "child-agent",
+      callerAgentId: "caller-agent",
+      requireParentOwnership,
+    });
+  },
+);
 
-// SLP-PATCH(detached-wakeup)
-test("an ordinary parented child still has its wakeup gated on parent ownership", async () => {
-  // Upstream's guard, untouched: a child that carries a parent label must stop
-  // notifying this caller once that label points elsewhere.
-  await createChild({ detached: false });
-
-  expect(mocks.setupFinishNotification).toHaveBeenCalledTimes(1);
-  expect(mocks.setupFinishNotification.mock.calls[0]?.[0]).toMatchObject({
-    requireParentOwnership: true,
-  });
-});
-
-test("a detached child's watcher is armed once, before its first prompt is dispatched", async () => {
-  await createChild({ detached: true });
-
-  expect(mocks.steps).toEqual(["arm", "dispatch"]);
-});
-
-test("a detached child whose first prompt fails disarms the watcher it armed", async () => {
+test("a detached child's watcher is armed before its first prompt and disarmed when that prompt fails", async () => {
   mocks.initialPromptError = new Error("provider refused the first prompt");
 
   await expect(createChild({ detached: true, promptFailure: "throw" })).rejects.toThrow(
@@ -131,7 +106,4 @@ test("a detached child whose first prompt fails disarms the watcher it armed", a
   );
 
   expect(mocks.steps).toEqual(["arm", "dispatch", "disarm"]);
-  expect(mocks.setupFinishNotification.mock.calls[0]?.[0]).toMatchObject({
-    requireParentOwnership: false,
-  });
 });

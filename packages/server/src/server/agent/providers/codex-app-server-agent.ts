@@ -146,9 +146,8 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
 // How long an incoming turn waits for the previous foreground turn's teardown
 // before refusing. A replace path can reach startTurn while the interrupted
 // turn is still tearing down: the manager's force-cancel settles its run
-// record before this provider clears activeForegroundTurnId (measured 4ms
-// apart in production), and refusing immediately loses the incoming prompt
-// and marks the agent errored.
+// record milliseconds before this provider clears activeForegroundTurnId, and
+// refusing immediately loses the incoming prompt and marks the agent errored.
 const FOREGROUND_TEARDOWN_WAIT_MS = 10_000;
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;

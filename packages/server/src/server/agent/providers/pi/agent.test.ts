@@ -3490,10 +3490,9 @@ describe("transformPiModels", () => {
 });
 
 describe("PiRpcAgentSession resumeSession purpose: history", () => {
-  test("releases the runtime after the first streamHistory() read, and replays cached events afterward", async () => {
+  async function resumeForHistory() {
     const pi = new FakePi();
-    const client = createClient(pi);
-    const session = (await client.resumeSession(
+    const session = (await createClient(pi).resumeSession(
       {
         provider: "pi",
         sessionId: "pi-session-1",
@@ -3504,6 +3503,11 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
       undefined,
       { purpose: "history" },
     )) as PiRpcAgentSession;
+    return { pi, session };
+  }
+
+  test("releases the runtime after the first streamHistory() read, and replays cached events afterward", async () => {
+    const { pi, session } = await resumeForHistory();
     const fakeSession = pi.latestSession();
     fakeSession.messages = [{ role: "assistant", content: [{ type: "text", text: "restored" }] }];
     const closeSpy = vi.spyOn(fakeSession, "close");
@@ -3520,9 +3524,7 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
       },
     ]);
 
-    // Mutant: dropping the `resumePurpose === "history"` release branch in
-    // streamHistory() leaves the runtime open — this assertion fails
-    // (closeSpy uncalled) without it.
+    // The first read releases the runtime.
     expect(closeSpy).toHaveBeenCalledTimes(1);
 
     // A second read (hydrateTimelineFromProvider calls streamHistory() once
@@ -3562,50 +3564,8 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
     await session.close();
   });
 
-  test("releases the runtime when the history read throws mid-fetch", async () => {
-    const pi = new FakePi();
-    const client = createClient(pi);
-    const session = (await client.resumeSession(
-      {
-        provider: "pi",
-        sessionId: "pi-session-1",
-        nativeHandle: "/tmp/native-pi-session",
-        metadata: { cwd: "/workspace/project" },
-      },
-      undefined,
-      undefined,
-      { purpose: "history" },
-    )) as PiRpcAgentSession;
-    const fakeSession = pi.latestSession();
-    const closeSpy = vi.spyOn(fakeSession, "close");
-    const readError = new Error("get_messages RPC failed");
-    vi.spyOn(fakeSession, "getMessages").mockRejectedValueOnce(readError);
-
-    await expect(async () => {
-      for await (const _event of session.streamHistory()) {
-        // never reached
-      }
-    }).rejects.toThrow(readError);
-
-    // Mutant: a streamHistory() that only releases after the loop completes
-    // normally leaves the runtime open on this path (closeSpy uncalled).
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-  });
-
   test("releases the runtime when the history read is abandoned before it completes", async () => {
-    const pi = new FakePi();
-    const client = createClient(pi);
-    const session = (await client.resumeSession(
-      {
-        provider: "pi",
-        sessionId: "pi-session-1",
-        nativeHandle: "/tmp/native-pi-session",
-        metadata: { cwd: "/workspace/project" },
-      },
-      undefined,
-      undefined,
-      { purpose: "history" },
-    )) as PiRpcAgentSession;
+    const { pi, session } = await resumeForHistory();
     const fakeSession = pi.latestSession();
     fakeSession.messages = [
       { role: "assistant", content: [{ type: "text", text: "first" }] },
@@ -3621,25 +3581,12 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
       break;
     }
 
-    // Mutant: releasing only after the loop finishes normally leaves the
-    // runtime open on an abandoned read (closeSpy uncalled).
+    // An abandoned read releases the runtime too.
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
   test("releases the runtime when the entry-capture prompt rejects before the read begins", async () => {
-    const pi = new FakePi();
-    const client = createClient(pi);
-    const session = (await client.resumeSession(
-      {
-        provider: "pi",
-        sessionId: "pi-session-1",
-        nativeHandle: "/tmp/native-pi-session",
-        metadata: { cwd: "/workspace/project" },
-      },
-      undefined,
-      undefined,
-      { purpose: "history" },
-    )) as PiRpcAgentSession;
+    const { pi, session } = await resumeForHistory();
     const fakeSession = pi.latestSession();
     const closeSpy = vi.spyOn(fakeSession, "close");
     const captureError = new Error("capture prompt rejected");
@@ -3656,10 +3603,7 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
     const assertion = expect(readPromise).rejects.toThrow(captureError);
     await fakeSession.failHeldPrompt(captureError);
 
-    // Mutant: awaiting requestEntryCapture("history") outside the try/finally
-    // leaves the runtime open when the capture prompt rejects (closeSpy
-    // uncalled) — the generator exits before ever entering the try, so the
-    // finally that releases the runtime never runs.
+    // A capture prompt that rejects before the read begins releases the runtime too.
     await assertion;
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });

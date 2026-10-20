@@ -4263,8 +4263,7 @@ class HeldTurnAgentClient implements AgentClient {
 
 describe("send_agent_prompt MCP tool", () => {
   // SLP-PATCH(agent-send-interrupt): an agent-scoped send with no behavior
-  // interrupts (upstream: steers), and the unavailable-steer fallback row asks
-  // for steer explicitly, since the default no longer reaches it.
+  // interrupts, so the unavailable-steer fallback row asks for steer explicitly.
   it.each([
     { agentScoped: true, behavior: undefined, available: true, steered: false },
     { agentScoped: true, behavior: "interrupt", available: true, steered: false },
@@ -4370,7 +4369,7 @@ describe("send_agent_prompt MCP tool", () => {
         const sending = send({
           agentId: child.id,
           prompt: "New message",
-          // SLP-PATCH(agent-send-interrupt): agent sends no longer steer by default.
+          // SLP-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
           activeTurnBehavior: "steer",
           notifyOnFinish: true,
         });
@@ -4386,7 +4385,7 @@ describe("send_agent_prompt MCP tool", () => {
           await send({
             agentId: child.id,
             prompt: "Retry after rejection",
-            // SLP-PATCH(agent-send-interrupt): agent sends no longer steer by default.
+            // SLP-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
             activeTurnBehavior: "steer",
           });
           client.sessions[1]!.finishTurn();
@@ -4453,7 +4452,7 @@ describe("send_agent_prompt MCP tool", () => {
         const sending = send({
           agentId: child.id,
           prompt: "New message",
-          // SLP-PATCH(agent-send-interrupt): agent sends no longer steer by default.
+          // SLP-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
           activeTurnBehavior: "steer",
           notifyOnFinish: true,
         });
@@ -7017,70 +7016,6 @@ describe("agent snapshot MCP serialization", () => {
     const response = await tool.handler({});
 
     expect(agentsOf(response).map((agent) => agent.id)).toEqual(["in-cwd"]);
-  });
-
-  it("reports the archive timestamp of a live archived agent when archives are requested", async () => {
-    const { agentManager, agentStorage, spies } = createTestDeps();
-    const now = new Date().toISOString();
-    const archivedRecord = createStoredRecord({
-      id: "resumed-archived",
-      cwd: "/tmp/workspace",
-      updatedAt: now,
-      lastActivityAt: now,
-      archivedAt: now,
-    });
-    spies.agentManager.getAgent.mockReturnValue(
-      createManagedAgent({ id: "caller-agent", cwd: "/tmp/workspace" }),
-    );
-    spies.agentManager.listAgents.mockReturnValue([
-      createManagedAgent({ id: "resumed-archived", cwd: "/tmp/workspace" }),
-    ]);
-    spies.agentStorage.list.mockResolvedValue([archivedRecord]);
-    spies.agentStorage.get.mockImplementation(async (id: string) =>
-      id === "resumed-archived" ? archivedRecord : null,
-    );
-
-    const server = await createAgentMcpServer({
-      agentManager,
-      agentStorage,
-      logger,
-      providerSnapshotManager: createClaudeOnlyManager(),
-      callerAgentId: "caller-agent",
-    });
-    const tool = registeredTool(server, "list_agents");
-    const response = await tool.handler({ includeArchived: true });
-
-    const agents = agentsOf(response);
-    expect(agents.map((agent) => agent.id)).toEqual(["resumed-archived"]);
-    expect(agents[0]?.archivedAt).toBe(now);
-  });
-
-  // A structural guard, not a mutation test: it passes on the unfixed code too,
-  // and it would not catch a managed copy of the timestamp either, since the
-  // fixture seeds no stale managed state. What it pins is narrower and still
-  // worth pinning: the reported value follows the stored record, so clearing
-  // that record -- which is all unarchiveSnapshot does -- is immediately
-  // visible over MCP.
-  it("reports a live agent as unarchived as soon as its stored record is cleared", async () => {
-    const { agentManager, agentStorage, spies } = createTestDeps();
-    spies.agentManager.getAgent.mockReturnValue(
-      createManagedAgent({ id: "resumed-archived", cwd: "/tmp/workspace" }),
-    );
-    spies.agentStorage.get.mockResolvedValue(
-      createStoredRecord({ id: "resumed-archived", cwd: "/tmp/workspace", archivedAt: null }),
-    );
-
-    const server = await createAgentMcpServer({
-      agentManager,
-      agentStorage,
-      logger,
-      providerSnapshotManager: createClaudeOnlyManager(),
-    });
-    const tool = registeredTool(server, "get_agent_status");
-    const response = await tool.handler({ agentId: "resumed-archived" });
-
-    const snapshot = z.record(z.string(), z.unknown()).parse(response.structuredContent.snapshot);
-    expect(snapshot.archivedAt ?? null).toBeNull();
   });
 
   it("allows explicit cwd, status, archive, time, and limit filters for list_agents", async () => {

@@ -8,41 +8,11 @@ import { randomUUID } from "node:crypto";
 import { getHostName } from "./host-name.js";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
-
-// SLP-PATCH(mcp-protocol-version-clip) helper: normalize the
-// `mcp-protocol-version` request header to the server's newest supported
-// version when it is present but unsupported. Node preserves wire case in
-// `req.rawHeaders` (it lowercases only `req.headers`), and `@hono/node-server`
-// builds the Web Request from `incoming.rawHeaders`, so both representations
-// must be rewritten — and duplicates (same name, any casing) must collapse to
-// one effective value, because Hono joins same-name raw pairs into a
-// comma-separated value that the SDK's server rejects.
-function clipMcpProtocolVersionHeader(req: express.Request): void {
-  const current = req.header("mcp-protocol-version");
-  if (!current || SUPPORTED_PROTOCOL_VERSIONS.includes(current)) {
-    return;
-  }
-  const clipped = SUPPORTED_PROTOCOL_VERSIONS[0];
-  req.headers["mcp-protocol-version"] = clipped;
-  let replaced = false;
-  for (let i = 0; i < req.rawHeaders.length - 1; ) {
-    if (req.rawHeaders[i].toLowerCase() === "mcp-protocol-version") {
-      if (replaced) {
-        req.rawHeaders.splice(i, 2);
-      } else {
-        req.rawHeaders[i + 1] = clipped;
-        replaced = true;
-        i += 2;
-      }
-    } else {
-      i += 2;
-    }
-  }
-}
+// SLP-PATCH(mcp-protocol-version-clip): fork-owned module.
+import { clipMcpProtocolVersionHeader } from "./mcp-protocol-version-clip.js";
 
 export type ListenTarget =
   | { type: "tcp"; host: string; port: number }
@@ -1494,9 +1464,8 @@ export async function createPaseoDaemon(
     agentProviderRuntime.setPaseoToolCatalog(enabled ? createAgentToolCatalog({}) : null);
   };
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
-  // SLP-PATCH(native-tools-injection-independent): upstream gates the native
-  // catalog on MCP injection; this room injects nothing but needs native tools
-  // for policy-enabled omp seats. Gate on the MCP stack being enabled instead.
+  // SLP-PATCH(native-tools-injection-independent): the native catalog follows
+  // the MCP stack being enabled, not MCP injection (see native-tools-gate.ts).
   agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(config.mcpEnabled));
   setAgentProviderToolsEnabled(isNativePaseoToolsEnabled(config.mcpEnabled));
 
@@ -1585,17 +1554,7 @@ export async function createPaseoDaemon(
           });
           return;
         }
-        // SLP-PATCH(mcp-protocol-version-clip): seat CLIs bundle MCP clients
-        // that negotiate protocol versions newer than the bundled
-        // @modelcontextprotocol/sdk server supports (e.g. 2026-07-28,
-        // DRAFT-2026-v1). The streamable-HTTP transport hard-gates every
-        // non-initialize request on the `mcp-protocol-version` header
-        // (webStandardStreamableHttp.js `if (!isInitializationRequest)`) and
-        // rejects unknown versions before the JSON-RPC body is handled, so a
-        // seat's injected "paseo" MCP mount fails on its first post-initialize
-        // request. Normalize the header to the server's newest supported
-        // version; initialize's body-param negotiation already falls back
-        // gracefully for the response.
+        // SLP-PATCH(mcp-protocol-version-clip)
         clipMcpProtocolVersionHeader(req);
         const callerAgentIdRaw = req.query.callerAgentId;
         let callerAgentId: string | undefined;

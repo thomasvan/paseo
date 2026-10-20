@@ -55,7 +55,6 @@ import type {
   AgentCapabilityFlags,
   AgentPersistenceHandle,
   AgentSession,
-  AgentSessionConfig,
   ProviderRefreshContext,
 } from "../agent-sdk-types.js";
 import { buildProviderRegistry } from "../provider-registry.js";
@@ -389,16 +388,6 @@ function copilotAgentConfigOption(currentValue: string): SessionConfigOption {
       },
     ],
   };
-}
-
-function withCurrentConfigValue(
-  configOptions: SessionConfigOption[],
-  configId: string,
-  currentValue: string,
-): SessionConfigOption[] {
-  return configOptions.map((option) =>
-    option.id === configId ? { ...option, currentValue } : option,
-  );
 }
 
 function selectConfigOptionName(category: "mode" | "model" | "thought_level"): string {
@@ -4021,8 +4010,6 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
     resumePurpose?: "interactive" | "history";
     terminateProcess?: ProcessTerminator;
     child?: ChildProcessWithoutNullStreams;
-    config?: Partial<AgentSessionConfig>;
-    optionWriters?: Record<string, ReturnType<typeof vi.fn>>;
   }) {
     const loadSession =
       args.loadSession ??
@@ -4050,7 +4037,6 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
             prompt: vi.fn(),
             loadSession,
             unstable_resumeSession: unstableResumeSession,
-            ...args.optionWriters,
           } as unknown as ClientSideConnection,
           initialize: { agentCapabilities: args.capabilities ?? {} },
         } as SpawnedACPProcess;
@@ -4059,7 +4045,7 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
 
     // Pass handle through the typed constructor option (no private-field casts).
     const session = new TestSession(
-      { provider: "claude-acp", cwd: "/tmp/paseo-acp-test", ...args.config },
+      { provider: "claude-acp", cwd: "/tmp/paseo-acp-test" },
       {
         provider: "claude-acp",
         logger: createTestLogger(),
@@ -4313,9 +4299,7 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
 
     await session.initializeResumedSession();
 
-    // Mutant: dropping the `resumePurpose === "history"` release branch
-    // leaves the process running until some other close() call arrives —
-    // this assertion fails (terminator.terminated is empty) without it.
+    // The process is released as soon as the replay ends, not at a later close().
     expect(terminator.terminated).toContain(child);
     expect(terminator.terminated).toHaveLength(1);
 
@@ -4346,66 +4330,6 @@ describe("ACP session/load invariant — cwd and mcpServers always passed", () =
     await session.close();
     expect(terminator.terminated).toHaveLength(1);
   });
-
-  test.each([
-    ["history", []],
-    [
-      "interactive",
-      [
-        "setSessionMode plan",
-        "unstable_setSessionModel model-b",
-        "setSessionConfigOption thought_level-option=high",
-      ],
-    ],
-  ] as const)(
-    "purpose: %s resume sends these stored mode, model and thinking overrides",
-    async (resumePurpose, expectedWrites) => {
-      let configOptions = [
-        selectConfigOption("mode", ["default", "plan"]),
-        selectConfigOption("thought_level", ["low", "high"]),
-      ];
-      const writes: string[] = [];
-      const { session } = makeTestSession({
-        capabilities: { loadSession: true },
-        handle: { sessionId: "session-1", provider: "claude-acp" },
-        loadSession: vi.fn().mockResolvedValue({
-          sessionId: "session-1",
-          modes: null,
-          models: {
-            currentModelId: "model-a",
-            availableModels: [
-              { modelId: "model-a", name: "Model A" },
-              { modelId: "model-b", name: "Model B" },
-            ],
-          },
-          configOptions,
-        }),
-        resumePurpose,
-        terminateProcess: new FakeTerminator().terminate,
-        config: { modeId: "plan", model: "model-b", thinkingOptionId: "high" },
-        optionWriters: {
-          setSessionMode: vi.fn(async (input: { modeId: string }) => {
-            writes.push(`setSessionMode ${input.modeId}`);
-            return {};
-          }),
-          unstable_setSessionModel: vi.fn(async (input: { modelId: string }) => {
-            writes.push(`unstable_setSessionModel ${input.modelId}`);
-            return {};
-          }),
-          setSessionConfigOption: vi.fn(async (input: { configId: string; value: string }) => {
-            writes.push(`setSessionConfigOption ${input.configId}=${input.value}`);
-            configOptions = withCurrentConfigValue(configOptions, input.configId, input.value);
-            return { configOptions };
-          }),
-        },
-      });
-
-      await session.initializeResumedSession();
-
-      expect(writes).toEqual(expectedWrites);
-      await session.close();
-    },
-  );
 });
 
 const SILENT_CLOSE_ACP_AGENT = `

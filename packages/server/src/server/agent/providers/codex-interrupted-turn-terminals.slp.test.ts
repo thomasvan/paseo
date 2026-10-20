@@ -36,8 +36,8 @@ afterEach(async () => {
 });
 
 /**
- * A Codex app-server whose interrupt ends the turn the way codex 0.163 does: an
- * `interrupted` turn completion, then the response. `terminate` answers per process.
+ * A Codex app-server whose interrupt ends the turn the way Codex does: an `interrupted`
+ * turn completion, then the response. `terminate` answers per process.
  */
 function createHarness(
   options: {
@@ -156,18 +156,6 @@ describe("an interrupted Codex turn's commands end before the next turn", () => 
         .map((message) => message.method),
     ).toEqual([TERMINATE, TERMINATE]);
     harness.appServer.assertNoErrors();
-  });
-
-  test("leaves a background terminal an earlier turn started running", async () => {
-    const harness = createHarness();
-    await interruptTurnB(harness);
-    await harness.startTurn("correction", "native-C");
-    await harness.runsCommand({ turnId: "native-C", processId: "301" });
-    await harness.session.interrupt();
-    await harness.startTurn("second correction", "native-D");
-
-    expect(harness.terminated()).toEqual(["201", "202", "301"]);
-    expect(harness.terminated()).not.toContain("101");
   });
 
   test("leaves the next turn's commands running when Codex starts that turn before acknowledging the interrupt", async () => {

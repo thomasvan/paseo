@@ -517,29 +517,24 @@ describe("Suite A: Core Fixes", () => {
 
   // The canonical shape carries no `relationship`, so `detached` is the only way
   // to ask for a root agent without the COMPAT nested placement.
-  test("create_agent detached:true omits the parent agent label", async () => {
-    let agentId: string | null = null;
-    try {
-      agentId = await createCanonicalChildAgent({ detached: true });
-      const snapshot = daemonHandle.daemon.agentManager.getAgent(agentId);
-      expect(snapshot?.labels?.[PARENT_AGENT_ID_LABEL]).toBeUndefined();
-    } finally {
-      await archiveAgentIfPresent(agentId);
-    }
-  });
-
-  test("create_agent without detached keeps the parent agent label", async () => {
-    let agentId: string | null = null;
-    try {
-      agentId = await createCanonicalChildAgent();
-      const snapshot = daemonHandle.daemon.agentManager.getAgent(agentId);
-      expect(snapshot?.labels).toMatchObject({
-        [PARENT_AGENT_ID_LABEL]: parentAgentId,
-      });
-    } finally {
-      await archiveAgentIfPresent(agentId);
-    }
-  });
+  test.each([
+    { args: { detached: true }, parentLabel: false },
+    { args: {}, parentLabel: true },
+  ])(
+    "create_agent with $args keeps the parent agent label: $parentLabel",
+    async ({ args, parentLabel }) => {
+      let agentId: string | null = null;
+      try {
+        agentId = await createCanonicalChildAgent(args);
+        const snapshot = daemonHandle.daemon.agentManager.getAgent(agentId);
+        expect(snapshot?.labels?.[PARENT_AGENT_ID_LABEL]).toBe(
+          parentLabel ? parentAgentId : undefined,
+        );
+      } finally {
+        await archiveAgentIfPresent(agentId);
+      }
+    },
+  );
 
   test("agentManager.createAgent injects paseo MCP using the daemon listen target", async () => {
     let agentId: string | null = null;

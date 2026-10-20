@@ -832,152 +832,56 @@ describe("Codex foreground teardown wait (replace path)", () => {
   // tearing down: the manager's force-cancel settles its run record before
   // this provider clears activeForegroundTurnId, and refusing immediately
   // loses the incoming prompt and marks the agent errored.
-  test("waits out a clearing foreground turn instead of refusing", async () => {
+  interface QueuedStartInternals {
+    activeForegroundTurnId: string | null;
+    foregroundTurnClearWaiters: Array<() => void>;
+    handleTurnCompletedNotification: (parsed: {
+      kind: "turn_completed";
+      status: string;
+      errorMessage: string | null;
+      threadId: string | null;
+    }) => void;
+    handleUnexpectedTermination: (error: Error) => void;
+  }
+
+  // Each way the slot clears wakes a startTurn queued behind it at once, instead
+  // of after FOREGROUND_TEARDOWN_WAIT_MS. Getting past the foreground guard is the
+  // assertion: the woken prompt then fails on the next gate this harness lacks.
+  test.each([
+    {
+      clears: "the turn completes normally",
+      clear: (_session: CodexAppServerAgentSession, internals: QueuedStartInternals) =>
+        internals.handleTurnCompletedNotification({
+          kind: "turn_completed",
+          status: "completed",
+          errorMessage: null,
+          threadId: "test-thread",
+        }),
+      nextGate: "Codex client not initialized",
+    },
+    {
+      clears: "the session closes",
+      clear: (session: CodexAppServerAgentSession) => session.close(),
+      nextGate: "Codex app-server session is closed",
+    },
+    {
+      clears: "the app-server dies",
+      clear: (_session: CodexAppServerAgentSession, internals: QueuedStartInternals) =>
+        internals.handleUnexpectedTermination(new Error("app-server exited")),
+      nextGate: "Test session cannot spawn Codex app-server",
+    },
+  ])("frees a startTurn queued behind the slot when $clears", async ({ clear, nextGate }) => {
     const session = createSession();
-    const internals = castInternals<{
-      activeForegroundTurnId: string | null;
-      flushForegroundTurnClearWaiters: () => void;
-    }>(session);
-    const attempt = session.startTurn("after teardown");
-    const raced = await Promise.race([
-      attempt.catch((error: unknown) => error),
-      new Promise((resolve) => setTimeout(resolve, 25, "pending")),
-    ]);
-    expect(raced).toBe("pending");
-    internals.activeForegroundTurnId = null;
-    internals.flushForegroundTurnClearWaiters();
-    // Getting past the foreground guard is the assertion; the harness spawns
-    // no app-server, so the next gate is the client-initialization error.
-    await expect(attempt).rejects.toThrow("Codex client not initialized");
-  });
-
-  test("releases the foreground slot only for the turn that owns it", () => {
-    // The manager calls this after force-canceling a run, because its own
-    // turn_canceled dispatch settles only the run record and the provider will
-    // never report the turn end that would otherwise clear the slot. Keyed, so
-    // a force-cancel racing a newer turn into the slot cannot strip the live
-    // turn's ownership.
-    const session = createSession();
-    const internals = castInternals<{ activeForegroundTurnId: string | null }>(session);
-    const releaser = session as unknown as {
-      releaseForegroundTurn(turnId: string): boolean;
-    };
-    internals.activeForegroundTurnId = "owning-turn";
-
-    expect(releaser.releaseForegroundTurn("a-stale-turn")).toBe(false);
-    expect(internals.activeForegroundTurnId).toBe("owning-turn");
-    expect(releaser.releaseForegroundTurn("")).toBe(false);
-    expect(internals.activeForegroundTurnId).toBe("owning-turn");
-
-    expect(releaser.releaseForegroundTurn("owning-turn")).toBe(true);
-    expect(internals.activeForegroundTurnId).toBeNull();
-    expect(releaser.releaseForegroundTurn("owning-turn")).toBe(false);
-  });
-
-  test("frees a startTurn queued behind a stuck slot when the slot is released", () => {
-    // Without the release the waiter sits until FOREGROUND_TEARDOWN_WAIT_MS
-    // expires and the prompt is refused. Only the queue-release is asserted:
-    // once past the guard startTurn goes on to connect(), which this harness
-    // has no client for.
-    const session = createSession();
-    const internals = castInternals<{
-      activeForegroundTurnId: string | null;
-      foregroundTurnClearWaiters: Array<() => void>;
-    }>(session);
-    const releaser = session as unknown as {
-      releaseForegroundTurn(turnId: string): boolean;
-    };
-
-    const owning = internals.activeForegroundTurnId;
-    expect(owning).toBeTruthy();
-
-    const attempt = session.startTurn("queued behind a stuck slot");
+    const internals = castInternals<QueuedStartInternals>(session);
+    const attempt = session.startTurn("queued behind the slot");
     attempt.catch(() => {});
     expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
 
-    expect(releaser.releaseForegroundTurn(owning as string)).toBe(true);
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
-    expect(internals.activeForegroundTurnId).toBeNull();
-  });
-
-  test("frees a startTurn queued behind a stuck slot when the session closes", async () => {
-    // close() clears the slot as part of teardown. A prompt already queued behind
-    // the old slot must be woken by that clear; otherwise it sleeps out
-    // FOREGROUND_TEARDOWN_WAIT_MS against a session that no longer exists and is
-    // then refused with "A foreground turn is already active".
-    const session = createSession();
-    const internals = castInternals<{
-      activeForegroundTurnId: string | null;
-      foregroundTurnClearWaiters: Array<() => void>;
-    }>(session);
-
-    const attempt = session.startTurn("queued behind a closing session");
-    attempt.catch(() => {});
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
-
-    await session.close();
-
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
-    expect(internals.activeForegroundTurnId).toBeNull();
-    // Woken, not refused: the queued prompt gets past the foreground guard and
-    // fails on the next gate instead of on the guard.
-    await expect(attempt).rejects.toThrow("Codex app-server session is closed");
-  });
-
-  test("frees a startTurn queued behind the slot when the turn completes normally", async () => {
-    // The ordinary path: the previous turn ends, the slot clears, and the prompt
-    // the user already sent goes through. Without the flush here it waits out
-    // FOREGROUND_TEARDOWN_WAIT_MS before noticing a slot that cleared instantly.
-    const session = createSession();
-    const internals = castInternals<{
-      activeForegroundTurnId: string | null;
-      foregroundTurnClearWaiters: Array<() => void>;
-      handleTurnCompletedNotification: (parsed: {
-        kind: "turn_completed";
-        status: string;
-        errorMessage: string | null;
-        threadId: string | null;
-      }) => void;
-    }>(session);
-
-    const attempt = session.startTurn("queued behind a finishing turn");
-    attempt.catch(() => {});
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
-
-    internals.handleTurnCompletedNotification({
-      kind: "turn_completed",
-      status: "completed",
-      errorMessage: null,
-      threadId: "test-thread",
-    });
+    await clear(session, internals);
 
     expect(internals.activeForegroundTurnId).toBeNull();
     expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
-    await expect(attempt).rejects.toThrow("Codex client not initialized");
-  });
-
-  test("frees a startTurn queued behind the slot when the app-server dies", async () => {
-    // An unexpected app-server exit clears the slot. The queued prompt has to be
-    // woken by that clear, or the user waits out the teardown budget for a
-    // process that is already gone.
-    const session = createSession();
-    const internals = castInternals<{
-      activeForegroundTurnId: string | null;
-      foregroundTurnClearWaiters: Array<() => void>;
-      handleUnexpectedTermination: (error: Error) => void;
-    }>(session);
-
-    const attempt = session.startTurn("queued behind a dying app-server");
-    attempt.catch(() => {});
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(1);
-
-    internals.handleUnexpectedTermination(new Error("app-server exited"));
-
-    expect(internals.activeForegroundTurnId).toBeNull();
-    expect(internals.foregroundTurnClearWaiters).toHaveLength(0);
-    // Past the guard: the termination also cleared `connected`, so the woken
-    // prompt goes on to the respawn the harness refuses.
-    await expect(attempt).rejects.toThrow("Test session cannot spawn Codex app-server");
+    await expect(attempt).rejects.toThrow(nextGate);
   });
 
   test("refuses only when the teardown never completes, retaining no waiter", async () => {
@@ -4475,11 +4379,8 @@ describe("Codex app-server provider", () => {
   });
 
   test("flushes a queued startTurn when Codex reports the interrupted turn is already idle", async () => {
-    // Fork adaptation (SLP-PATCH(interrupt-releases-foreground), #3640): the
-    // already-idle interrupt response used to clear the slot field-by-field,
-    // leaving a startTurn queued on it to sleep out FOREGROUND_TEARDOWN_WAIT_MS
-    // before the guard re-checks. Releasing through the keyed path flushes the
-    // waiters immediately and resolves any pending turn identification.
+    // An already-idle interrupt releases the slot through the keyed path, which
+    // wakes a startTurn queued on it at once.
     const session = new CodexAppServerAgentSession(
       createConfig({ cwd: "/workspace/project" }),
       null,

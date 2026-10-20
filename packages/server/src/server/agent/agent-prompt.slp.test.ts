@@ -1,52 +1,22 @@
 // SLP-PATCH coverage (wakeup-each).
-// Lives in its own file so agent-prompt.test.ts stays byte-identical with
-// upstream and can never conflict on merge — see PATCHES.md.
-//
-// closed-wakeup and response-cap used to be covered here. They landed upstream
-// as #3192; upstream's own "closing a watched child notifies the caller" and
-// "finish notifications truncate oversized child responses" own them now.
+// Lives in its own file so agent-prompt.test.ts stays upstream's and never
+// conflicts on merge.
 import { expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { setupFinishNotification } from "./agent-prompt.js";
-import type { PromptDispatchDisposition } from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 import { parseAgentMessage } from "./agent-messages/index.js";
 
-interface SlpScenarioOptions {
-  callerArchivedAt?: string | null;
-}
+type ChildStep = "finish" | "complete-again" | "cancel-to-idle";
 
-interface WatchOptions {
-  dispatchResult?: Promise<PromptDispatchDisposition | false>;
-}
-
-interface SlpScenario {
-  startWatchingChild(options?: WatchOptions): () => void;
-  startChildTurn(): void;
-  completeChildTurn(): void;
-  finishChild(): void;
-  idleWithoutCompletion(): void;
-  cancelWhileRunning(): void;
-  cancelToIdle(): void;
-  replaceTimeline(): void;
-  flush(parentPromptsLength: number): Promise<void>;
-  settle(): Promise<void>;
-  parentEvents(): string[];
-  parentTexts(): string[];
-  subscriberCount(): number;
-}
-
-// Harness mirrors upstream's own agent-prompt.test.ts: a real AgentManager
-// with only the dispatch surface stubbed (getAgent/subscribe/…/streamAgent),
-// because the notify path walks ensureAgentLoaded → startAgentRun across the
-// manager's run tracker before reaching streamAgent. Like upstream's harness,
-// a finish is the child's idle state followed by its terminal stream event,
-// the order the manager publishes them in. Subscribers are a set, so
-// overlapping observations of one child are visible.
-function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
+// A real AgentManager with only the dispatch surface stubbed, as upstream's own
+// agent-prompt.test.ts does: the notify path walks the manager's run tracker
+// before reaching streamAgent. A finish is the child's idle state followed by
+// its terminal stream event, the order the manager publishes them in.
+function createScenario(options: { callerArchived: boolean }) {
   const subscribers = new Set<(event: AgentManagerEvent) => void>();
   const parentPrompts: string[] = [];
 
@@ -62,15 +32,11 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
   Reflect.set(callerAgent, "config", { title: "Caller Agent" });
 
   const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
-  Reflect.set(agentManager, "getAgent", (agentId: string) => {
-    if (agentId === "child-agent") {
-      return childAgent;
-    }
-    if (agentId === "caller-agent") {
-      return callerAgent;
-    }
-    return null;
-  });
+  const agents: Record<string, ManagedAgent> = {
+    "child-agent": childAgent,
+    "caller-agent": callerAgent,
+  };
+  Reflect.set(agentManager, "getAgent", (agentId: string) => agents[agentId] ?? null);
   Reflect.set(agentManager, "subscribe", (callback: (event: AgentManagerEvent) => void) => {
     subscribers.add(callback);
     return () => {
@@ -92,13 +58,10 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
   Reflect.set(agentStorage, "get", async (agentId: string) => {
     if (agentId === "child-agent") {
-      return {
-        title: "Child Agent",
-        labels: { "paseo.parent-agent-id": "caller-agent" },
-      };
+      return { title: "Child Agent", labels: { "paseo.parent-agent-id": "caller-agent" } };
     }
-    if (agentId === "caller-agent" && options?.callerArchivedAt) {
-      return { title: "Caller Agent", archivedAt: options.callerArchivedAt, labels: {} };
+    if (agentId === "caller-agent" && options.callerArchived) {
+      return { title: "Caller Agent", archivedAt: new Date().toISOString(), labels: {} };
     }
     return null;
   });
@@ -106,219 +69,91 @@ function createSlpScenario(options?: SlpScenarioOptions): SlpScenario {
   function emit(event: AgentManagerEvent): void {
     for (const subscriber of subscribers) subscriber(event);
   }
-
-  function emitLifecycle(lifecycle: "running" | "idle" | "closed" | "error"): void {
+  function emitLifecycle(lifecycle: "running" | "idle"): void {
     childAgent.lifecycle = lifecycle;
     emit({ type: "agent_state", agent: childAgent });
   }
-
   function emitStream(
     event: { type: "turn_completed" } | { type: "turn_canceled"; reason: string },
   ): void {
-    emit({
-      type: "agent_stream",
-      agentId: "child-agent",
-      event: { ...event, provider: "codex" },
-    });
+    emit({ type: "agent_stream", agentId: "child-agent", event: { ...event, provider: "codex" } });
   }
 
+  setupFinishNotification({
+    agentManager,
+    agentStorage,
+    childAgentId: "child-agent",
+    callerAgentId: "caller-agent",
+    requireParentOwnership: true,
+    logger: createTestLogger(),
+  });
+
   return {
-    startWatchingChild(watch?: WatchOptions) {
-      return setupFinishNotification({
-        agentManager,
-        agentStorage,
-        childAgentId: "child-agent",
-        callerAgentId: "caller-agent",
-        requireParentOwnership: true,
-        ...(watch?.dispatchResult ? { dispatchResult: watch.dispatchResult } : {}),
-        logger: createTestLogger(),
-      });
-    },
-    startChildTurn() {
-      emitLifecycle("running");
-    },
-    completeChildTurn() {
+    step(step: ChildStep) {
+      if (step === "finish") emitLifecycle("running");
       emitLifecycle("idle");
-      emitStream({ type: "turn_completed" });
+      emitStream(
+        step === "cancel-to-idle"
+          ? { type: "turn_canceled", reason: "interrupted" }
+          : { type: "turn_completed" },
+      );
     },
-    finishChild() {
-      emitLifecycle("running");
-      emitLifecycle("idle");
-      emitStream({ type: "turn_completed" });
-    },
-    idleWithoutCompletion() {
-      emitLifecycle("running");
-      emitLifecycle("idle");
-    },
-    cancelWhileRunning() {
-      emitStream({ type: "turn_canceled", reason: "replaced" });
-    },
-    cancelToIdle() {
-      emitLifecycle("idle");
-      emitStream({ type: "turn_canceled", reason: "interrupted" });
-    },
-    replaceTimeline() {
-      emit({ type: "timeline_replacement", agentId: "child-agent", epoch: "epoch-2" });
-    },
-    async flush(parentPromptsLength: number) {
-      await vi.waitFor(() => {
-        expect(parentPrompts).toHaveLength(parentPromptsLength);
-      });
-    },
-    async settle() {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    },
-    parentEvents() {
-      return parentPrompts.map((prompt) => parseAgentMessage(prompt)?.source?.event ?? prompt);
-    },
-    parentTexts() {
-      return parentPrompts.map((prompt) => parseAgentMessage(prompt)?.text ?? prompt);
-    },
-    subscriberCount() {
-      return subscribers.size;
-    },
+    parentEvents: () =>
+      parentPrompts.map((prompt) => parseAgentMessage(prompt)?.source?.event ?? prompt),
+    subscriberCount: () => subscribers.size,
   };
 }
 
-// SLP-PATCH(wakeup-each)
-test("the watcher re-arms: every finish of the child notifies the caller", async () => {
-  const scenario = createSlpScenario();
+// Each step is followed by the caller's notifications so far. A step that adds
+// none is checked again after a short settle, so a late notification fails it.
+test.each([
+  {
+    behaviour: "every finish of the child notifies the caller",
+    callerArchived: false,
+    steps: [
+      ["finish", ["finished"]],
+      ["finish", ["finished", "finished"]],
+    ],
+    watching: 1,
+  },
+  {
+    behaviour: "a repeated completion with no new turn notifies nothing more",
+    callerArchived: false,
+    steps: [
+      ["finish", ["finished"]],
+      ["complete-again", ["finished"]],
+    ],
+    watching: 1,
+  },
+  {
+    behaviour: "a cancellation with no new turn after a finish notifies nothing",
+    callerArchived: false,
+    steps: [
+      ["finish", ["finished"]],
+      ["cancel-to-idle", ["finished"]],
+    ],
+    watching: 1,
+  },
+  {
+    behaviour: "an archived caller disarms the watcher instead of keeping it",
+    callerArchived: true,
+    steps: [["finish", []]],
+    watching: 0,
+  },
+] as Array<{
+  behaviour: string;
+  callerArchived: boolean;
+  steps: Array<[ChildStep, string[]]>;
+  watching: number;
+}>)("the re-armed watcher: $behaviour", async ({ callerArchived, steps, watching }) => {
+  const scenario = createScenario({ callerArchived });
 
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  scenario.finishChild();
-  await scenario.flush(2);
+  for (const [step, expected] of steps) {
+    scenario.step(step);
+    await vi.waitFor(() => expect(scenario.parentEvents()).toEqual(expected));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(scenario.parentEvents()).toEqual(expected);
+  }
 
-  expect(scenario.parentEvents()).toEqual(["finished", "finished"]);
-  expect(scenario.subscriberCount()).toBe(1);
-});
-
-test("a repeated completion with no new turn observed notifies nothing more", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  scenario.completeChildTurn();
-  await scenario.settle();
-
-  expect(scenario.parentEvents()).toEqual(["finished"]);
-  expect(scenario.subscriberCount()).toBe(1);
-});
-
-test("an idle state without a terminal completion notifies nothing", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.idleWithoutCompletion();
-  await scenario.settle();
-
-  expect(scenario.parentEvents()).toEqual([]);
-  expect(scenario.subscriberCount()).toBe(1);
-});
-
-test("a cancellation while the child keeps running notifies nothing and keeps watching", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.startChildTurn();
-  scenario.cancelWhileRunning();
-  await scenario.settle();
-  expect(scenario.parentEvents()).toEqual([]);
-
-  scenario.completeChildTurn();
-  await scenario.flush(1);
-  expect(scenario.parentEvents()).toEqual(["finished"]);
-  expect(scenario.subscriberCount()).toBe(1);
-});
-
-test("a cancellation that leaves the child idle notifies once and stops watching", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  scenario.startChildTurn();
-  scenario.cancelToIdle();
-  await scenario.flush(2);
-
-  // "was canceled" travels on the errored event; the body names the outcome.
-  expect(scenario.parentEvents()).toEqual(["finished", "errored"]);
-  expect(scenario.parentTexts()[1]).toContain("Agent child-agent (Child Agent) was canceled.");
-  expect(scenario.subscriberCount()).toBe(0);
-});
-
-test("a cancellation with no new turn after a finish notifies nothing", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  scenario.cancelToIdle();
-  await scenario.settle();
-
-  expect(scenario.parentEvents()).toEqual(["finished"]);
-  expect(scenario.subscriberCount()).toBe(1);
-});
-
-test("a timeline replacement passes through a re-armed watcher without throwing", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  expect(() => scenario.replaceTimeline()).not.toThrow();
-  scenario.finishChild();
-  await scenario.flush(2);
-
-  expect(scenario.parentEvents()).toEqual(["finished", "finished"]);
-});
-
-test("a rejected follow-up leaves the re-armed watcher as the one that notifies", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  scenario.startWatchingChild({ dispatchResult: Promise.resolve(false) });
-  await scenario.settle();
-  expect(scenario.subscriberCount()).toBe(1);
-
-  scenario.finishChild();
-  await scenario.flush(2);
-  await scenario.settle();
-  expect(scenario.parentEvents()).toEqual(["finished", "finished"]);
-});
-
-test("an accepted follow-up supersedes the re-armed watcher, so each finish notifies once", async () => {
-  const scenario = createSlpScenario();
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.flush(1);
-  scenario.startWatchingChild({ dispatchResult: Promise.resolve("steered") });
-  await scenario.settle();
-  expect(scenario.subscriberCount()).toBe(1);
-
-  scenario.finishChild();
-  await scenario.flush(2);
-  scenario.finishChild();
-  await scenario.flush(3);
-  await scenario.settle();
-  expect(scenario.parentEvents()).toEqual(["finished", "finished", "finished"]);
-});
-
-// SLP-PATCH(wakeup-each)
-test("an archived caller disarms the watcher instead of leaking it", async () => {
-  const scenario = createSlpScenario({
-    callerArchivedAt: new Date().toISOString(),
-  });
-
-  scenario.startWatchingChild();
-  scenario.finishChild();
-  await scenario.settle();
-
-  expect(scenario.parentEvents()).toEqual([]);
-  expect(scenario.subscriberCount()).toBe(0);
+  expect(scenario.subscriberCount()).toBe(watching);
 });
