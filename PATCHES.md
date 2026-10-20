@@ -22,10 +22,11 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
 `provider-registry.ts`).
 
-Six patches keep their tests in fork-only `.slp.test.ts` files upstream does
+Seven patches keep their tests in fork-only `.slp.test.ts` files upstream does
 not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`,
 `native-tools-gate.slp.test.ts`, `agent-message-raw-body.slp.test.ts`,
-`providers/codex-interrupted-turn-terminals.slp.test.ts` and, in the CLI package,
+`providers/codex-interrupted-turn-terminals.slp.test.ts`,
+`providers/claude/agent.interrupted-turn-tasks.slp.test.ts` and, in the CLI package,
 `commands/agent/send.slp.test.ts`.
 (`native-tools-optin.slp.test.ts` was the third until the 2026-09-07 sync retired its
 patch; `native-tools-gate.slp.test.ts` replaced it there.)
@@ -53,7 +54,7 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Patches that landed upstream have left, and their sections with them. **Fifteen patches
+Patches that landed upstream have left, and their sections with them. **Sixteen patches
 remain here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
@@ -67,8 +68,8 @@ sync dropped `acp-provider-mcp-servers` for fifteen, the v0.11.0 sync kept
 all fifteen, and the v0.12.0 sync retired `question-answer-required`,
 `schedule-claim-slots` and `schedule-claim-in-flight` for twelve, and
 `agent-message-raw-body` made it thirteen on 2026-10-20 and
-`agent-send-interrupt` fourteen and `interrupted-turn-terminals` fifteen the same
-day, which is
+`agent-send-interrupt` fourteen, `interrupted-turn-terminals` fifteen and
+`interrupted-turn-tasks` sixteen the same day, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-10-19**, tag `v0.12.0` at
@@ -1118,6 +1119,57 @@ different condition.
   room's probe P2a on the new version and drop the patch. If `list` gains a turn id, match on
   it instead of the record.
 
+### interrupted-turn-tasks
+
+Added 2026-10-20 by the room's plan `plans/claude-interrupted-turn-tasks.md` (AI-airoom
+`220e74441`). Room-local, no upstream PR. It is the Claude counterpart of
+`interrupted-turn-terminals` and a patch of its own: a different provider, a different handle,
+and its own retirement condition.
+
+- **What:** after the provider interrupts a Claude turn, it stops each shell command that turn
+  started and that has not ended, by task id, with `Query.stopTask`. It stops no other turn's
+  command: neither a background command an earlier turn left running, nor the next turn's.
+- **Why it matters here:** upstream passes `perTaskStopAffordance: true` so an interrupt spares
+  background subagents, and the interrupted turn's `run_in_background` commands are spared
+  with them. The room's probe
+  (`~/.cache/paseo-fix-interrupt/claude-probe/SUMMARY.md`, Claude Code 2.1.246, SDK 0.3.246)
+  read from `/proc` that the interrupted turn's foreground command ended within 0.5 s and its
+  background command did not. It also read that `stopTask` ends exactly the task it names, and
+  answers `ok` on one already stopped.
+- **Attribution:** `task_started` carries `task_id` and `task_type: local_bash` for every Bash
+  call, foreground and background. The provider keeps one set per Claude turn on the stream:
+  the turn's `system/init` opens it and its `result` lets it go. A `local_bash` task is added
+  while a set is open, and its `task_notification` removes it. The interrupt captures the open
+  set before it is sent, so a task the turn announces late still joins it, and the next turn's
+  init opens a set of its own. The foreground command, which the interrupt already ends, is
+  stopped too; this covers a foreground command moved to the background mid-turn.
+- **What it leaves alone:** subagents and workflows, which upstream keeps alive on purpose, and
+  a command a subagent ran, when its sidechain frames name it. A withdrawn message that Claude
+  never started sends no interrupt and stops nothing.
+- **Bounds:** the stops are sent after `query.interrupt()` settles or times out (3 s), and
+  nothing awaits them, so they never delay the interrupt or the next turn. Each stop times out
+  after 3 s. A failed or unanswered stop is logged
+  (`provider.claude.interrupt.task_stop_failed`); a stop that answers is logged
+  (`provider.claude.interrupt.task_stopped`).
+- **Entry points:** every path to `AgentManager.cancelAgentRun`, which calls the session's
+  `interrupt()`: the app's stop and `paseo stop` (`cancel_agent_request`), MCP `cancel_agent`,
+  Hub interrupt (`DaemonExecutions`), voice abort, archive (`archiveAgentCommand`, from the app,
+  MCP `archive_agent` and `bootstrap`), refresh, and through `cancelAgentRunBefore` the replace
+  of a running turn (every interrupting send, and a steer the provider cannot take), reload and
+  rewind. A session `close()` reaches the same stop through its foreground turn's cancel.
+- **Known limit:** a task the interrupted turn announces after its stops were sent is not
+  stopped. Archive and reload close the session right after the interrupt, so their stops race
+  the query's close; what happens to each command there is the room's scratch proof C2b.
+- **Sites:** seven markers in `providers/claude/agent.ts`.
+- **Coverage:** `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` drives a real
+  `ClaudeAgentSession` against a scripted SDK query. It binds which tasks are stopped, an
+  earlier turn's and the next turn's surviving, and a failed or unanswered stop leaving the
+  interrupt and the next turn alone.
+- **Retirement and revisit:** if Claude Code ends an interrupted turn's background commands
+  while still sparing background subagents, re-run the room's probe on the new version and drop
+  the patch. If upstream stops passing `perTaskStopAffordance`, the interrupt kills every
+  background task again, an earlier turn's included, and this patch has nothing left to do.
+
 ## Sync procedure
 
 First, derive the patch-owned file manifest, then check whether upstream touched
@@ -1274,8 +1326,8 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured after interrupted-turn-terminals (2026-10-20): expect 13
-# names across 46 code/test sites in 14 files, and use the per-name manifest
+# Marker gate. Measured after interrupted-turn-tasks (2026-10-20): expect 14
+# names across 53 code/test sites in 15 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
 # changes whenever the prose does; include it and the gate can never pass on a
@@ -1283,15 +1335,15 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # path, so sort -u would dedupe path:name pairs and return one line per file,
 # not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 13
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 14
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
 #    9 interrupted-turn-terminals             3 interrupt-releases-foreground
-#    7 agent-send-interrupt                   3 detached-wakeup
-#    6 native-tools-injection-independent     2 force-cancel-releases-foreground
-#    4 wakeup-each                            2 detached-arg
-#    3 replace-awaits-teardown                2 agent-message-raw-body
-#    3 mcp-protocol-version-clip              1 dispose-releases-foreground
-#                                             1 dead-run-settles
+#    7 interrupted-turn-tasks                 3 detached-wakeup
+#    7 agent-send-interrupt                   2 force-cancel-releases-foreground
+#    6 native-tools-injection-independent     2 detached-arg
+#    4 wakeup-each                            2 agent-message-raw-body
+#    3 replace-awaits-teardown                1 dispose-releases-foreground
+#    3 mcp-protocol-version-clip              1 dead-run-settles
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list and history-purpose-provider-contract are absent from this
@@ -1383,6 +1435,7 @@ vt packages/server/src/server/agent/providers/generic-acp-agent.archived-history
 vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts --bail=1   # agent-message-raw-body
 vt packages/cli/src/commands/agent/send.slp.test.ts --bail=1   # agent-send-interrupt
 vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.slp.test.ts --bail=1   # interrupted-turn-terminals
+vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.slp.test.ts --bail=1   # interrupted-turn-tasks
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/daemon-e2e/claude-provider-config-dir-history.e2e.test.ts
 
@@ -1405,7 +1458,7 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
 `claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28; CLI `send.slp` (added 2026-10-20) 7; `codex-interrupted-turn-terminals.slp` (added
-2026-10-20) 5.
+2026-10-20) 5; `claude/agent.interrupted-turn-tasks.slp` (added 2026-10-20) 4.
 `npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus

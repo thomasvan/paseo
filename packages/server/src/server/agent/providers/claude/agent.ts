@@ -428,6 +428,10 @@ const CLAUDE_ROOT_ONLY_COMMANDS = new Set([
 ]);
 const INTERRUPT_TOOL_USE_PLACEHOLDER = "[Request interrupted by user for tool use]";
 const INTERRUPT_PLACEHOLDER_PATTERN = /^\[Request interrupted by user(?:[^\]]*)\]$/;
+// SLP-PATCH(interrupted-turn-tasks): the task type Claude announces for a Bash command, and the
+// bound on each stop of an interrupted turn's command, the same as the interrupt's own.
+const CLAUDE_SHELL_TASK_TYPE = "local_bash";
+const INTERRUPTED_TURN_TASK_STOP_TIMEOUT_MS = 3_000;
 const NO_RESPONSE_REQUESTED_PLACEHOLDER = "No response requested.";
 const STEER_SUPERSEDED_PERMISSION_MESSAGE =
   "The user answered with a message instead of approving. Their message follows.";
@@ -2287,6 +2291,13 @@ class ClaudeAgentSession implements AgentSession {
    * cleared by the turn's result or an idle session state. See observeMainTurnBracket.
    */
   private mainTurnInFlight = false;
+  /**
+   * SLP-PATCH(interrupted-turn-tasks): the shell tasks of the Claude turn now open on the stream
+   * that have not ended, by task id. A fresh set opens at each turn's init and is let go at its
+   * result, so an earlier turn's background command and the next turn's commands are never in
+   * the set an interrupt captures. Null between turns.
+   */
+  private openTurnShellTaskIds: Set<string> | null = null;
   private foregroundHasVisibleActivity = false;
   private activeTurnHasAssistantText = false;
   private readonly contextUsage: ClaudeContextUsageState;
@@ -4148,6 +4159,9 @@ class ClaudeAgentSession implements AgentSession {
       return;
     }
     this.observeMainTurnBracket(message);
+    // SLP-PATCH(interrupted-turn-tasks): before the stale-result suppression, so an interrupted
+    // turn's result still closes its task set.
+    this.recordOpenTurnShellTask(message);
     if (this.shouldSuppressStaleResult(message)) {
       return;
     }
@@ -4325,6 +4339,10 @@ class ClaudeAgentSession implements AgentSession {
       if (await this.withdrawUnstartedMessages(queryToInterrupt)) return;
       this.pendingInterruptAbort = true;
     }
+    // SLP-PATCH(interrupted-turn-tasks): the turn this interrupt reaches is the one open on the
+    // stream now. Captured by reference, so a task it announces late still joins the set, and the
+    // next turn's init opens a set of its own.
+    const interruptedTurnShellTaskIds = this.openTurnShellTaskIds;
     try {
       await this.awaitWithTimeout(
         queryToInterrupt.interrupt(),
@@ -4333,6 +4351,73 @@ class ClaudeAgentSession implements AgentSession {
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to interrupt active turn");
     }
+    // SLP-PATCH(interrupted-turn-tasks): not awaited, so a stop never holds up the interrupt or
+    // the next turn.
+    if (interruptedTurnShellTaskIds) {
+      void this.stopInterruptedTurnShellTasks(queryToInterrupt, interruptedTurnShellTaskIds);
+    }
+  }
+
+  /**
+   * SLP-PATCH(interrupted-turn-tasks): with `perTaskStopAffordance`, an interrupt ends the turn's
+   * foreground command but leaves its `run_in_background` commands running. `task_started` ties
+   * each shell command to a task id, and only while its turn is open does this record it.
+   * A command a subagent ran belongs to that subagent, which may outlive the turn by design.
+   */
+  private recordOpenTurnShellTask(message: SDKMessage): void {
+    if (readClaudeParentToolUseId(message)) return;
+    if (isClaudeTurnInit(message)) {
+      this.openTurnShellTaskIds = new Set();
+      return;
+    }
+    if (message.type === "result") {
+      this.openTurnShellTaskIds = null;
+      return;
+    }
+    if (message.type !== "system") return;
+    const record = toObjectRecord(message);
+    const taskId = typeof record?.task_id === "string" ? record.task_id : null;
+    if (!taskId) return;
+    if (message.subtype === "task_notification") {
+      this.openTurnShellTaskIds?.delete(taskId);
+      return;
+    }
+    if (message.subtype !== "task_started" || record?.task_type !== CLAUDE_SHELL_TASK_TYPE) return;
+    const toolUseId = typeof record.tool_use_id === "string" ? record.tool_use_id : undefined;
+    if (this.taskProtocolSource.resolveTaskOwner(taskId, toolUseId)) return;
+    this.openTurnShellTaskIds?.add(taskId);
+  }
+
+  /**
+   * SLP-PATCH(interrupted-turn-tasks): stops each still-running shell task of the interrupted
+   * turn by its id, on the query that was interrupted. A task the interrupt already ended answers
+   * the stop harmlessly. Each stop is bounded; a failed or unanswered one is logged. Never rejects.
+   */
+  private async stopInterruptedTurnShellTasks(query: Query, taskIds: Set<string>): Promise<void> {
+    const ids = [...taskIds];
+    taskIds.clear();
+    const logContext = {
+      agentId: this.agentId,
+      provider: "claude",
+      sessionId: this.claudeSessionId,
+    };
+    await Promise.all(
+      ids.map(async (taskId) => {
+        try {
+          await withTimeout(
+            query.stopTask(taskId),
+            INTERRUPTED_TURN_TASK_STOP_TIMEOUT_MS,
+            `stopTask ${taskId} timed out`,
+          );
+          this.logger.info({ ...logContext, taskId }, "provider.claude.interrupt.task_stopped");
+        } catch (error) {
+          this.logger.warn(
+            { ...logContext, taskId, err: error },
+            "provider.claude.interrupt.task_stop_failed",
+          );
+        }
+      }),
+    );
   }
 
   /**
