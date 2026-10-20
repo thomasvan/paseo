@@ -1157,9 +1157,17 @@ and its own retirement condition.
   MCP `archive_agent` and `bootstrap`), refresh, and through `cancelAgentRunBefore` the replace
   of a running turn (every interrupting send, and a steer the provider cannot take), reload and
   rewind. A session `close()` reaches the same stop through its foreground turn's cancel.
-- **Known limit:** a task the interrupted turn announces after its stops were sent is not
-  stopped. Archive and reload close the session right after the interrupt, so their stops race
-  the query's close; what happens to each command there is the room's scratch proof C2b.
+- **Known limit:** the patch stops only the interrupted turn's tasks, and a task that turn
+  announces after its stops were sent is not stopped. Archive and reload still end every command
+  of the session, an earlier turn's included, because they close the Claude CLI after the
+  interrupt. This is unchanged from `615ca8e30` and not caused by the patch: no stop names the
+  earlier turn's task, so the close ends it. The room's scratch proof C2b
+  (`~/.cache/paseo-fix-interrupt/claude-proofs/runs/c2b-archive-1` and `c2b-reload-1`, on
+  `97e0d1e61`, read from `/proc`) saw turn 1's background command and turn 2's commands alive
+  before the action and all gone after it. On archive the daemon logged `task_stopped` for turn
+  2's two tasks only. On reload the CLI had already closed, so both stops failed with
+  `ProcessTransport is not ready for writing` and were logged as `task_stop_failed`, without
+  failing the reload.
 - **Sites:** seven markers in `providers/claude/agent.ts`.
 - **Coverage:** `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` drives a real
   `ClaudeAgentSession` against a scripted SDK query. It binds which tasks are stopped, an
