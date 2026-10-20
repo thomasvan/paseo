@@ -22,10 +22,11 @@ repairs in `packages/server/src/server/agent/providers/codex-app-server-agent.ts
 (`agent-manager.ts`) and the registry facade (`agent-sdk-types.ts`,
 `provider-registry.ts`).
 
-Five patches keep their tests in fork-only `.slp.test.ts` files upstream does
+Six patches keep their tests in fork-only `.slp.test.ts` files upstream does
 not own: `agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`,
-`native-tools-gate.slp.test.ts`, `agent-message-raw-body.slp.test.ts` and, in the CLI
-package, `commands/agent/send.slp.test.ts`.
+`native-tools-gate.slp.test.ts`, `agent-message-raw-body.slp.test.ts`,
+`providers/codex-interrupted-turn-terminals.slp.test.ts` and, in the CLI package,
+`commands/agent/send.slp.test.ts`.
 (`native-tools-optin.slp.test.ts` was the third until the 2026-09-07 sync retired its
 patch; `native-tools-gate.slp.test.ts` replaced it there.)
 
@@ -52,7 +53,7 @@ the same day: #4277 superseded the fork's shape but still ties the native
 catalog to MCP injection, so a minimal follow-up patch (below) re-couples it to
 `mcp.enabled` alone.
 
-Patches that landed upstream have left, and their sections with them. **Fourteen patches
+Patches that landed upstream have left, and their sections with them. **Fifteen patches
 remain here** — the count was nine for a while after `force-cancel-releases-foreground`
 and `archived-live-list` arrived without it being updated,
 `mcp-protocol-version-clip` made it twelve on 2026-09-09,
@@ -66,7 +67,8 @@ sync dropped `acp-provider-mcp-servers` for fifteen, the v0.11.0 sync kept
 all fifteen, and the v0.12.0 sync retired `question-answer-required`,
 `schedule-claim-slots` and `schedule-claim-in-flight` for twelve, and
 `agent-message-raw-body` made it thirteen on 2026-10-20 and
-`agent-send-interrupt` fourteen the same day, which is
+`agent-send-interrupt` fourteen and `interrupted-turn-terminals` fifteen the same
+day, which is
 why the `Sync procedure` below now derives its file manifest with a command
 instead of restating a total.
 Current upstream sync: **2026-10-19**, tag `v0.12.0` at
@@ -269,6 +271,7 @@ breakage and is not. The patch table:
 | [#4694](https://github.com/getpaseo/paseo/pull/4694) | — dropped `claude-history-follows-provider-env`                                                                                                   | `providers/claude/agent.ts`                                                                                                                                                               | closed 2026-09-26 as superseded by [#5437](https://github.com/getpaseo/paseo/pull/5437), landed `76a9781ba`, in `v0.10.0`; patch dropped at the v0.10.0 sync                                      |
 | [#5132](https://github.com/getpaseo/paseo/pull/5132) | `history-purpose-provider-contract`                                                                                                               | this branch carries two of the PR's five providers — `acp-agent.ts`, `pi/agent.ts` (Codex's part landed upstream as #4736; omp, opencode and plugin-provider dropped at the v0.10.0 sync) | closed unmerged — the OMP half landed as [#5550](https://github.com/getpaseo/paseo/pull/5550) (`264f6e1cc`); the pi and ACP halves were not included. **No marker**; kept, with no upstream route |
 | [#4904](https://github.com/getpaseo/paseo/pull/4904) | — retired `schedule-claim-slots`, `schedule-claim-in-flight`                                                                                      | `schedule/service.ts`                                                                                                                                                                     | closed unmerged — superseded by [#6532](https://github.com/getpaseo/paseo/pull/6532), landed `ee0d901ef` with keithpk's credit, in `v0.12.0`; both patches retired at the v0.12.0 sync            |
+| —                                                    | `interrupted-turn-terminals`                                                                                                                      | `codex-app-server-agent.ts`                                                                                                                                                               | not opened upstream: the room decided nothing goes to getpaseo/paseo                                                                                                                              |
 | —                                                    | `agent-send-interrupt`                                                                                                                            | `tools/paseo-tools.ts`, `cli/src/commands/agent/send.ts`                                                                                                                                  | not opened upstream: the room decided nothing goes to getpaseo/paseo                                                                                                                              |
 | —                                                    | `agent-message-raw-body`                                                                                                                          | `agent-messages/index.ts`                                                                                                                                                                 | not opened upstream: the room decided nothing goes to getpaseo/paseo                                                                                                                              |
 
@@ -1059,6 +1062,53 @@ Added 2026-10-20, on `slp/agent-send-interrupt`, by the room's plan
 - **Retirement and revisit:** if upstream returns the agent default to `interrupt`, drop the
   patch; if it moves the decision into the daemon, re-apply it there.
 
+### interrupted-turn-terminals
+
+Added 2026-10-20 by the same plan as `agent-send-interrupt`. Room-local, no upstream PR. It
+is a patch of its own, not a widening of that one: it repairs every interrupt of a Codex turn,
+whoever sends it, it lives in the provider rather than at the senders, and it retires on a
+different condition.
+
+- **What:** after Codex accepts `turn/interrupt`, the provider ends each shell command the
+  interrupted turn started that has not exited, with
+  `thread/backgroundTerminals/terminate {threadId, processId}`, and the next `turn/start`
+  waits for those calls.
+- **Why it matters here:** `turn/interrupt` ends the turn and leaves its commands running
+  (codex 0.163). The room's first live interrupt series saw the interrupted command run to its
+  own end in all three runs (AI-airoom#849), and the room's hand probe P2a
+  (`~/.cache/paseo-fix-interrupt/p2a/SUMMARY.md`) read it from `/proc`.
+- **Attribution:** `thread/backgroundTerminals/list` carries no turn and a null `osPid`, so the
+  provider records each root-thread `commandExecution` `processId` under the `turnId` of its
+  `item/started`. A `completed` item drops its id. A `failed` one keeps it, because Codex
+  reports the interrupted turn's still-running command as failed. A turn that ends any way
+  other than `interrupted` forgets its ids, so a server an earlier turn left running on
+  purpose is never ended by a later interrupt. At most 16 turns are remembered.
+- **What it never does:** call `thread/backgroundTerminals/clean`, which ends every terminal on
+  the thread, an earlier turn's and a running later turn's included (probe runs A and B). It
+  ends nothing after an already-idle interrupt, nothing on a subagent's thread, and nothing
+  after an interrupt of a turn Codex never identified.
+- **Bounds:** each terminate times out after 2 s. A refused, failed or unanswered terminate is
+  logged (`provider.codex.interrupt.terminal_terminate_failed`) and never fails the interrupt
+  or the next turn. `startTurn` waits at most the interrupt's bound plus one terminate's plus
+  500 ms, then starts and logs `provider.codex.interrupt.terminal_cleanup_timed_out`.
+- **Entry points:** every path to `AgentManager.cancelAgentRun`, which calls the session's
+  `interrupt()`. These are the app's stop and `cancel_agent_request`, MCP `cancel_agent`,
+  `paseo stop`, archive (`archiveAgentCommand`), Hub interrupt (`DaemonExecutions`), refresh,
+  and through `cancelAgentRunBefore` the replace of a running turn (every interrupting send,
+  and a steer the provider cannot take), reload and rewind.
+- **Known limit:** reload and archive close the session after the interrupt. The cleanup runs
+  on the old session's client and is logged as failed if that client is already gone; whether
+  closing the app-server ends its terminals is not measured here.
+- **Sites:** nine markers, all in `providers/codex-app-server-agent.ts`.
+- **Coverage:** `codex-interrupted-turn-terminals.slp.test.ts` drives a real
+  `CodexAppServerAgentSession` against the scripted app-server in
+  `codex/test-utils/fake-app-server.ts`. It binds which processes end, an earlier turn's and a
+  Codex-started next turn's surviving, the order against `turn/start`, a failing terminate, and
+  that `clean` is never sent.
+- **Retirement and revisit:** if Codex ends an interrupted turn's commands itself, re-run the
+  room's probe P2a on the new version and drop the patch. If `list` gains a turn id, match on
+  it instead of the record.
+
 ## Sync procedure
 
 First, derive the patch-owned file manifest, then check whether upstream touched
@@ -1215,8 +1265,8 @@ Then merge:
 git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
-# Marker gate. Measured after agent-send-interrupt (2026-10-20): expect 12
-# names across 37 code/test sites in 14 files, and use the per-name manifest
+# Marker gate. Measured after interrupted-turn-terminals (2026-10-20): expect 13
+# names across 46 code/test sites in 14 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
 # changes whenever the prose does; include it and the gate can never pass on a
@@ -1224,14 +1274,15 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 # path, so sort -u would dedupe path:name pairs and return one line per file,
 # not per name.
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
-rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 12
+rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 13
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
+#    9 interrupted-turn-terminals             3 interrupt-releases-foreground
 #    7 agent-send-interrupt                   3 detached-wakeup
 #    6 native-tools-injection-independent     2 force-cancel-releases-foreground
 #    4 wakeup-each                            2 detached-arg
 #    3 replace-awaits-teardown                2 agent-message-raw-body
 #    3 mcp-protocol-version-clip              1 dispose-releases-foreground
-#    3 interrupt-releases-foreground          1 dead-run-settles
+#                                             1 dead-run-settles
 # The census is scoped to packages/ because that is the measured code/test
 # population; evidence/080-mutants/MUTANTS.md quotes the marker in prose.
 # archived-live-list and history-purpose-provider-contract are absent from this
@@ -1322,6 +1373,7 @@ vt packages/server/src/server/agent/providers/generic-acp-agent.test.ts
 vt packages/server/src/server/agent/providers/generic-acp-agent.archived-history.test.ts  # #6766's release
 vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts --bail=1   # agent-message-raw-body
 vt packages/cli/src/commands/agent/send.slp.test.ts --bail=1   # agent-send-interrupt
+vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.slp.test.ts --bail=1   # interrupted-turn-terminals
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/daemon-e2e/claude-provider-config-dir-history.e2e.test.ts
 
@@ -1343,7 +1395,8 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 `codex-app-server-agent` 193, `agent-manager` 208, `mcp-parity.e2e` 35 (35 at the 5 s default
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
-`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28; CLI `send.slp` (added 2026-10-20) 7.
+`claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28; CLI `send.slp` (added 2026-10-20) 7; `codex-interrupted-turn-terminals.slp` (added
+2026-10-20) 6.
 `npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus
