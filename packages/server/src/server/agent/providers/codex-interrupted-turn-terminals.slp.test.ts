@@ -141,13 +141,20 @@ async function interruptTurnB(harness: ReturnType<typeof createHarness>): Promis
 }
 
 describe("an interrupted Codex turn's commands end before the next turn", () => {
-  test("terminates exactly the processes the interrupted turn started, by id", async () => {
+  test("terminates exactly the processes the interrupted turn started, by id, and never cleans", async () => {
     const harness = createHarness();
     await interruptTurnB(harness);
     await harness.startTurn("correction", "native-C");
 
     expect(harness.terminated()).toEqual(["201", "202"]);
     expect(harness.requests(TERMINATE).every((params) => params.threadId === THREAD)).toBe(true);
+    // `clean` would end every terminal on the thread, an earlier turn's included.
+    expect(
+      harness.appServer
+        .requests()
+        .filter((message) => String(message.method).startsWith("thread/backgroundTerminals/"))
+        .map((message) => message.method),
+    ).toEqual([TERMINATE, TERMINATE]);
     harness.appServer.assertNoErrors();
   });
 
@@ -224,21 +231,4 @@ describe("an interrupted Codex turn's commands end before the next turn", () => 
     expect(harness.requests("turn/start")).toHaveLength(3);
     expect(harness.terminated()).toEqual(["201", "202"]);
   }, 15_000);
-
-  test("never calls thread/backgroundTerminals/clean", async () => {
-    const harness = createHarness();
-    await interruptTurnB(harness);
-    await harness.startTurn("correction", "native-C");
-    await harness.runsCommand({ turnId: "native-C", processId: "301" });
-    await harness.session.interrupt();
-    await harness.startTurn("second correction", "native-D");
-
-    expect(
-      harness.appServer
-        .requests()
-        .filter((message) => String(message.method).startsWith("thread/backgroundTerminals/"))
-        .map((message) => message.method),
-    ).toEqual([TERMINATE, TERMINATE, TERMINATE]);
-    harness.appServer.assertNoErrors();
-  });
 });

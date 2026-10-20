@@ -1071,8 +1071,11 @@ different condition.
 
 - **What:** after Codex accepts `turn/interrupt`, the provider ends each shell command the
   interrupted turn started that has not exited, with
-  `thread/backgroundTerminals/terminate {threadId, processId}`, and the next `turn/start`
-  waits for those calls.
+  `thread/backgroundTerminals/terminate {threadId, processId}`. It ends no other turn's
+  process. A turn Paseo starts through `startTurn` waits for those calls before its
+  `turn/start`. A turn Codex starts on its own, such as a goal continuation, is not ordered by
+  that wait and can begin before the cleanup ends. Its commands still survive the cleanup,
+  because the cleanup ends only the interrupted turn's ids.
 - **Why it matters here:** `turn/interrupt` ends the turn and leaves its commands running
   (codex 0.163). The room's first live interrupt series saw the interrupted command run to its
   own end in all three runs (AI-airoom#849), and the room's hand probe P2a
@@ -1096,9 +1099,15 @@ different condition.
   `paseo stop`, archive (`archiveAgentCommand`), Hub interrupt (`DaemonExecutions`), refresh,
   and through `cancelAgentRunBefore` the replace of a running turn (every interrupting send,
   and a steer the provider cannot take), reload and rewind.
-- **Known limit:** reload and archive close the session after the interrupt. The cleanup runs
-  on the old session's client and is logged as failed if that client is already gone; whether
-  closing the app-server ends its terminals is not measured here.
+- **Known limit:** archive and reload still end every terminal of the session, an earlier
+  turn's included, because they close the Codex app-server after the interrupt, and closing it
+  ends its terminals. This is measured, it is unchanged from `558899202`, and this patch does
+  not cause it. The room's proof runs `p2b-archive` and `p2b-reload`
+  (`~/.cache/paseo-fix-interrupt/proofs/runs/`) read from `/proc` that turn 1's background
+  command and the interrupted turn 2's command were both alive before the action and both gone
+  after it, and probe P2a saw the same by hand when the app-server closed. The patch's cleanup
+  for those two paths runs on the closing session's client and is logged as failed if that
+  client is already gone.
 - **Sites:** nine markers, all in `providers/codex-app-server-agent.ts`.
 - **Coverage:** `codex-interrupted-turn-terminals.slp.test.ts` drives a real
   `CodexAppServerAgentSession` against the scripted app-server in
@@ -1396,7 +1405,7 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
 `claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28; CLI `send.slp` (added 2026-10-20) 7; `codex-interrupted-turn-terminals.slp` (added
-2026-10-20) 6.
+2026-10-20) 5.
 `npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus
