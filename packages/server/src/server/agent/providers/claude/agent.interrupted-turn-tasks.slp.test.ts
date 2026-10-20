@@ -32,6 +32,7 @@ function createScriptedQuery(
   let ended = false;
   let emitted = 0;
   const prompts: string[] = [];
+  const promptUuids = new Map<string, string>();
 
   const query = {
     next: vi.fn(async (): Promise<IteratorResult<Record<string, unknown>, void>> => {
@@ -63,13 +64,16 @@ function createScriptedQuery(
     for await (const message of prompt) {
       const content = (message as { message?: { content?: unknown } }).message?.content;
       const blocks = Array.isArray(content) ? content : [{ text: content }];
-      prompts.push(blocks.map((block) => String((block as { text?: unknown }).text)).join(""));
+      const text = blocks.map((block) => String((block as { text?: unknown }).text)).join("");
+      promptUuids.set(text, String((message as { uuid?: unknown }).uuid));
+      prompts.push(text);
     }
   })();
 
   return {
     query,
     prompts,
+    promptUuids,
     emit(frame: Record<string, unknown>) {
       emitted += 1;
       const resolve = waiting.shift();
@@ -127,9 +131,11 @@ async function createHarness(
     logs,
     claude,
     stoppedTaskIds: () => claude().query.stopTask.mock.calls.map(([taskId]) => taskId),
-    async startTurn(text: string) {
+    /** Sends a prompt and returns the uuid Claude's `command_lifecycle` frames carry for it. */
+    async startTurn(text: string): Promise<string> {
       await session.startTurn(text);
       await vi.waitFor(() => expect(claude().prompts).toContain(text));
+      return claude().promptUuids.get(text) ?? "";
     },
   };
 }
@@ -147,6 +153,10 @@ function result(subtype: "success" | "error_during_execution" = "success") {
     total_cost_usd: 0,
     session_id: SESSION,
   };
+}
+
+function lifecycle(commandUuid: string, state: "started" | "completed" | "cancelled") {
+  return { type: "command_lifecycle", command_uuid: commandUuid, state, session_id: SESSION };
 }
 
 function shellTask(taskId: string, isBackgrounded = true) {
@@ -337,4 +347,149 @@ test("a failing or unanswered stop does not block or fail the interrupt or the n
   } finally {
     process.off("unhandledRejection", onUnhandled);
   }
+});
+
+// Claude can dequeue a prompt and open its turn after the interrupt was sent. The interrupt was
+// for that prompt, so it reaches that turn: its init, and so its task set, arrive afterwards.
+
+test("stops the tasks of the turn Claude opens after the interrupt for the prompt it had dequeued", async () => {
+  const interruptAnswered = deferred();
+  const harness = await createHarness({ interrupt: () => interruptAnswered.promise });
+  await harness.startTurn("start a command");
+  const claude = harness.claude();
+
+  await harness.session.interrupt();
+  await vi.waitFor(() => expect(claude.query.interrupt).toHaveBeenCalledTimes(1));
+  claude.emit(init());
+  claude.emit(shellTask("bg-a"));
+  await claude.routed();
+  interruptAnswered.resolve();
+
+  await vi.waitFor(() => expect(harness.stoppedTaskIds()).toHaveLength(1));
+  expect(harness.stoppedTaskIds()).toEqual(["bg-a"]);
+});
+
+test.each([
+  { order: "after its init", startedFirst: false },
+  { order: "before its init", startedFirst: true },
+])(
+  "tells that turn from the next prompt's by the prompt Claude says it started, $order",
+  async ({ startedFirst }) => {
+    const interruptAnswered = deferred();
+    const harness = await createHarness({ interrupt: () => interruptAnswered.promise });
+    const interrupted = await harness.startTurn("start a command");
+    const claude = harness.claude();
+
+    await harness.session.interrupt();
+    await vi.waitFor(() => expect(claude.query.interrupt).toHaveBeenCalledTimes(1));
+    const next = await harness.startTurn("do this instead");
+    if (startedFirst) claude.emit(lifecycle(interrupted, "started"));
+    claude.emit(init());
+    if (!startedFirst) claude.emit(lifecycle(interrupted, "started"));
+    claude.emit(shellTask("bg-a"));
+    claude.emit(result("error_during_execution"));
+    claude.emit(lifecycle(next, "started"));
+    claude.emit(init());
+    claude.emit(shellTask("bg-b"));
+    await claude.routed();
+    interruptAnswered.resolve();
+
+    await vi.waitFor(() => expect(harness.stoppedTaskIds()).toHaveLength(1));
+    expect(harness.stoppedTaskIds()).toEqual(["bg-a"]);
+  },
+);
+
+test("reaches the turn of a prompt Claude had started but not yet opened a turn for", async () => {
+  const interruptAnswered = deferred();
+  const harness = await createHarness({ interrupt: () => interruptAnswered.promise });
+  const interrupted = await harness.startTurn("start a command");
+  const claude = harness.claude();
+  claude.emit(lifecycle(interrupted, "started"));
+  await claude.routed();
+
+  await harness.session.interrupt();
+  await vi.waitFor(() => expect(claude.query.interrupt).toHaveBeenCalledTimes(1));
+  await harness.startTurn("do this instead");
+  claude.emit(init());
+  claude.emit(shellTask("bg-a"));
+  await claude.routed();
+  interruptAnswered.resolve();
+
+  await vi.waitFor(() => expect(harness.stoppedTaskIds()).toHaveLength(1));
+  expect(harness.stoppedTaskIds()).toEqual(["bg-a"]);
+});
+
+test("leaves the next turn's commands running when the interrupted prompt opened no turn", async () => {
+  const interruptAnswered = deferred();
+  const harness = await createHarness({ interrupt: () => interruptAnswered.promise });
+  await harness.startTurn("start a command");
+  const claude = harness.claude();
+
+  await harness.session.interrupt();
+  await vi.waitFor(() => expect(claude.query.interrupt).toHaveBeenCalledTimes(1));
+  const next = await harness.startTurn("do this instead");
+  // The init is the next prompt's: Claude names the prompt only after it.
+  claude.emit(init());
+  claude.emit(lifecycle(next, "started"));
+  claude.emit(shellTask("bg-b"));
+  await claude.routed();
+  interruptAnswered.resolve();
+  // A task the next turn announces after the interrupt settled.
+  claude.emit(shellTask("fg-b", false));
+  claude.emit(result());
+  await vi.waitFor(() =>
+    expect(harness.events.filter((event) => event.type === "turn_completed")).toHaveLength(1),
+  );
+
+  expect(claude.query.interrupt).toHaveBeenCalledTimes(1);
+  expect(harness.stoppedTaskIds()).toEqual([]);
+});
+
+test.each([
+  { ending: "Claude cancels it", frame: (uuid: string) => lifecycle(uuid, "cancelled") },
+  { ending: "its turn fails before it opens", frame: () => result("error_during_execution") },
+])(
+  "leaves a later turn Claude starts on its own alone when the interrupted prompt ends without a turn: $ending",
+  async ({ frame }) => {
+    const harness = await createHarness();
+    const interrupted = await harness.startTurn("start a command");
+    const claude = harness.claude();
+
+    await harness.session.interrupt();
+    await vi.waitFor(() => expect(claude.query.interrupt).toHaveBeenCalledTimes(1));
+    claude.emit(frame(interrupted));
+    await claude.routed();
+    // A background job finishing wakes Claude into a turn of its own.
+    claude.emit(init());
+    claude.emit(shellTask("bg-own"));
+    claude.emit(result());
+    await vi.waitFor(() =>
+      expect(harness.events.filter((event) => event.type === "turn_completed")).toHaveLength(1),
+    );
+
+    expect(harness.stoppedTaskIds()).toEqual([]);
+  },
+);
+
+test("stops a task the interrupted turn announces after its stops were sent, and no later turn's", async () => {
+  const harness = await createHarness();
+  await harness.startTurn("start a command");
+  const claude = harness.claude();
+  claude.emit(init());
+  claude.emit(shellTask("bg-a"));
+  await claude.routed();
+
+  await harness.session.interrupt();
+  await vi.waitFor(() => expect(harness.stoppedTaskIds()).toEqual(["bg-a"]));
+  claude.emit(shellTask("bg-late"));
+  claude.emit(result("error_during_execution"));
+  await harness.startTurn("next");
+  claude.emit(init());
+  claude.emit(shellTask("bg-next"));
+  claude.emit(result());
+  await vi.waitFor(() =>
+    expect(harness.events.filter((event) => event.type === "turn_completed")).toHaveLength(1),
+  );
+
+  expect(harness.stoppedTaskIds()).toEqual(["bg-a", "bg-late"]);
 });

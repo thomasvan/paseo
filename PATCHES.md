@@ -1137,12 +1137,23 @@ and its own retirement condition.
   background command did not. It also read that `stopTask` ends exactly the task it names, and
   answers `ok` on one already stopped.
 - **Attribution:** `task_started` carries `task_id` and `task_type: local_bash` for every Bash
-  call, foreground and background. The provider keeps one set per Claude turn on the stream:
+  call, foreground and background. The provider keeps one record per Claude turn on the stream:
   the turn's `system/init` opens it and its `result` lets it go. A `local_bash` task is added
-  while a set is open, and its `task_notification` removes it. The interrupt captures the open
-  set before it is sent, so a task the turn announces late still joins it, and the next turn's
-  init opens a set of its own. The foreground command, which the interrupt already ends, is
-  stopped too; this covers a foreground command moved to the background mid-turn.
+  while a record is open, and its `task_notification` removes it. An interrupt sent while a
+  record is open reaches that turn, and the next turn's init opens a record of its own. Once
+  the stops are sent, a task the same turn announces later is stopped as it arrives. The
+  foreground command, which the interrupt already ends, is stopped too; this covers a
+  foreground command moved to the background mid-turn.
+- **An interrupt sent between turns:** Claude can dequeue a prompt and open its turn after the
+  interrupt was sent. The CLI 2.1.246 binary's engine aborts only a turn that has finished its
+  setup, so such a turn runs (read from the binary, not measured). The interrupt waits for the
+  turn of the prompts it was for: those Paseo had pushed and Claude had not started, and those
+  Claude had started without opening their turn yet. The init alone cannot tell that turn from
+  the next prompt's, so the CLI's `command_lifecycle {command_uuid, state: started}`, which
+  names the client uuid of each prompt a turn takes, decides. A turn that took an interrupted
+  prompt is the one. A turn that took any other prompt, an interrupted prompt that ends
+  (`completed` or `cancelled`), or a turn that closes first ends the wait. A turn whose prompt
+  is not named yet is taken only while no prompt Paseo pushed after the interrupt is waiting.
 - **What it leaves alone:** subagents and workflows, which upstream keeps alive on purpose, and
   a command a subagent ran, when its sidechain frames name it. A withdrawn message that Claude
   never started sends no interrupt and stops nothing.
@@ -1157,8 +1168,10 @@ and its own retirement condition.
   MCP `archive_agent` and `bootstrap`), refresh, and through `cancelAgentRunBefore` the replace
   of a running turn (every interrupting send, and a steer the provider cannot take), reload and
   rewind. A session `close()` reaches the same stop through its foreground turn's cancel.
-- **Known limit:** the patch stops only the interrupted turn's tasks, and a task that turn
-  announces after its stops were sent is not stopped. Archive and reload still end every command
+- **Known limit:** the patch stops only the interrupted turn's tasks. A turn that opens after
+  the interrupt while Paseo's next prompt is already waiting is found only by its
+  `command_lifecycle` frame; a CLI that sends none leaves that turn's commands running. Archive
+  and reload still end every command
   of the session, an earlier turn's included, because they close the Claude CLI after the
   interrupt. This is unchanged from `615ca8e30` and not caused by the patch: no stop names the
   earlier turn's task, so the close ends it. The room's scratch proof C2b
@@ -1168,11 +1181,13 @@ and its own retirement condition.
   2's two tasks only. On reload the CLI had already closed, so both stops failed with
   `ProcessTransport is not ready for writing` and were logged as `task_stop_failed`, without
   failing the reload.
-- **Sites:** seven markers in `providers/claude/agent.ts`.
+- **Sites:** sixteen markers in `providers/claude/agent.ts`.
 - **Coverage:** `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` drives a real
   `ClaudeAgentSession` against a scripted SDK query. It binds which tasks are stopped, an
-  earlier turn's and the next turn's surviving, and a failed or unanswered stop leaving the
-  interrupt and the next turn alone.
+  earlier turn's and the next turn's surviving, a failed or unanswered stop leaving the
+  interrupt and the next turn alone, a task announced after the stops, and an interrupt sent
+  between turns: its turn found by init or by prompt uuid, in either order, and the next
+  prompt's turn and a later turn Claude starts on its own left alone.
 - **Retirement and revisit:** if Claude Code ends an interrupted turn's background commands
   while still sparing background subagents, re-run the room's probe on the new version and drop
   the patch. If upstream stops passing `perTaskStopAffordance`, the interrupt kills every
@@ -1335,7 +1350,7 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
                               # merge time can differ from the one you checked
 
 # Marker gate. Measured after interrupted-turn-tasks (2026-10-20): expect 14
-# names across 53 code/test sites in 15 files, and use the per-name manifest
+# names across 62 code/test sites in 15 files, and use the per-name manifest
 # below -- a bare total hides a site moving from one patch to another. This file is excluded
 # because it quotes marker-shaped strings in its own prose, in a number that
 # changes whenever the prose does; include it and the gate can never pass on a
@@ -1345,8 +1360,8 @@ git merge "$UPSTREAM_OID"     # the pinned OID, not the ref: a ref re-read at
 rg -c "SLP-PATCH\(" packages/ | awk -F: '{n+=$2} END {print n" sites"}'
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort -u | wc -l  # expect 14
 rg -oI "SLP-PATCH\([a-z-]+\)" packages/ | sort | uniq -c | sort -rn
-#    9 interrupted-turn-terminals             3 interrupt-releases-foreground
-#    7 interrupted-turn-tasks                 3 detached-wakeup
+#   16 interrupted-turn-tasks                 3 interrupt-releases-foreground
+#    9 interrupted-turn-terminals             3 detached-wakeup
 #    7 agent-send-interrupt                   2 force-cancel-releases-foreground
 #    6 native-tools-injection-independent     2 detached-arg
 #    4 wakeup-each                            2 agent-message-raw-body
@@ -1466,7 +1481,7 @@ Measured at the v0.12.0 sync (2026-10-19), each file through `vt` by explicit pa
 too), `agent-mcp.e2e` 12, `pi/agent` 130, `acp-agent` 119, `generic-acp-agent` 1,
 `generic-acp-agent.archived-history` 5, `schedule/service` 71 and
 `claude-provider-config-dir-history.e2e` 2; `agent-message-raw-body.slp` (added 2026-10-20) 28; CLI `send.slp` (added 2026-10-20) 7; `codex-interrupted-turn-terminals.slp` (added
-2026-10-20) 5; `claude/agent.interrupted-turn-tasks.slp` (added 2026-10-20) 4.
+2026-10-20) 5; `claude/agent.interrupted-turn-tasks.slp` (added 2026-10-20) 12.
 `npm run build:server` and `npm run typecheck`
 exit 0, `npm run format:check` is clean, and `npm run lint` reports 0 warnings and 0 errors.
 Against unpatched `v0.12.0`, by full test name, no upstream test is missing; every surplus
