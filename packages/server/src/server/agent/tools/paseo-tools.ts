@@ -1993,10 +1993,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       prompt,
       sessionMode,
       notifyOnFinish = Boolean(callerAgentId),
-      // SLP-PATCH(agent-send-interrupt): upstream (#5164) defaults agent callers
-      // to steer. A steered correction can be ignored by a turn that finishes its
-      // original task, and the sender never learns, so every caller interrupts
-      // unless it asks to steer.
+      // SLP-PATCH(agent-send-interrupt): every caller interrupts unless it asks
+      // to steer, an agent included (upstream steers for agent callers). A
+      // steered correction can be ignored by a turn that finishes its original
+      // task, and the sender never learns.
       activeTurnBehavior = "interrupt",
     }) => {
       let stopNotification: (() => void) | undefined;

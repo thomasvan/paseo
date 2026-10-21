@@ -11,20 +11,20 @@ shape from its section below; do not restore an old diff.
 
 ## The patches
 
-| Patch                                                                       | What it fixes                                                                                 | Upstream                                                                                                                             |
-| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a long-lived child, not only the first                         | issue [#6346](https://github.com/getpaseo/paseo/issues/6346), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
-| [`detached-wakeup`](#detached-wakeup)                                       | a child created detached still notifies the caller that created it                            | PR [#3094](https://github.com/getpaseo/paseo/pull/3094), issue [#6908](https://github.com/getpaseo/paseo/issues/6908)                |
-| [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                               |
-| [`mcp-protocol-version-clip`](#mcp-protocol-version-clip)                   | an MCP client newer than the bundled SDK gets past `initialize`                               | PR [#4570](https://github.com/getpaseo/paseo/pull/4570), issue [#3009](https://github.com/getpaseo/paseo/issues/3009)                |
-| [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                               |
-| [The Codex foreground cluster](#the-codex-foreground-cluster)               | a Codex session's foreground slot is released on every path that ends its turn (five patches) | issue [#3256](https://github.com/getpaseo/paseo/issues/3256); PR [#4041](https://github.com/getpaseo/paseo/pull/4041) open           |
-| [`archived-live-list`](#archived-live-list)                                 | an archived agent resumed for a history read stays archived in `list_agents`                  | PR [#3803](https://github.com/getpaseo/paseo/pull/3803), issue [#4753](https://github.com/getpaseo/paseo/issues/4753)                |
-| [`history-purpose-provider-contract`](#history-purpose-provider-contract)   | a pi history read releases the runtime it spawned                                             | not opened                                                                                                                           |
-| [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | not opened                                                                                                                           |
-| [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's send interrupts a running turn unless it asks to steer                             | not opened                                                                                                                           |
-| [`interrupted-turn-terminals`](#interrupted-turn-terminals)                 | an interrupted Codex turn's shell commands end                                                | not opened                                                                                                                           |
-| [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | not opened                                                                                                                           |
+| Patch                                                                       | What it fixes                                                                                 | Upstream                                                                                                                                                   |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a long-lived child, not only the first                         | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
+| [`detached-wakeup`](#detached-wakeup)                                       | a child created detached still notifies the caller that created it                            | PR [#3094](https://github.com/getpaseo/paseo/pull/3094), issue [#6908](https://github.com/getpaseo/paseo/issues/6908)                                      |
+| [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                                                     |
+| [`mcp-protocol-version-clip`](#mcp-protocol-version-clip)                   | an MCP client newer than the bundled SDK gets past `initialize`                               | PR [#4570](https://github.com/getpaseo/paseo/pull/4570), issue [#3009](https://github.com/getpaseo/paseo/issues/3009)                                      |
+| [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                                                     |
+| [The Codex foreground cluster](#the-codex-foreground-cluster)               | a Codex session's foreground slot is released on every path that ends its turn (five patches) | issue [#3256](https://github.com/getpaseo/paseo/issues/3256) (the fixes described there); PR [#4041](https://github.com/getpaseo/paseo/pull/4041) open     |
+| [`archived-live-list`](#archived-live-list)                                 | an archived agent resumed for a history read stays archived in `list_agents`                  | PR [#3803](https://github.com/getpaseo/paseo/pull/3803), issue [#4753](https://github.com/getpaseo/paseo/issues/4753)                                      |
+| [`history-purpose-provider-contract`](#history-purpose-provider-contract)   | a pi history read releases the runtime it spawned                                             | not opened: no raw-log repro yet; upstream left pi out of #5550                                                                                            |
+| [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
+| [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's send interrupts a running turn unless it asks to steer                             | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
+| [`interrupted-turn-terminals`](#interrupted-turn-terminals)                 | an interrupted Codex turn's shell commands end                                                | PR [#7525](https://github.com/getpaseo/paseo/pull/7525), issue [#7522](https://github.com/getpaseo/paseo/issues/7522)                                      |
+| [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
@@ -216,6 +216,8 @@ list_agents`; upstream's own archive cases there cover the `includeArchived` sid
   without the release every archived pi agent whose history is read keeps a runtime resident
   for the rest of the daemon's life.
 - **Tests:** `providers/pi/agent.test.ts`, the `resumeSession purpose: history` suite.
+- **Retire when:** upstream releases a history-purpose pi runtime itself, or at the first sync
+  where this patch conflicts while upstream has not taken it.
 
 ## agent-message-raw-body
 
@@ -234,8 +236,9 @@ list_agents`; upstream's own archive cases there cover the `includeArchived` sid
   reader goes through `parseAgentMessage`.
 - **Known limit:** a daemon without this patch reads a raw body as XML: a body with a raw `<`,
   `>` or bare `&` falls back to a plain user row without its sender.
-- **Tests:** `agent-message-raw-body.slp.test.ts` sends through `sendPromptToAgent` into a real
-  `AgentManager` and replays the bytes the provider received as history.
+- **Tests:** `agent-message-raw-body.slp.test.ts` drives `formatAgentMessage`,
+  `parseAgentMessage` and `prepareAgentMessage` directly, the same rows as the upstream PR's
+  `agent-prompt.test.ts`.
 
 ## agent-send-interrupt
 
@@ -278,7 +281,8 @@ list_agents`; upstream's own archive cases there cover the `includeArchived` sid
   at most the interrupt's bound plus one terminate's plus 500 ms.
 - **Known limit:** archive and reload close the Codex app-server, which ends every terminal of
   the session, an earlier turn's included; that is upstream's behaviour, not this patch's.
-- **Retire when:** Codex ends an interrupted turn's commands itself. If `list` gains a turn id,
+- **Retire when:** Codex ends an interrupted turn's commands itself, or at the first sync where
+  this patch conflicts while upstream has not taken it. If `list` gains a turn id,
   match on it instead of the record.
 - **Tests:** `codex-interrupted-turn-terminals.slp.test.ts` drives a real session against the
   scripted app-server in `codex/test-utils/fake-app-server.ts`.
