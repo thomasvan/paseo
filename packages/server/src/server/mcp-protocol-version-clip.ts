@@ -2,6 +2,9 @@
 import type { IncomingMessage } from "node:http";
 import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 
+// COMPAT(mcpProtocolVersionClip): added in v0.12.1; remove after 2027-04-21 once the bundled
+// MCP SDK accepts the protocol versions current clients send.
+
 /**
  * Normalizes an unsupported `mcp-protocol-version` request header to the newest
  * version the bundled MCP SDK server supports.

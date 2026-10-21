@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { describe, expect, test } from "vitest";
+import { describe, expect, onTestFinished, test } from "vitest";
 import { experimental_createMCPClient } from "ai";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import pino from "pino";
@@ -90,18 +90,17 @@ async function createMcpClient(url: string, authToken?: string): Promise<McpClie
 }
 
 /**
- * Like createMcpClient, but pins an explicit `mcp-protocol-version` request
- * header on every request from construction. The SDK client spreads extra
- * headers after its negotiated `_protocolVersion` (client/streamableHttp.js
- * `_commonHeaders`), so an injected value wins — this is how a client that
- * speaks a protocol newer than the daemon's bundled SDK presents itself.
+ * Like createMcpClient, but sends an explicit `mcp-protocol-version` header on every
+ * request. The SDK client spreads extra headers after its negotiated version
+ * (client/streamableHttp.js `_commonHeaders`), so this value wins: it is how a client
+ * that speaks a protocol newer than the daemon's bundled SDK presents itself.
  */
-async function createMcpClientWithProtocol(
-  url: string,
-  protocolVersion: string,
-): Promise<McpClient> {
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: { "mcp-protocol-version": protocolVersion } },
+async function createMcpClientWithProtocol(options: {
+  url: string;
+  protocolVersion: string;
+}): Promise<McpClient> {
+  const transport = new StreamableHTTPClientTransport(new URL(options.url), {
+    requestInit: { headers: { "mcp-protocol-version": options.protocolVersion } },
   });
   const rawClient = await experimental_createMCPClient({ transport });
   const boundCallTool: McpClient["callTool"] = Reflect.get(rawClient, "callTool").bind(rawClient);
@@ -113,7 +112,9 @@ interface OfflineMcpDaemon {
   stop: () => Promise<void>;
 }
 
-async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
+async function startOfflineMcpDaemon(
+  options: { protocolVersion?: string } = {},
+): Promise<OfflineMcpDaemon> {
   const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
   const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
   const removeDirectories = async () => {
@@ -140,7 +141,10 @@ async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
   });
   try {
     await daemon.start();
-    const client = await createMcpClient(`http://127.0.0.1:${port}/mcp/agents`);
+    const url = `http://127.0.0.1:${port}/mcp/agents`;
+    const client = options.protocolVersion
+      ? await createMcpClientWithProtocol({ url, protocolVersion: options.protocolVersion })
+      : await createMcpClient(url);
     return {
       client,
       stop: async () => {
@@ -909,60 +913,15 @@ describe("agent MCP end-to-end (offline)", () => {
     }
   }, 60_000);
 
-  test("a client speaking protocol 2026-07-28 completes post-initialize requests after the version clip", async () => {
-    // initialize is exempt from the header gate (webStandardStreamableHttp.js
-    // wraps the check in `if (!isInitializationRequest)`). The AI SDK client
-    // sends `notifications/initialized` during construction, the first request
-    // after initialize, so construction itself fails with the protocol 400
-    // unless the daemon clips the header (SLP-PATCH(mcp-protocol-version-clip)).
-    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
-    const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
-    const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
-    const port = await getAvailablePort();
+  // SLP-PATCH(mcp-protocol-version-clip)
+  test("a client that sends a newer MCP protocol version completes requests after initialize", async () => {
+    // The client sends notifications/initialized while it is constructed: the first
+    // request after initialize, which a daemon that rejects the version refuses.
+    const daemon = await startOfflineMcpDaemon({ protocolVersion: "2026-07-28" });
+    onTestFinished(daemon.stop);
 
-    const daemonConfig: PaseoDaemonConfig = {
-      listen: `127.0.0.1:${port}`,
-      paseoHome,
-      corsAllowedOrigins: [],
-      hostnames: true,
-      mcpEnabled: true,
-      staticDir,
-      mcpDebug: false,
-      agentClients: createTestAgentClients(),
-      agentStoragePath: path.join(paseoHome, "agents"),
-    };
-    const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
-    await daemon.start();
+    const result = await daemon.client.callTool({ name: "list_agents", args: {} });
 
-    let client: McpClient | null = null;
-    let agentId: string | null = null;
-    try {
-      client = await createMcpClientWithProtocol(
-        `http://127.0.0.1:${port}/mcp/agents`,
-        "2026-07-28",
-      );
-      const result = await client.callTool({
-        name: "create_agent",
-        args: {
-          cwd: agentCwd,
-          title: "Newer protocol MCP",
-          provider: "claude/claude-test-model",
-          mode: "bypassPermissions",
-          initialPrompt: "reply with done and stop",
-        },
-      });
-      const payload = getStructuredContent(result);
-      agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
-      expect(agentId).toBeTruthy();
-    } finally {
-      if (agentId) {
-        await client?.callTool({ name: "kill_agent", args: { agentId } });
-      }
-      await client?.close();
-      await daemon.stop();
-      await rm(paseoHome, { recursive: true, force: true });
-      await rm(staticDir, { recursive: true, force: true });
-      await rm(agentCwd, { recursive: true, force: true });
-    }
+    expect(getStructuredContent(result)).toMatchObject({ agents: [] });
   }, 30_000);
 });

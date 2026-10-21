@@ -140,9 +140,12 @@ runs them by hand; see `Sync procedure`.
   `{ enabled: false }` as every new agent's Paseo tool policy, and the caller-scoped server,
   which builds its catalog from that stored policy, serves no tools at all. The per-provider
   `paseoTools` policy is a second gate on top and cannot undo it.
-- **Tests:** `native-tools-gate.slp.test.ts` starts a daemon and reads the launch context an
-  agent gets: tools with MCP enabled and injection off, none with MCP disabled. The live
-  field-change handlers have no test.
+- **Tests:** `native-tools-gate.slp.test.ts` starts a daemon with injection off and reads the
+  launch context of a new agent after each change: at start, after injection is turned on and
+  off by a config patch, after `mcp.enabled` is turned off and on by a config reload. A unit row
+  keeps an absent `mcp.enabled` enabled, and a read of `bootstrap.ts` checks every switch's
+  argument, because the plugin provider runtime's catalog switch has no observable here: a
+  behaviour-equivalent re-coupling of that switch alone passes every test.
 - **Retire when:** upstream decouples the catalog from injection; delete the marker sites and
   `native-tools-gate.ts`.
 
