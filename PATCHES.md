@@ -138,8 +138,25 @@ assertion, and a sync runs it by hand too. See `Sync procedure`.
   JSON store through the real `openFinishObservation` over a child fake that publishes what
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
   stop; `internal/observation-stream.slp.test.ts` drives the gate signal and the queue on the
-  `Host` fake. Upstream's `finish-subscriptions.test.ts` case `failed removal after dispatch
-acknowledgment retries only storage, preserving the accepted outcome` is adapted in place.
+  `Host` fake.
+- **Adapted upstream rows:** seven upstream assertions expect the one-shot removal, and each is
+  adapted in place with a comment naming the patch. Six change only their store assertion, to
+  one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
+  - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
+    (D-Q2's mid-turn rule; the fake's child is stored `closed` with no archive stamp):
+    `retains intent until parent dispatch acknowledgment, then restart sends nothing`,
+    `restart coalesces predecessor and queued candidate into one settled notification`,
+    `dispatch failure retains intent and retries the ordinary finish notification` and
+    `remote finish intent protects its caller through registration, observation and delivery`.
+    The last keeps its `hasPendingForCaller` and idle-sweep lines unchanged: they are the
+    guard that a re-armed watch pins no caller.
+  - `mcp-server.test.ts`, after a `finished`: both rows of `reports %s permission requests and
+final completion`.
+
+  The seventh, `failed removal after dispatch acknowledgment retries only storage, preserving
+the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
+  so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
+  older record and removes the other, and that removal is the one that fails.
 
 ## detached-arg
 
@@ -512,7 +529,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-31 wakeup-each                             3 replace-awaits-teardown
+36 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
  9 interrupted-turn-terminals              2 force-cancel-releases-foreground
  8 agent-send-interrupt                    2 detached-arg
@@ -521,8 +538,9 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  4 mcp-protocol-version-clip
 ```
 
-`wakeup-each`'s 31 sites are in `agent/finish-subscriptions/` (its four source files, both
-fork test files and the adapted upstream case) and one in `bootstrap.ts`.
+`wakeup-each`'s 36 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
+fork test files and the five adapted upstream rows there), one in `bootstrap.ts` and one in
+`mcp-server.test.ts` (its adapted row).
 
 Then merge and verify:
 

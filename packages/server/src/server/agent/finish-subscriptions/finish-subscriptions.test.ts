@@ -142,7 +142,11 @@ test("retains intent until parent dispatch acknowledgment, then restart sends no
   expect(first.delivery.prompts[0]).toContain("Partial work saved");
   expect(await first.store.list()).toHaveLength(1);
   first.delivery.acknowledgments[0]!.resolve("steered");
-  await expect.poll(async () => (await first.store.list()).length).toBe(0);
+  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // record stays, awaiting a turn.
+  await expect
+    .poll(async () => first.store.list())
+    .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
   await first.service.close();
   const restarted = await scenario(first.home);
   expect(restarted.observation.waits).toHaveLength(0);
@@ -159,7 +163,11 @@ test("restart coalesces predecessor and queued candidate into one settled notifi
   restarted.observation.waits[0]!.result.resolve(outcome());
   await until(() => restarted.delivery.prompts.length === 1);
   restarted.delivery.acknowledgments[0]!.resolve("steered");
-  await expect.poll(async () => (await restarted.store.list()).length).toBe(0);
+  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // record stays, awaiting a turn.
+  await expect
+    .poll(async () => restarted.store.list())
+    .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
   expect(restarted.delivery.prompts).toHaveLength(1);
 });
 
@@ -290,7 +298,11 @@ test("dispatch failure retains intent and retries the ordinary finish notificati
   expect(await state.store.list()).toHaveLength(1);
   expect(state.observation.waits).toHaveLength(1);
   state.delivery.acknowledgments[1]!.resolve("steered");
-  await expect.poll(async () => (await state.store.list()).length).toBe(0);
+  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // record stays, awaiting a turn.
+  await expect
+    .poll(async () => state.store.list())
+    .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
 });
 
 test("error and missing-child notifications never claim successful completion", async () => {
@@ -388,17 +400,23 @@ test("removed-host notice retries parent dispatch without observing again or del
 });
 
 test("failed removal after dispatch acknowledgment retries only storage, preserving the accepted outcome", async () => {
-  const state = await scenario(undefined, 2, 1000);
-  await state.service.register(intent);
+  // SLP-PATCH(wakeup-each): a finish re-arms in place, keeping the oldest captured record and
+  // removing the others, so the injected removal failure needs two captured records: a
+  // predecessor and a queued candidate, recovered as one group.
+  const first = await scenario();
+  await first.service.register(intent);
+  await first.service.register(intent, true);
+  const [kept] = await first.store.list();
+  await first.service.close();
+  const state = await scenario(first.home, 2, 1000);
   await until(() => state.observation.waits.length === 1);
   state.observation.waits[0]!.result.resolve(outcome("idle"));
   await until(() => state.delivery.prompts.length === 1);
   state.delivery.acknowledgments[0]!.resolve("steered");
-  // SLP-PATCH(wakeup-each): a finish re-arms the watch in place instead of removing it, so the
-  // store keeps the one record, now awaiting a turn, and the same observation waits again.
+  // The store keeps the one record, now awaiting a turn, and the same observation waits again.
   await expect
     .poll(async () => state.store.list(), { timeout: 10000 })
-    .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
+    .toEqual([{ ...kept, awaitingTurn: true }]);
   expect(state.delivery.prompts).toHaveLength(1);
   expect(state.delivery.prompts[0]).toContain("finished.");
   await until(() => state.observation.waits.length === 2);
@@ -465,7 +483,11 @@ test("remote finish intent protects its caller through registration, observation
   expect(s.service.hasPendingForCaller("parent")).toBe(true);
   s.delivery.acknowledgments[0]!.resolve("steered");
   await until(() => !s.service.hasPendingForCaller("parent"));
-  expect(await s.store.list()).toEqual([]);
+  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // record stays, awaiting a turn.
+  expect(await s.store.list()).toEqual([
+    expect.objectContaining({ ...intent, serverId: "remote", awaitingTurn: true }),
+  ]);
   time = 62 * 60_000;
   expect((await cleanup.sweep()).collected).toEqual([]);
   time = 122 * 60_000;
