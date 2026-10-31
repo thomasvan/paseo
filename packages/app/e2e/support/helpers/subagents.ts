@@ -456,7 +456,9 @@ export async function delegateFleetThroughMcp() {
       a,
       b,
       close,
-      async expectCompletion(child: typeof local) {
+      // SLP-PATCH(wakeup-each): a parent hears every finish of a child, so the caller states
+      // how many turns it expects to have finished (upstream: always one).
+      async expectCompletion(child: typeof local, finishes: number) {
         await expect
           .poll(async () => {
             const timeline = await a.fetchAgentTimeline(parent.id, {
@@ -474,7 +476,7 @@ export async function delegateFleetThroughMcp() {
                   message.text.includes(`Server: ${child.serverId}`),
               ).length;
           })
-          .toBe(1);
+          .toBe(finishes);
       },
     };
   } catch (error) {

@@ -158,7 +158,7 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
   stop; `internal/observation-stream.slp.test.ts` drives the gate signal and the queue on the
   `Host` fake.
-- **Adapted upstream rows:** nine upstream assertions expect the one-shot removal, and each is
+- **Adapted upstream rows:** ten upstream tests expect the one-shot behaviour, and each is
   adapted in place with a comment naming the patch. Eight change only their store assertion,
   to one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
   - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
@@ -176,7 +176,14 @@ intent survives origin restart and unavailable-host recovery` and `remote finish
 survives a permission checkpoint until resumed completion`. Their restart, availability,
     permission and wait assertions stay as upstream wrote them.
 
-  The ninth, `failed removal after dispatch acknowledgment retries only storage, preserving
+  The ninth, the browser spec `subagent-origin-pane.spec.ts`, `MCP delegates to self and B
+and opens both qualified children in ordinary conversations`, prompts each child twice (its
+  MCP initial prompt, then a prompt from the UI), so the parent now hears two finishes per
+  child: its two `Agent finished` button checks expect two each, and the fleet helper's
+  `expectCompletion` (`e2e/support/helpers/subagents.ts`, called only by this test) takes the
+  exact count instead of a fixed one.
+
+  The tenth, `failed removal after dispatch acknowledgment retries only storage, preserving
 the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
   so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
   older record and removes the other, and that removal is the one that fails.
@@ -556,7 +563,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-38 wakeup-each                             3 replace-awaits-teardown
+41 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
 10 interrupted-turn-terminals              2 force-cancel-releases-foreground
  8 agent-send-interrupt                    2 detached-arg
@@ -565,10 +572,11 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  4 mcp-protocol-version-clip
 ```
 
-`wakeup-each`'s 38 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
+`wakeup-each`'s 41 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
 fork test files and the five adapted upstream rows there), one in `bootstrap.ts`, one in
-`mcp-server.test.ts` (its adapted row) and two in `connected-hosts/hosts.e2e.test.ts` (its
-adapted rows).
+`mcp-server.test.ts` (its adapted row), two in `connected-hosts/hosts.e2e.test.ts` (its
+adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one
+in `e2e/support/helpers/subagents.ts`).
 
 Then merge and verify:
 

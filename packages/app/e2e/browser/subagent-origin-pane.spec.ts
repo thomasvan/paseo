@@ -237,18 +237,21 @@ test("MCP delegates to self and B and opens both qualified children in ordinary 
     await submitMessage(page, "REMOTE_UI_TARGET");
     await expect(page.getByText("REMOTE_UI_TARGET", { exact: true })).toBeVisible();
     expect((await fleet.a.fetchAgent(fleet.remote.agentId))?.agent.lastUserMessageAt).toBeNull();
-    await fleet.expectCompletion(fleet.local);
-    await fleet.expectCompletion(fleet.remote);
+    // SLP-PATCH(wakeup-each): each child finished two turns, its MCP initial prompt and the
+    // prompt sent above from the UI, and the parent hears both (upstream: the first only).
+    await fleet.expectCompletion(fleet.local, 2);
+    await fleet.expectCompletion(fleet.remote, 2);
     await openAgentRoute(page, {
       workspaceId: fleet.workspace.workspaceId,
       agentId: fleet.parent.id,
     });
-    await expect(
-      page.getByRole("button", { name: /Agent finished.*MCP child on A/ }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /Agent finished.*MCP child on B/ }),
-    ).toBeVisible();
+    // SLP-PATCH(wakeup-each): one finish notice per child turn, two each (upstream: one).
+    for (const title of ["MCP child on A", "MCP child on B"]) {
+      const notices = page.getByRole("button", { name: new RegExp(`Agent finished.*${title}`) });
+      await expect(notices).toHaveCount(2);
+      await expect(notices.first()).toBeVisible();
+      await expect(notices.last()).toBeVisible();
+    }
     const owners = await page.evaluate(() => {
       const runtime = Reflect.get(globalThis, "__paseoHostRuntimeStore") as {
         getHosts(): Array<{ serverId: string }>;
