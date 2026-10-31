@@ -9,6 +9,27 @@ Every patch site in code is marked `SLP-PATCH(<name>)`, except
 (see its section). When a hunk conflicts, re-apply the patch's intent onto upstream's current
 shape from its section below; do not restore an old diff.
 
+## Current upstream sync
+
+`slp/patches` carries upstream tag `v0.14.0` (`8c6de842a3157530c26a7a94c78a3d647fb96ce9`),
+admitted by the release-tag path of the gate: its one non-metadata `+` commit, `f59ebd4fd`,
+changes only `.github/workflows/ci.yml`. The merge resolved nine conflict blocks in seven files:
+
+| File                                           | Resolution                                                                                                               |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `agent/agent-messages/index.ts`                | upstream's barrel (#7561); `agent-message-raw-body` moved into `envelope.ts`                                             |
+| `agent/agent-prompt.ts`                        | upstream's side; #7683 deleted the watcher, and `wakeup-each` moved into `finish-subscriptions/`                         |
+| `agent/create-agent/create.ts`                 | upstream's side; #7528 carries `detached-wakeup`                                                                         |
+| `providers/codex-app-server-agent.ts`, block 1 | both: the `interrupted-turn-terminals` helpers, `releaseForegroundTurn` and #7782's `canStopRuntime` as separate methods |
+| same file, blocks 2 and 3                      | #7954's `async …: Promise<void>` handlers, each first calling `recordTurnTerminalProcess`                                |
+| `providers/pi/agent.test.ts`                   | both; the `history-purpose` suite closes before #7782's and #7954's tests                                                |
+| `agent/tools/paseo-tools.ts`                   | upstream's `selectAgentListItems`; #7532 filters archives in `AgentDirectory`                                            |
+| `skills/paseo/SKILL.md`                        | both: the interrupt default, with upstream's queued receipt and quiet window                                             |
+
+Two patches left with this sync, because upstream carries their fixes: `detached-wakeup`
+(#7528) and `archived-live-list` (#7532). Each one's last test that guards upstream behaviour
+is under _Where the tests live_.
+
 ## The patches
 
 | Patch                                                                       | What it fixes                                                                                 | Upstream                                                                                                                                                   |
@@ -32,9 +53,9 @@ The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-r
 
 A patch's tests sit in a fork-only `.slp.test.ts` file where upstream owns the file beside the
 code, so the upstream file stays upstream's and never conflicts on merge:
-`native-tools-gate.slp.test.ts`,
-`mcp-protocol-version-clip.slp.test.ts`, `agent-message-raw-body.slp.test.ts`,
-`providers/codex-interrupted-turn-terminals.slp.test.ts`,
+`native-tools-gate.slp.test.ts`, `mcp-protocol-version-clip.slp.test.ts`,
+`agent-message-raw-body.slp.test.ts`, `agent-messages/delivery.slp.test.ts`,
+`host-operations/index.slp.test.ts`, `providers/codex-interrupted-turn-terminals.slp.test.ts`,
 `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` and, in the CLI package,
 `commands/agent/send.slp.test.ts`. The other patches extend upstream's own suites, beside the
 cases they change. Every patch test fails under at least one mutant of its patch's lines, and
@@ -57,9 +78,10 @@ replay, and close() afterward is a no-op`: an ACP history read releases its proc
   `list_agents`. It stayed from the retired `archived-live-list` patch, whose fix upstream
   carries (#7532: `AgentDirectory` filters again after projection).
 
-Two patch files are end-to-end suites that upstream CI does not run (`agent-mcp.e2e.test.ts`
-and `mcp-parity.e2e.test.ts`: the server's `test:integration` list names neither), so a sync
-runs them by hand; see `Sync procedure`.
+Three patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.test.ts` or
+`mcp-parity.e2e.test.ts` (the server's `test:integration` list names neither), so a sync runs
+them by hand; `connected-hosts/hosts.e2e.test.ts` is in that list and carries an adapted
+assertion, and a sync runs it by hand too. See `Sync procedure`.
 
 ## wakeup-each
 
@@ -330,21 +352,59 @@ merge and verify. The order is the safeguard: every check runs against the merge
 there is anything to undo.
 
 ```bash
-git fetch upstream
+git fetch upstream --tags
 
-# UPSTREAM_OID is the one value this procedure does not derive. Read the ref once,
+# UPSTREAM_OID is the one value this procedure does not derive. Read the target once,
 # review that commit, then paste the literal: everything below consumes the variable
 # and never re-reads the ref, so the commit checked is the commit merged.
 #
-#     git rev-parse upstream/main     # read it, review that commit, then:
-#     UPSTREAM_OID=<the 40-char OID>  # a pasted literal, not a substitution
+#     git rev-parse upstream/main                  # a main commit, or
+#     git rev-parse 'refs/tags/v0.14.0^{commit}'   # a release tag; then also
+#     UPSTREAM_TAG=refs/tags/v0.14.0
+#     UPSTREAM_OID=<the 40-char OID>               # a pasted literal, not a substitution
 #
 [ -n "${UPSTREAM_OID:-}" ] && [ ${#UPSTREAM_OID} -eq 40 ] || {
   echo "set UPSTREAM_OID to a literal 40-char OID you have reviewed"; exit 1; }
-git merge-base --is-ancestor "$UPSTREAM_OID" upstream/main || {
-  echo "UPSTREAM_OID is not an ancestor of upstream/main: history was rewritten"; exit 1; }
-[ "$UPSTREAM_OID" = "$(git rev-parse upstream/main)" ] || {
-  echo "NOTE: upstream/main has moved past UPSTREAM_OID; record which commit you chose and why."; }
+
+# upstream_gate MAIN_OID UPSTREAM_OID [TAG_REF]: status 0 admits UPSTREAM_OID as a sync
+# target; any other status refuses it, with the reason on stdout. TAG_REF is the full
+# ref of the release tag, e.g. refs/tags/v0.14.0.
+upstream_gate() {
+  local main=$1 target=$2 tag=${3:-} base sign oid path
+  if git merge-base --is-ancestor "$target" "$main"; then
+    echo "ADMIT $target: an ancestor of upstream/main"; return 0
+  fi
+  [ -n "$tag" ] || { echo "REFUSE $target: not on upstream/main and no tag named"; return 1; }
+  [ "$(git rev-parse --verify -q "$tag^{commit}")" = "$target" ] || {
+    echo "REFUSE $target: tag $tag does not peel to it"; return 1; }
+  base=$(git merge-base "$target" "$main") || { echo "REFUSE $target: no base on upstream/main"; return 1; }
+  [ -z "$(git rev-list --merges "$base..$target")" ] || {
+    echo "REFUSE $target: $base..$target holds a merge commit"; return 1; }
+  while read -r sign oid; do
+    [ "$sign" = + ] || continue
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        # Release metadata: literal paths, no wildcards, so adding one takes an edit.
+        CHANGELOG.md | CHANGELOG.zh-CN.md | package-lock.json | package.json | plugins/package.json) ;;
+        fastlane/metadata/android/en-US/changelogs/140001.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/140002.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/140003.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/140004.txt) ;;
+        packages/app/package.json | packages/cli/package.json | packages/client/package.json) ;;
+        packages/desktop/package.json | packages/expo-two-way-audio/package.json) ;;
+        packages/highlight/package.json | packages/plugin/package.json) ;;
+        packages/protocol/package.json | packages/relay/package.json) ;;
+        packages/server/package.json | packages/website/package.json) ;;
+        # CI workflows: nothing here ships in the daemon build.
+        .github/workflows/*) ;;
+        *) echo "REFUSE $target: $oid touches $path"; return 1 ;;
+      esac
+    done < <(git diff-tree --no-commit-id --name-only -z -r "$oid")
+  done < <(git cherry "$main" "$target" "$base")
+  echo "ADMIT $target: release delta over $base"
+}
+
+upstream_gate "$(git rev-parse upstream/main)" "$UPSTREAM_OID" "${UPSTREAM_TAG:-}" || exit 1
 
 BASE=$(git merge-base HEAD "$UPSTREAM_OID")
 
@@ -359,6 +419,30 @@ git grep -l 'SLP-PATCH' HEAD -- packages/ | sed 's|^[^:]*:||' | sort > /tmp/mark
 comm -23 /tmp/set-a.txt /tmp/marked.txt
 ```
 
+The gate admits a `main` commit, or a release tag whose own commits are cherry-picks of
+`main` or release bookkeeping. Upstream cuts a release tag from `main` plus cherry-picks and
+release commits, so a tag is often not an ancestor of `main`. A tag is admitted only when it
+peels to `UPSTREAM_OID`, `base..UPSTREAM_OID` holds no merge commit, and every commit
+`git cherry` marks `+` (no patch-equivalent on `main`) touches only two path classes: the
+release metadata, as literal paths (both changelogs, the four Android changelogs, the root
+`package.json` and `package-lock.json`, `plugins/package.json` and each workspace
+`package.json`), and anything under `.github/workflows/`, none of which ships in the daemon
+build. Otherwise it refuses, naming the commit and path it stopped on. A later `main` that
+rewrites a cherry-pick's patch turns that commit `+`, and it is refused unless its paths are
+on the list.
+
+The list admits a path, not its content: read each `+` commit's diff before the merge, and
+record that read in the fork PR. A release cut changes only `version` and the `@getpaseo/*`
+pins; a changelog commit changes only release notes. A new release can add an Android
+changelog path; adding it is an edit to the gate, made after that read.
+
+A sync merges its target into the previous sync commit, whether the base was a tag or a `main`
+commit, as any merge: cherry-picks are not replayed and no base is recreated. Cherry-equivalence
+does not make that merge clean. A tag's release files and backports conflict with `main`'s own
+copies (`v0.14.0` against `main` conflicts in both changelogs, `docs/release.md`,
+`packages/app/fastlane/Fastfile` and `attachment-lightbox.tsx`, no patch involved). A conflict in
+a file outside Set B below is upstream's: take the later target's side.
+
 Empty output from the diff means upstream changed no patch-owned file. Otherwise read
 `git log "$BASE".."$UPSTREAM_OID" -- <file>` for each: a patch may have landed, been
 redesigned, or lost its insertion point.
@@ -372,28 +456,17 @@ T=$(printf '%s\n' "$out" | head -1)
 
 # Marker gate against the merged tree (-h is git grep's --no-filename).
 git grep -oh "SLP-PATCH([a-z-]*)" "$T" -- packages/ | sort | uniq -c | sort -rn
-
-# The wakeup-each watcher's shape, read rather than counted.
-git cat-file -p "$T:packages/server/src/server/agent/agent-prompt.ts" \
-  | grep -nE 'SLP-PATCH\(wakeup-each\)|agent_state|timeline_replacement|event\.event\.type|hasSeenRunning|hasSeenTurn|terminal: false'
 ```
-
-Read the control flow around the lines the last command prints: the `agent_state` and
-`timeline_replacement` variants return before any `event.event.type` read; the idle state
-alone sends nothing; `turn_completed` notifies only with the child idle and a running turn
-observed, then clears both gates and sends `finished` with `{ terminal: false }`; the
-archived-caller branch calls `stop()`.
 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-16 interrupted-turn-tasks                  2 wakeup-each
+16 interrupted-turn-tasks                  3 replace-awaits-teardown
  9 interrupted-turn-terminals              2 interrupt-releases-foreground
- 7 agent-send-interrupt                    2 force-cancel-releases-foreground
+ 8 agent-send-interrupt                    2 force-cancel-releases-foreground
  6 native-tools-injection-independent      2 detached-arg
- 4 mcp-protocol-version-clip               2 agent-message-raw-body
- 3 replace-awaits-teardown                 1 dispose-releases-foreground
-                                           1 dead-run-settles
+ 5 agent-message-raw-body                  1 dispose-releases-foreground
+ 4 mcp-protocol-version-clip               1 dead-run-settles
 ```
 
 Then merge and verify:
@@ -441,11 +514,14 @@ vt packages/server/src/server/agent/create-agent/create.slp.test.ts
 vt packages/server/src/server/native-tools-gate.slp.test.ts
 vt packages/server/src/server/mcp-protocol-version-clip.slp.test.ts
 vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts
+vt packages/server/src/server/agent/agent-messages/delivery.slp.test.ts
+vt packages/server/src/server/agent/host-operations/index.slp.test.ts
 vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.slp.test.ts
 vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.slp.test.ts
 vt packages/cli/src/commands/agent/send.slp.test.ts
 # Upstream's suites for patched files: where a patch contradicting upstream intent shows.
 vt packages/server/src/server/agent/agent-prompt.test.ts
+vt packages/server/src/server/agent/agent-messages/delivery.test.ts
 vt packages/server/src/server/agent/create-agent/create.test.ts
 vt packages/server/src/server/agent/mcp-server.test.ts
 vt packages/server/src/server/agent/agent-manager.test.ts
@@ -456,9 +532,12 @@ vt packages/server/src/server/agent/providers/pi/agent.test.ts
 vt packages/server/src/server/agent/providers/acp-agent.test.ts
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/bootstrap.smoke.test.ts
-# The end-to-end suites upstream CI never runs; a timeout at the 5 s default is load.
+# The end-to-end suites: upstream CI never runs the first two, and the third carries an
+# adapted assertion. Run them below a one-minute load of 16; a timeout at the 5 s default
+# is load.
 vt packages/server/src/server/agent/mcp-parity.e2e.test.ts --testTimeout=30000
 vt packages/server/src/server/agent/agent-mcp.e2e.test.ts --testTimeout=30000
+vt packages/server/src/server/connected-hosts/hosts.e2e.test.ts --testTimeout=30000
 
 npm run format:check
 npm run lint
@@ -489,7 +568,10 @@ skills/`, and open no seat until the restart is done.
 4. **Stop, build, start.** The room's `AGENTS.md` R3 applies before the stop: every active
    schedule targeting a seat the stop closes is dispositioned. Stop through the room
    entrypoint (`paseo-daemon.sh stop`), run `npm ci --ignore-scripts`, `npm run postinstall`,
-   `npm run build:server && npm run build:daemon-web-ui`, then `paseo-daemon.sh start`.
+   `npm run build:server && npm run build:daemon-web-ui`, write the daemon config the new
+   build needs (the room's `daemon-config-sync --write`; since v0.14 it carries
+   `agents.idleRuntimeCleanup`, which a v0.12 daemon refuses to load, so it is written only
+   after the stop), then `paseo-daemon.sh start`.
 5. **Read the running version.** `paseo daemon status` and the daemon log's `daemonVersion`
    must name the new release. The preflight in step 3 read HEAD only, so this read is what
    catches a start that served the old build.

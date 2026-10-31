@@ -352,6 +352,29 @@ test("reaches the turn of a prompt Claude had started but not yet opened a turn 
   expect(harness.stoppedTaskIds()).toEqual(["bg-a"]);
 });
 
+test("reaches a turn Claude opens for the interrupted prompt after the interrupt has settled", async () => {
+  const interruptAnswered = deferred();
+  const harness = await createHarness({ interrupt: () => interruptAnswered.promise });
+  const interrupted = await harness.startTurn("start a command");
+  const claude = harness.claude();
+  claude.emit(lifecycle(interrupted, "started"));
+  await claude.routed();
+
+  await harness.session.interrupt();
+  await vi.waitFor(() => expect(claude.query.interrupt).toHaveBeenCalledTimes(1));
+  interruptAnswered.resolve();
+  // Let the interrupt settle on the query before Claude opens the turn: its
+  // continuations are promise jobs only, so they all run before the next
+  // macrotask.
+  await new Promise((resolve) => setImmediate(resolve));
+  claude.emit(init());
+  claude.emit(shellTask("bg-a"));
+  await claude.routed();
+
+  await vi.waitFor(() => expect(harness.stoppedTaskIds()).toHaveLength(1));
+  expect(harness.stoppedTaskIds()).toEqual(["bg-a"]);
+});
+
 test("leaves the next turn's commands running when the interrupted prompt opened no turn", async () => {
   const interruptAnswered = deferred();
   const harness = await createHarness({ interrupt: () => interruptAnswered.promise });
