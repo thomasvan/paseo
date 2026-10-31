@@ -28,7 +28,11 @@ changes only `.github/workflows/ci.yml`. The merge resolved nine conflict blocks
 
 Two patches left with this sync, because upstream carries their fixes: `detached-wakeup`
 (#7528) and `archived-live-list` (#7532). Each one's last test that guards upstream behaviour
-is under _Where the tests live_.
+is under _Where the tests live_. On top of the merge, the sync redesigned `wakeup-each` inside
+`finish-subscriptions/`, made `interrupted-turn-terminals` keep an accepted interrupt's record
+so a late-started command still ends, and updated `agent-message-raw-body`,
+`agent-send-interrupt` and `history-purpose-provider-contract`; the other nine patches, the
+five Codex foreground patches among them, carry over unchanged.
 
 ## The patches
 
