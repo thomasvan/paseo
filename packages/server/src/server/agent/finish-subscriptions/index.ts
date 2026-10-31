@@ -301,7 +301,10 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
         await deps.store.put(next);
         for (const other of watch.records.slice(1)) await deps.store.remove(other.id);
         watch.records = [next];
-        open = !awaitingTurn;
+        // SLP-PATCH(wakeup-each): after a re-arm each queued terminal is judged by its own turn
+        // boundary (`turnObserved`), never by a turn that is merely pending: a repeat of the
+        // acknowledged turn can still be queued ahead of a later turn's finish.
+        open = false;
         storedAwaiting = awaitingTurn;
         watch.awaiting = awaitingTurn;
         // A turn observed while the write was in flight opens the gate again.

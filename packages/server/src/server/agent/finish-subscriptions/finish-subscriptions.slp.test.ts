@@ -149,6 +149,7 @@ async function daemon(
   directory: string,
   child: Child,
   wrap: (store: FinishSubscriptionStore) => FinishSubscriptionStore = (store) => store,
+  retryDelayMs = 1,
 ) {
   const delivery = new Delivery();
   const state = { callerActive: true, childArchived: false };
@@ -161,7 +162,7 @@ async function daemon(
     childArchived: async () => state.childArchived,
     serverId: "origin",
     logger: createTestLogger(),
-    retryDelayMs: 1,
+    retryDelayMs,
   });
   services.push(service);
   await service.start();
@@ -482,4 +483,42 @@ test("a deferred re-arm put that races accept leaves no stale record", async () 
   await written.promise;
   await expect.poll(async () => (await stored(d.directory)).length).toBe(1);
   expect((await stored(d.directory))[0]).not.toHaveProperty("awaitingTurn");
+});
+
+// The queue holds every terminal, so a repeat of the turn just acknowledged can still be queued
+// when a later turn is already pending. Each terminal is judged by its own turn boundary: the
+// repeat sends nothing, the later turn's finish is delivered once.
+test("a repeated completion queued behind the acknowledged finish sends nothing when a later turn is pending", async () => {
+  const d = await daemon(await home(), new Child("running"));
+  await firstFinish(d);
+  d.child.emit({ type: "turn_completed", provider: "codex" }); // the repeated completion
+  d.child.start();
+  d.child.finish("second answer");
+  d.delivery.ack(0);
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("second answer");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  await sentinel(d, 3);
+});
+
+test("a completion the initial wait supplied before its streamed counterpart is delivered once when a later turn is pending", async () => {
+  const d = await daemon(await home(), new Child("running"));
+  await d.service.register(intent);
+  await until(() => d.child.handlers.size === 1 && d.child.waiting.length === 1);
+  // The wait settles first; the streamed turn_completed for the same turn follows it.
+  d.child.last = "first answer";
+  d.child.status = "idle";
+  for (const resolve of d.child.waiting.splice(0)) resolve(d.child.result());
+  await until(() => d.delivery.prompts.length === 1);
+  expect(d.delivery.prompts[0]).toContain("first answer");
+  d.child.emit({ type: "turn_completed", provider: "codex" });
+  d.child.start();
+  d.child.finish("second answer");
+  d.delivery.ack(0);
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("second answer");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  await sentinel(d, 3);
 });
