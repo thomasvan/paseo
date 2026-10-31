@@ -190,24 +190,34 @@ and wakes every `startTurn` waiting on it.
 
 ## agent-message-raw-body
 
-- **What:** `formatAgentMessage` (`agent-messages/index.ts`) writes the body of every
+- **What:** `formatAgentMessage` (`agent-messages/envelope.ts`) writes the body of every
   agent-sent envelope, `agent-message` and every `agent-notification`, as the sender's bytes,
-  and marks the envelope `body="raw"`. Upstream XML-escapes every body, so the model receives
-  `&lt;sha&gt;` and `&amp;&amp;` and can run the entity form as a command.
+  and marks the envelope `body="raw"`, after every upstream attribute (`event` included).
+  Upstream XML-escapes every body, so the model receives `&lt;sha&gt;` and `&amp;&amp;` and can
+  run the entity form as a command.
 - **The one escape kept:** only the envelope's own tag can end an envelope or open a second
   one. A raw body turns `<` before `paseo-system` or `/paseo-system`, in any letter case, into
   `&lt;`, and adds one `amp;` to an `&lt;` or `&amp;…lt;` already there. The entities match
   only in lower case, the case the escape writes, so any other spelling is never touched. The
   parser reverses exactly that escape, so every body round-trips byte for byte, and it refuses
-  a raw body that carries an unescaped envelope tag.
+  a raw body that carries an unescaped envelope tag. That escape is also what lets
+  `parseAgentMessages` split a batch at a literal closing tag.
 - **What it leaves alone:** an envelope without `body="raw"` decodes as upstream wrote it, and
   the human send path still quotes a pasted envelope as a fully escaped `user-message`. Every
-  reader goes through `parseAgentMessage`.
-- **Known limit:** a daemon without this patch reads a raw body as XML: a body with a raw `<`,
-  `>` or bare `&` falls back to a plain user row without its sender.
+  reader goes through `parseAgentMessage`; batch parsing, plural and heartbeat projection are
+  upstream's.
+- **Known limit:** a daemon without this patch reads raw history as XML: a body with a raw
+  `<`, `>` or bare `&` falls back to a plain user row without its sender. A cross-host send
+  carries no envelope: the receiving daemon formats it (`host-operations/index.ts`,
+  `agent-messages/delivery.ts`), so a patched sender to an unpatched receiver gets the
+  receiver's escaping, and the limit is only about an unpatched parser reading raw history.
+- **Upstream assertions adapted:** `connected-hosts/hosts.e2e.test.ts` (the remote report
+  arrives as `REMOTE_REPORT <ready>`) and the two exact envelopes in
+  `agent-messages/delivery.test.ts`'s batch case, each with a comment naming the patch.
+  `agent-manager.test.ts`'s escaped envelope is a deliberate legacy input and stays.
 - **Tests:** `agent-message-raw-body.slp.test.ts` drives `formatAgentMessage`,
-  `parseAgentMessage` and `prepareAgentMessage` directly, the same rows as the upstream PR's
-  `agent-prompt.test.ts`.
+  `parseAgentMessage` and `prepareAgentMessage` through the `agent-messages/index.ts` barrel,
+  the same rows as the upstream PR's `agent-prompt.test.ts`.
 
 ## agent-send-interrupt
 

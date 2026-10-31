@@ -263,15 +263,16 @@ test("batches retain each sender's attachment context and image order", async ()
     ],
   });
   await delivery.close();
+  // SLP-PATCH(agent-message-raw-body): an agent-sent envelope carries body="raw".
   expect(prompt).toEqual([
     {
       type: "text",
-      text: '<paseo-system version="1" kind="agent-message" source-agent-id="one" message-id="first">\nFirst\n</paseo-system>',
+      text: '<paseo-system version="1" kind="agent-message" source-agent-id="one" message-id="first" body="raw">\nFirst\n</paseo-system>',
     },
     firstImage,
     {
       type: "text",
-      text: '<paseo-system version="1" kind="agent-message" source-agent-id="two" message-id="second">\nSecond\n\nGitHub Issue #42: Context\nhttps://example.com/42\n\nAttached\n</paseo-system>',
+      text: '<paseo-system version="1" kind="agent-message" source-agent-id="two" message-id="second" body="raw">\nSecond\n\nGitHub Issue #42: Context\nhttps://example.com/42\n\nAttached\n</paseo-system>',
     },
     secondImage,
   ]);

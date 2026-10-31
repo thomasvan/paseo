@@ -1,5 +1,5 @@
 // SLP-PATCH coverage (agent-message-raw-body).
-// Lives in its own file so agent-prompt.test.ts stays upstream's; the same rows are
+// Lives in its own file so the upstream tests stay upstream's; the same rows are
 // in the upstream PR's agent-prompt.test.ts.
 import { expect, test } from "vitest";
 
@@ -74,6 +74,13 @@ test("an agent envelope written with an XML-escaped body decodes as before", () 
     source: { kind: "agent-message", agentId: "remote::sender" },
     text: "Review <changes> & report back.",
   });
+});
+
+test("an envelope naming a body encoding other than raw is not read as an agent message", () => {
+  const written =
+    '<paseo-system version="1" kind="agent-message" source-agent-id="sender" message-id="m1" body="xml">\nplain\n</paseo-system>';
+
+  expect(parseAgentMessage(written)).toBeNull();
 });
 
 test("the human send path quotes a pasted raw-body envelope, fully escaped", () => {
