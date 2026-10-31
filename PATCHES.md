@@ -179,14 +179,25 @@ and wakes every `startTurn` waiting on it.
   releases its runtime after its first history read, in a `try`/`finally`, so a read that
   completes, throws, is abandoned early, or whose capture prompt rejects before it begins all
   release. Only a completed read is cached and replayed to later calls.
-  `requestEntryCapture`'s pending result carries a no-op `catch`, so the release cannot surface
-  as an unhandled rejection.
-- **Why:** a pi history read needs the live runtime (`get_messages` has no file to read), and
-  without the release every archived pi agent whose history is read keeps a runtime resident
+  `requestEntryCapture`'s pending result carries a no-op `catch`: `close()` rejects pending
+  extension results, so without it a capture prompt that rejects first leaves a rejection
+  nothing awaits.
+- **Why:** the pi handle's `nativeHandle` is the session file (`describePersistence`, and
+  resume reads it), but the history read goes through the live runtime: the entry capture and
+  `get_messages`. Without the release, every archived pi agent whose history is read keeps a
+  runtime resident. Upstream's idle-runtime release (`canStopRuntime`, #7782) also collects it
+  while `agents.idleRuntimeCleanup` is on; the room runs it off, so there the runtime stays
   for the rest of the daemon's life.
-- **Tests:** `providers/pi/agent.test.ts`, the `resumeSession purpose: history` suite.
-- **Retire when:** upstream releases a history-purpose pi runtime itself, or at the first sync
-  where this patch conflicts while upstream has not taken it.
+- **Better design:** upstream PR [#4473](https://github.com/getpaseo/paseo/pull/4473) (open)
+  reads the JSONL session file directly and returns the whole history with no runtime. That
+  is this patch's natural successor.
+- **Tests:** `providers/pi/agent.test.ts`, the `resumeSession purpose: history` suite: a
+  completed read, an interactive control, an abandoned read, a capture rejection, and a
+  `getMessages()` rejection after a successful capture.
+- **Retire when:** upstream releases a history-purpose pi runtime itself or reads history
+  without one (#4473), or at the first sync where this patch conflicts in `pi/agent.ts` while
+  upstream has not taken it. A collision of test blocks at the end of `pi/agent.test.ts` is
+  not such a conflict.
 
 ## agent-message-raw-body
 

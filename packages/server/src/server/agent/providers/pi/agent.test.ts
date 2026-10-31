@@ -3682,6 +3682,22 @@ describe("PiRpcAgentSession resumeSession purpose: history", () => {
     await assertion;
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
+
+  test("releases the runtime when getMessages() rejects after a successful capture", async () => {
+    const { pi, session } = await resumeForHistory();
+    const fakeSession = pi.latestSession();
+    const closeSpy = vi.spyOn(fakeSession, "close");
+    const readError = new Error("get_messages failed");
+    vi.spyOn(fakeSession, "getMessages").mockRejectedValueOnce(readError);
+
+    const firstRead = (async () => {
+      for await (const _event of session.streamHistory()) {
+        // never reached: the read rejects before any event
+      }
+    })();
+    await expect(firstRead).rejects.toThrow(readError);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 test("pi runtime safety protects queued replies and runtime-owned activity", async () => {

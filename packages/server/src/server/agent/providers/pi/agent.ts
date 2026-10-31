@@ -1454,11 +1454,12 @@ export class PiRpcAgentSession implements AgentSession {
       completed = true;
     } finally {
       if (this.resumePurpose === "history") {
-        // A history-purpose resume only needs this one read: the `get_messages`
-        // RPC above requires the live Pi runtime (there is no session file the
-        // server can read directly), so release the runtime now rather than
-        // holding it for the rest of this agent's (unbounded) resumed
-        // lifetime. That release must happen whether the capture prompt
+        // A history-purpose resume only needs this one read. The read goes
+        // through the live Pi runtime (the entry capture and `get_messages`
+        // above), although the handle's nativeHandle is the session file a
+        // reader could parse directly (upstream PR #4473), so release the
+        // runtime now rather than holding it for the rest of this agent's
+        // resumed lifetime. That release must happen whether the capture prompt
         // rejected before the read began, the read finished, threw mid-fetch,
         // or was abandoned early (the finally runs on all four), or the
         // runtime leaks exactly the way this branch exists to stop.
