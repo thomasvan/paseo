@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SendMessageOptions } from "@getpaseo/client";
 import { createCli } from "../../cli.js";
 
+// The client acknowledges an agent's send with a queued receipt, which the CLI
+// reads under --no-wait.
 const sendAgentMessage = vi.fn(
-  async (_agentId: string, _text: string, _options?: SendMessageOptions) => undefined,
+  async (_agentId: string, _text: string, _options?: SendMessageOptions) => ({
+    deliveryStatus: "queued" as const,
+  }),
 );
 
 vi.mock("../../utils/client.js", () => ({

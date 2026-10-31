@@ -222,22 +222,39 @@ and wakes every `startTurn` waiting on it.
 ## agent-send-interrupt
 
 - **What:** an agent's send into a running turn interrupts it unless it asks for `steer`, on
-  both agent paths: MCP `send_agent_prompt` with an agent-scoped server (`paseo-tools.ts`, the
-  handler default and the schema text) and `paseo send` with `PASEO_AGENT_ID` set
-  (`cli/src/commands/agent/send.ts`). Upstream defaults agent callers to `steer`.
+  the three surfaces where an agent's send is decided. Upstream defaults agent callers to
+  `steer` on each:
+  - MCP `send_agent_prompt` on an agent-scoped server (`tools/paseo-tools.ts`, the handler
+    default and the schema text);
+  - `paseo send` with `PASEO_AGENT_ID` set (`cli/src/commands/agent/send.ts`), which always
+    sends the field;
+  - MCP `send_agent_prompt` with a `serverId` naming another host
+    (`host-operations/index.ts`). That call is routed before the local handler, so the
+    local default never reaches it.
 - **Why:** a steered correction can be ignored by a turn that goes on to finish its original
   task, and the sender never learns.
 - **Where the default is decided:** at each sender, because the daemon cannot tell an explicit
-  `steer` from a defaulted one; the CLI always sends the field.
-- **What it leaves alone:** sends the daemon makes itself. A finish notification still steers
-  into the caller's running turn, and top-level sends (the app, the RPC, the Hub, voice) are
-  upstream's.
+  `steer` from a defaulted one.
+- **What it leaves alone:** sends the daemon makes itself (a finish notice enqueues as `steer`
+  into the caller's running turn), and top-level sends: the app, the Hub, voice, and direct
+  RPC sends, including RPC sends that carry `sourceAgentId` (`session.ts`), which keep
+  upstream's steer default.
+- **Batching:** an agent-scoped send is queued and delivered after two quiet seconds for its
+  recipient (`agent-messages/delivery.ts`). Delivery splits adjacent messages whose
+  behaviour or session mode differs into ordered groups, each dispatched after the previous
+  group's dispatch is acknowledged. So a seat's interrupt that lands in the same window as a
+  pending finish notice is dispatched on its own, before or after the notice in arrival
+  order, and no longer shares the notice's dispatch. Neither group waits for the recipient's
+  turn to end.
 - **Known limit:** an upstream `paseo` CLI on a seat's `PATH` still sends an explicit `steer`
   for an agent caller, and the daemon honours it.
 - **Tests:** upstream's `send_agent_prompt` dispatch table in `mcp-server.test.ts`, whose
   agent-scoped default row expects an interrupt and whose steer cases ask for `steer`; the
-  CLI's `send.slp.test.ts`. `skills/paseo/SKILL.md`, `public-docs/cli.md` and
-  `public-docs/orchestration-workflows.md` state the default.
+  remote table in `host-operations/index.slp.test.ts` (omitted, explicit steer, explicit
+  interrupt, and a human caller as the control); the CLI's `send.slp.test.ts`; the batching
+  rows in `agent-messages/delivery.slp.test.ts` (both arrival orders, and a held first
+  acknowledgement). `skills/paseo/SKILL.md`, `public-docs/cli.md`,
+  `public-docs/orchestration-workflows.md` and their `zh-CN` copies state the default.
 
 ## interrupted-turn-terminals
 

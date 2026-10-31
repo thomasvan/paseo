@@ -299,7 +299,7 @@ paseo send <id> --no-wait "run this task"
 paseo send <id> --behavior interrupt "stop and do this instead"
 ```
 
-由 Agent 发起的发送（设置了 `PASEO_AGENT_ID`）默认引导正在进行的轮次。其他发送默认中断它。使用 `--behavior steer` 或 `--behavior interrupt` 覆盖默认行为。引导使用与客户端相同的后备方式：如果无法引导，正在进行的轮次会被中断并替换。
+发送默认中断正在进行的轮次，由 Agent 发起的发送（设置了 `PASEO_AGENT_ID`）也是如此。使用 `--behavior steer` 加入正在进行的轮次。引导使用与客户端相同的后备方式：如果无法引导，正在进行的轮次会被中断并替换。
 
 ## 查看日志 {#viewing-logs}
 

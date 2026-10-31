@@ -271,9 +271,11 @@ export function createHostResolver(input: {
                   : undefined,
                 sourceAgentId: input.callerAgentId,
                 sourceAgentServerId: input.callerAgentId ? input.serverId : undefined,
+                // SLP-PATCH(agent-send-interrupt): a send routed to another host by
+                // `serverId` interrupts unless it asks to steer, an agent caller
+                // included, as on this host (upstream steers for agent callers).
                 activeTurnBehavior:
-                  (args.activeTurnBehavior as ActiveTurnBehavior | undefined) ??
-                  (input.callerAgentId ? "steer" : "interrupt"),
+                  (args.activeTurnBehavior as ActiveTurnBehavior | undefined) ?? "interrupt",
               })
               .catch((error) => {
                 if (isAmbiguousPromptFailure(error)) throw error;
