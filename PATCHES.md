@@ -58,18 +58,23 @@ The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-r
 A patch's tests sit in a fork-only `.slp.test.ts` file where upstream owns the file beside the
 code, so the upstream file stays upstream's and never conflicts on merge:
 `native-tools-gate.slp.test.ts`, `mcp-protocol-version-clip.slp.test.ts`,
-`agent-message-raw-body.slp.test.ts`, `agent-messages/delivery.slp.test.ts`,
-`finish-subscriptions/finish-subscriptions.slp.test.ts`,
+`agent-message-raw-body.slp.test.ts`, `finish-subscriptions/finish-subscriptions.slp.test.ts`,
 `finish-subscriptions/internal/observation-stream.slp.test.ts`,
 `host-operations/index.slp.test.ts`, `providers/codex-interrupted-turn-terminals.slp.test.ts`,
 `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` and, in the CLI package,
 `commands/agent/send.slp.test.ts`. The other patches extend upstream's own suites, beside the
 cases they change. Every patch test fails under at least one mutant of its patch's lines, and
-together they kill every such mutant an earlier, larger set of tests killed.
+together they kill every such mutant an earlier, larger set of tests killed. Each fork guard
+listed next fails instead under a mutant of the upstream behaviour it guards.
 
-Five fork tests or groups guard upstream behaviour this fork depends on and no upstream test
+Six fork tests or groups guard upstream behaviour this fork depends on and no upstream test
 guards. Each leaves when upstream adds an equivalent:
 
+- `agent-messages/delivery.slp.test.ts`: delivery dispatches adjacent messages whose
+  behaviour differs as separate groups, in arrival order, each after the previous group's
+  acknowledgement and none waiting for a turn to end. `agent-send-interrupt` relies on it
+  (see its _Batching_). The rows pass explicit behaviours, so they never reach the sender
+  default; mutants of delivery's grouping and serialization turn them red.
 - `schedule/service.test.ts`, `refuses a manual run while a scheduled claim is in flight`:
   the reservation of a schedule before its claim. With the reservation moved after the claim,
   no other test fails.
@@ -114,11 +119,15 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
     the top of `observeState`). A local observe opens with a synthetic `turn_started` with no
     `turnId` and the current snapshot, so it opens the gate only on a running child; a remote
     host re-fetches the snapshot per event, so the real event's `turnId` opens it after a fast
-    turn. Opening writes the record without the field, once per waiting-to-open change.
+    turn. Opening writes the record without the field, once per waiting-to-open change; a
+    write that fails stays owed and is retried with the subscription's backoff, and a graceful
+    close makes one last attempt, so a restart still reads the turn.
   - **Re-arm** is one serialized, abort-checked `put` of the oldest captured record, with
     `awaitingTurn: true` unless a turn was observed since the delivered terminal, then removal
     of the other captured ids. The abort check stops a superseded watch's late write from
-    bringing back a record that `accept` removed.
+    bringing back a record that `accept` removed. After a re-arm, each queued terminal is
+    judged by its own stamp (below), never by a turn that is merely pending, because a repeat
+    of the acknowledged turn can still be queued ahead of a later turn's finish.
   - **Recovery** starts the gate waiting only when every record in a caller-child-server group
     awaits, so a fresh registration is not hidden behind an older re-armed record.
   - **Outcomes** (the room's D-Q2): an archived child sends `was closed` and disarms; while the
@@ -156,8 +165,10 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
 - **Tests:** `finish-subscriptions.slp.test.ts` drives `createFinishSubscriptions` on the real
   JSON store through the real `openFinishObservation` over a child fake that publishes what
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
-  stop; `internal/observation-stream.slp.test.ts` drives the gate signal and the queue on the
-  `Host` fake.
+  stop, a repeated completion (streamed, or supplied first by the initial wait) queued behind
+  the acknowledged finish while a later turn is pending, and a rejected gate-open write
+  followed by a mid-turn close and recovery; `internal/observation-stream.slp.test.ts` drives
+  the gate signal and the queue on the `Host` fake.
 - **Adapted upstream rows:** ten upstream tests expect the one-shot behaviour, and each is
   adapted in place with a comment naming the patch. Eight change only their store assertion,
   to one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
@@ -181,7 +192,8 @@ and opens both qualified children in ordinary conversations`, prompts each child
   MCP initial prompt, then a prompt from the UI), so the parent now hears two finishes per
   child: its two `Agent finished` button checks expect two each, and the fleet helper's
   `expectCompletion` (`e2e/support/helpers/subagents.ts`, called only by this test) takes the
-  exact count instead of a fixed one.
+  exact count instead of a fixed one. With `rearms` limited to `was closed` (a `finished`
+  disarms), the spec fails at `expectCompletion(fleet.local, 2)`: expected 2, received 1.
 
   The tenth, `failed removal after dispatch acknowledgment retries only storage, preserving
 the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
@@ -362,12 +374,12 @@ and wakes every `startTurn` waiting on it.
   turn to end.
 - **Known limit:** an upstream `paseo` CLI on a seat's `PATH` still sends an explicit `steer`
   for an agent caller, and the daemon honours it.
-- **Tests:** upstream's `send_agent_prompt` dispatch table in `mcp-server.test.ts`, whose
-  agent-scoped default row expects an interrupt and whose steer cases ask for `steer`; the
-  remote table in `host-operations/index.slp.test.ts` (omitted, explicit steer, explicit
-  interrupt, and a human caller as the control); the CLI's `send.slp.test.ts`; the batching
-  rows in `agent-messages/delivery.slp.test.ts` (both arrival orders, and a held first
-  acknowledgement). `skills/paseo/SKILL.md`, `public-docs/cli.md`,
+- **Tests:** the guards of the sender default are upstream's `send_agent_prompt` dispatch table
+  in `mcp-server.test.ts`, whose agent-scoped default row expects an interrupt and whose steer
+  cases ask for `steer`; the remote table in `host-operations/index.slp.test.ts` (omitted,
+  explicit steer, explicit interrupt, and a human caller as the control); and the CLI's
+  `send.slp.test.ts`. The batching account rests on `agent-messages/delivery.slp.test.ts`, a
+  fork guard of upstream delivery (see _Where the tests live_). `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md` and their `zh-CN` copies state the default.
 
 ## interrupted-turn-terminals
@@ -563,7 +575,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-41 wakeup-each                             3 replace-awaits-teardown
+46 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
 10 interrupted-turn-terminals              2 force-cancel-releases-foreground
  8 agent-send-interrupt                    2 detached-arg
@@ -572,7 +584,7 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  4 mcp-protocol-version-clip
 ```
 
-`wakeup-each`'s 41 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
+`wakeup-each`'s 46 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
 fork test files and the five adapted upstream rows there), one in `bootstrap.ts`, one in
 `mcp-server.test.ts` (its adapted row), two in `connected-hosts/hosts.e2e.test.ts` (its
 adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one
