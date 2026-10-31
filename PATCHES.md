@@ -101,8 +101,8 @@ replay, and close() afterward is a no-op`: an ACP history read releases its proc
 
 Three patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.test.ts` or
 `mcp-parity.e2e.test.ts` (the server's `test:integration` list names neither), so a sync runs
-them by hand; `connected-hosts/hosts.e2e.test.ts` is in that list and carries an adapted
-assertion, and a sync runs it by hand too. See `Sync procedure`.
+them by hand; `connected-hosts/hosts.e2e.test.ts` is in that list and carries adapted
+assertions, and a sync runs it by hand too. See `Sync procedure`.
 
 ## wakeup-each
 
@@ -158,9 +158,9 @@ assertion, and a sync runs it by hand too. See `Sync procedure`.
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
   stop; `internal/observation-stream.slp.test.ts` drives the gate signal and the queue on the
   `Host` fake.
-- **Adapted upstream rows:** seven upstream assertions expect the one-shot removal, and each is
-  adapted in place with a comment naming the patch. Six change only their store assertion, to
-  one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
+- **Adapted upstream rows:** nine upstream assertions expect the one-shot removal, and each is
+  adapted in place with a comment naming the patch. Eight change only their store assertion,
+  to one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
   - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
     (D-Q2's mid-turn rule; the fake's child is stored `closed` with no archive stamp):
     `retains intent until parent dispatch acknowledgment, then restart sends nothing`,
@@ -171,8 +171,12 @@ assertion, and a sync runs it by hand too. See `Sync procedure`.
     guard that a re-armed watch pins no caller.
   - `mcp-server.test.ts`, after a `finished`: both rows of `reports %s permission requests and
 final completion`.
+  - `connected-hosts/hosts.e2e.test.ts`, after a remote `finished`: `durable remote finish
+intent survives origin restart and unavailable-host recovery` and `remote finish observation
+survives a permission checkpoint until resumed completion`. Their restart, availability,
+    permission and wait assertions stay as upstream wrote them.
 
-  The seventh, `failed removal after dispatch acknowledgment retries only storage, preserving
+  The ninth, `failed removal after dispatch acknowledgment retries only storage, preserving
 the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
   so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
   older record and removes the other, and that removal is the one that fails.
@@ -552,7 +556,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-36 wakeup-each                             3 replace-awaits-teardown
+38 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
 10 interrupted-turn-terminals              2 force-cancel-releases-foreground
  8 agent-send-interrupt                    2 detached-arg
@@ -561,9 +565,10 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  4 mcp-protocol-version-clip
 ```
 
-`wakeup-each`'s 36 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
-fork test files and the five adapted upstream rows there), one in `bootstrap.ts` and one in
-`mcp-server.test.ts` (its adapted row).
+`wakeup-each`'s 38 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
+fork test files and the five adapted upstream rows there), one in `bootstrap.ts`, one in
+`mcp-server.test.ts` (its adapted row) and two in `connected-hosts/hosts.e2e.test.ts` (its
+adapted rows).
 
 Then merge and verify:
 
@@ -632,8 +637,8 @@ vt packages/server/src/server/agent/providers/pi/agent.test.ts
 vt packages/server/src/server/agent/providers/acp-agent.test.ts
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/bootstrap.smoke.test.ts
-# The end-to-end suites: upstream CI never runs the first two, and the third carries an
-# adapted assertion. Run them below a one-minute load of 16; a timeout at the 5 s default
+# The end-to-end suites: upstream CI never runs the first two, and the third carries
+# adapted assertions. Run them below a one-minute load of 16; a timeout at the 5 s default
 # is load.
 vt packages/server/src/server/agent/mcp-parity.e2e.test.ts --testTimeout=30000
 vt packages/server/src/server/agent/agent-mcp.e2e.test.ts --testTimeout=30000

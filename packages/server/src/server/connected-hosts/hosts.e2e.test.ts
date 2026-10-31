@@ -1858,7 +1858,11 @@ test(
     expect(parentPrompts[0]).toContain(`Agent ${childId}`);
     expect(parentPrompts[0]).toContain(`Server: ${remoteId}`);
     expect(parentPrompts[0]).toContain('event="finished"');
-    await expect.poll(() => records(restarted.paseoHome), { timeout: 5000 }).toEqual([]);
+    // SLP-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+    // awaiting a turn.
+    await expect
+      .poll(() => records(restarted.paseoHome), { timeout: 5000 })
+      .toEqual([expect.objectContaining({ childAgentId: childId, awaitingTurn: true })]);
   },
 );
 
@@ -1934,17 +1938,19 @@ test(
     finish.resolve();
     await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(2);
     expect(parentPrompts[1]).toContain('event="finished"');
+    // SLP-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+    // awaiting a turn, where upstream removes it.
     await expect
-      // Provider start precedes dispatch acknowledgment and the durable removal commit.
+      // Provider start precedes dispatch acknowledgment and the durable re-arm commit.
       .poll(
         async () =>
           JSON.parse(await readFile(join(a.paseoHome, "finish-subscriptions.json"), "utf8")),
         {
           timeout: 10000,
-          message: "Parent accepted completion; waiting for durable intent removal",
+          message: "Parent accepted completion; waiting for the re-armed record",
         },
       )
-      .toEqual([]);
+      .toEqual([expect.objectContaining({ childAgentId: childId, awaitingTurn: true })]);
   },
 );
 
