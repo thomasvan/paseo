@@ -301,7 +301,10 @@ and wakes every `startTurn` waiting on it.
   `completed` item drops its id; a `failed` one keeps it, because Codex reports an interrupted
   turn's still-running command as failed. A turn that ends any way but `interrupted` forgets
   its ids, so what an earlier turn left running on purpose is never ended. At most 16 turns are
-  remembered.
+  remembered, including accepted interrupts with no commands yet. After acknowledgement,
+  the record stays in an interrupt-accepted state: a late root start is terminated at once,
+  even when notification conversion held it in the queue. Each process is terminated once,
+  and late termination calls join the cleanup the next turn waits for.
 - **What it never does:** send `thread/backgroundTerminals/clean`, which ends every terminal on
   the thread. It ends nothing after an already-idle interrupt, nothing on a subagent's thread,
   and nothing after an interrupt of a turn Codex never identified.
@@ -310,11 +313,12 @@ and wakes every `startTurn` waiting on it.
   at most the interrupt's bound plus one terminate's plus 500 ms.
 - **Known limit:** archive and reload close the Codex app-server, which ends every terminal of
   the session, an earlier turn's included; that is upstream's behaviour, not this patch's.
-- **Retire when:** Codex ends an interrupted turn's commands itself, or at the first sync where
-  this patch conflicts while upstream has not taken it. If `list` gains a turn id,
-  match on it instead of the record.
+- **Retire when:** Codex ends an interrupted turn's commands itself. If `list` gains a turn
+  id, match on it instead of the record.
 - **Tests:** `codex-interrupted-turn-terminals.slp.test.ts` drives a real session against the
-  scripted app-server in `codex/test-utils/fake-app-server.ts`.
+  scripted app-server in `codex/test-utils/fake-app-server.ts`. It covers ownership,
+  autonomous next turns, queued and post-acknowledgement starts, completed versus failed
+  commands, deduplication, the 16-turn bound and bounded cleanup before the next start.
 
 ## interrupted-turn-tasks
 
@@ -462,7 +466,7 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
 
 ```
 16 interrupted-turn-tasks                  3 replace-awaits-teardown
- 9 interrupted-turn-terminals              2 interrupt-releases-foreground
+10 interrupted-turn-terminals              2 interrupt-releases-foreground
  8 agent-send-interrupt                    2 force-cancel-releases-foreground
  6 native-tools-injection-independent      2 detached-arg
  5 agent-message-raw-body                  1 dispose-releases-foreground

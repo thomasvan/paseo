@@ -3504,7 +3504,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   // process ids, keyed by the native turn that started them. Codex's
   // `thread/backgroundTerminals/list` carries no turn, so `item/started` is the only
   // record of which turn owns a process.
-  private terminalProcessIdsByTurnId = new Map<string, Set<string>>();
+  private terminalProcessIdsByTurnId = new Map<
+    string,
+    { processIds: Set<string>; terminatedProcessIds: Set<string>; interruptAccepted: boolean }
+  >();
   private interruptedTurnCleanup: Promise<void> | null = null;
   private pendingUnlabeledTerminalInteractions = new Map<
     string,
@@ -5201,29 +5204,47 @@ export class CodexAppServerAgentSession implements AgentSession {
     ) {
       return;
     }
-    const processIds = this.terminalProcessIdsByTurnId.get(parsed.turnId);
+    const record = this.terminalProcessIdsByTurnId.get(parsed.turnId);
     if (parsed.kind === "item_completed") {
       // Only a completed command has exited. A failed one can still be running:
       // Codex reports an interrupted turn's live command as failed.
-      if (parsed.item.status === "completed") processIds?.delete(processId);
+      if (parsed.item.status === "completed") record?.processIds.delete(processId);
       return;
     }
-    if (processIds) {
-      processIds.add(processId);
-      return;
+    const current = record ?? this.getTurnTerminalRecord(parsed.turnId);
+    current.processIds.add(processId);
+    if (current.interruptAccepted && this.client) {
+      this.trackInterruptedTurnCleanup(
+        this.endInterruptedTurnProcesses(this.client, parsed.threadId, parsed.turnId),
+      );
     }
-    this.terminalProcessIdsByTurnId.set(parsed.turnId, new Set([processId]));
-    for (const turnId of this.terminalProcessIdsByTurnId.keys()) {
+  }
+
+  // SLP-PATCH(interrupted-turn-terminals): accepted interrupts also need a record
+  // when every start is still queued behind a notification conversion.
+  private getTurnTerminalRecord(turnId: string) {
+    const existing = this.terminalProcessIdsByTurnId.get(turnId);
+    if (existing) return existing;
+    const record = {
+      processIds: new Set<string>(),
+      terminatedProcessIds: new Set<string>(),
+      interruptAccepted: false,
+    };
+    this.terminalProcessIdsByTurnId.set(turnId, record);
+    for (const oldestTurnId of this.terminalProcessIdsByTurnId.keys()) {
       if (this.terminalProcessIdsByTurnId.size <= INTERRUPTED_TURN_TRACKED_TURNS) break;
-      this.terminalProcessIdsByTurnId.delete(turnId);
+      this.terminalProcessIdsByTurnId.delete(oldestTurnId);
     }
+    return record;
   }
 
   // SLP-PATCH(interrupted-turn-terminals)
   private trackInterruptedTurnCleanup(cleanup: Promise<void>): void {
-    const tracked = cleanup.finally(() => {
-      if (this.interruptedTurnCleanup === tracked) this.interruptedTurnCleanup = null;
-    });
+    const tracked = Promise.all([this.interruptedTurnCleanup, cleanup])
+      .then(() => undefined)
+      .finally(() => {
+        if (this.interruptedTurnCleanup === tracked) this.interruptedTurnCleanup = null;
+      });
     this.interruptedTurnCleanup = tracked;
   }
 
@@ -5236,12 +5257,16 @@ export class CodexAppServerAgentSession implements AgentSession {
     threadId: string | null,
     turnId: string,
   ): Promise<void> {
-    const processIds = this.terminalProcessIdsByTurnId.get(turnId);
-    this.terminalProcessIdsByTurnId.delete(turnId);
-    if (!threadId || !processIds || processIds.size === 0) return;
+    if (!threadId) return;
+    const record = this.getTurnTerminalRecord(turnId);
+    record.interruptAccepted = true;
+    const processIds = [...record.processIds].filter(
+      (processId) => !record.terminatedProcessIds.has(processId),
+    );
+    for (const processId of processIds) record.terminatedProcessIds.add(processId);
     const logContext = { agentId: this.agentId, provider: CODEX_PROVIDER, threadId, turnId };
     await Promise.all(
-      [...processIds].map(async (processId) => {
+      processIds.map(async (processId) => {
         try {
           const response = await client.request(
             "thread/backgroundTerminals/terminate",
@@ -5265,11 +5290,13 @@ export class CodexAppServerAgentSession implements AgentSession {
   // SLP-PATCH(interrupted-turn-terminals): a new turn starts only after the last
   // interrupted turn's commands are ended, or after the bound, whichever is first.
   private async waitForInterruptedTurnCleanup(): Promise<void> {
-    const cleanup = this.interruptedTurnCleanup;
-    if (!cleanup) return;
+    if (!this.interruptedTurnCleanup) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = await Promise.race([
-      cleanup.then(() => false),
+      (async () => {
+        while (this.interruptedTurnCleanup) await this.interruptedTurnCleanup;
+        return false;
+      })(),
       new Promise<boolean>((resolve) => {
         timer = setTimeout(() => resolve(true), INTERRUPTED_TURN_CLEANUP_WAIT_MS);
       }),

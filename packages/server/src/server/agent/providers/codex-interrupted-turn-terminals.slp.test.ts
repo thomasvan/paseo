@@ -1,6 +1,8 @@
 // SLP-PATCH coverage (interrupted-turn-terminals).
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import * as providerImageOutput from "./provider-image-output.js";
+
 import type { AgentSession } from "../agent-sdk-types.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import { CodexAppServerAgentSession } from "./codex-app-server-agent.js";
@@ -33,6 +35,7 @@ let sessions: AgentSession[] = [];
 afterEach(async () => {
   for (const session of sessions) await session.close().catch(() => undefined);
   sessions = [];
+  vi.restoreAllMocks();
 });
 
 /**
@@ -199,6 +202,186 @@ describe("an interrupted Codex turn's commands end before the next turn", () => 
     answer.resolve();
     await next;
     expect(harness.requests("turn/start")).toHaveLength(3);
+  });
+
+  test("terminates a queued start after interrupt acknowledgement and waits for its answer", async () => {
+    const conversion = deferred<{ path: string }>();
+    const materialize = vi
+      .spyOn(providerImageOutput, "materializeProviderImage")
+      .mockImplementationOnce(() => conversion.promise);
+    const answer = deferred();
+    const harness = createHarness({
+      terminate: () => answer.promise.then(() => ({ terminated: true })),
+    });
+    await harness.startTurn("run a command", "native-B");
+    harness.appServer.child.stdout.write(
+      JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "native-B",
+          item: {
+            id: "held-image",
+            type: "imageGeneration",
+            status: "completed",
+            result: { data: "aGVsbG8=", mimeType: "image/png" },
+          },
+        },
+      }) + "\n",
+    );
+    await vi.waitFor(() => expect(materialize).toHaveBeenCalledTimes(1));
+    harness.appServer.startsTerminalCommand({
+      threadId: THREAD,
+      turnId: "native-B",
+      itemId: "exec-201",
+      processId: "201",
+      command: "sleep 201",
+    });
+    await harness.session.interrupt();
+    expect(harness.terminated()).toEqual([]);
+    conversion.resolve({ path: "/tmp/held-image.png" });
+    await vi.waitFor(() => expect(harness.terminated()).toEqual(["201"]));
+    const next = harness.startTurn("correction", "native-C");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(harness.requests("turn/start")).toHaveLength(1);
+    answer.resolve();
+    await next;
+    harness.appServer.assertNoErrors();
+  });
+
+  test.each(["initial", "late"] as const)(
+    "tracks both cleanup sweeps when the %s answer arrives first",
+    async (answeredFirst) => {
+      const first = deferred();
+      const second = deferred();
+      const harness = createHarness({
+        terminate: (processId) =>
+          (processId === "201" ? first : second).promise.then(() => ({ terminated: true })),
+      });
+      await harness.startTurn("run commands", "native-B");
+      await harness.runsCommand({ turnId: "native-B", processId: "201" });
+      await harness.session.interrupt();
+      await vi.waitFor(() => expect(harness.terminated()).toEqual(["201"]));
+      const next = harness.startTurn("correction", "native-C");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(harness.requests("turn/start")).toHaveLength(1);
+      // The next turn is already waiting when another process is announced.
+      harness.appServer.startsTerminalCommand({
+        threadId: THREAD,
+        turnId: "native-B",
+        itemId: "late-202",
+        processId: "202",
+        command: "sleep 202",
+      });
+      harness.appServer.startsTerminalCommand({
+        threadId: THREAD,
+        turnId: "native-B",
+        itemId: "duplicate-202",
+        processId: "202",
+        command: "sleep 202",
+      });
+      await vi.waitFor(() => expect(harness.terminated()).toEqual(["201", "202"]));
+      (answeredFirst === "initial" ? first : second).resolve();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(harness.requests("turn/start")).toHaveLength(1);
+      (answeredFirst === "initial" ? second : first).resolve();
+      await next;
+      expect(harness.terminated()).toEqual(["201", "202"]);
+      // Accepted state survives the completed sweep and a newer foreground turn.
+      harness.appServer.startsTerminalCommand({
+        threadId: THREAD,
+        turnId: "native-B",
+        itemId: "late-203",
+        processId: "203",
+        command: "sleep 203",
+      });
+      await vi.waitFor(() => expect(harness.terminated()).toEqual(["201", "202", "203"]));
+      harness.appServer.assertNoErrors();
+    },
+  );
+
+  test("keeps the first sweep pending when a late sweep answers before the next start", async () => {
+    const first = deferred();
+    const harness = createHarness({
+      terminate: (processId) =>
+        processId === "201"
+          ? first.promise.then(() => ({ terminated: true }))
+          : { terminated: true },
+    });
+    await harness.startTurn("run commands", "native-B");
+    await harness.runsCommand({ turnId: "native-B", processId: "201" });
+    await harness.session.interrupt();
+    harness.appServer.startsTerminalCommand({
+      threadId: THREAD,
+      turnId: "native-B",
+      itemId: "late-202",
+      processId: "202",
+      command: "sleep 202",
+    });
+    await vi.waitFor(() => expect(harness.terminated()).toEqual(["201", "202"]));
+    const next = harness.startTurn("correction", "native-C");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(harness.requests("turn/start")).toHaveLength(1);
+    first.resolve();
+    await next;
+    harness.appServer.assertNoErrors();
+  });
+
+  test("forgets completed commands but retains failed commands at interrupt", async () => {
+    const harness = createHarness();
+    await harness.startTurn("run commands", "native-B");
+    for (const processId of ["201", "202"]) {
+      await harness.runsCommand({ turnId: "native-B", processId });
+      harness.appServer.child.stdout.write(
+        JSON.stringify({
+          method: "item/completed",
+          params: {
+            threadId: THREAD,
+            turnId: "native-B",
+            item: {
+              id: `exec-${processId}`,
+              type: "commandExecution",
+              processId,
+              command: `sleep ${processId}`,
+              status: processId === "201" ? "completed" : "failed",
+              exitCode: processId === "201" ? 0 : null,
+            },
+          },
+        }) + "\n",
+      );
+    }
+    // A following command's row is a barrier for both completion handlers.
+    await harness.runsCommand({ turnId: "native-B", processId: "203" });
+    await harness.session.interrupt();
+    await harness.startTurn("correction", "native-C");
+    expect(harness.terminated()).toEqual(["202", "203"]);
+    harness.appServer.assertNoErrors();
+  });
+
+  test("retains accepted interrupts for only the latest sixteen turns", async () => {
+    const harness = createHarness();
+    for (let index = 0; index < 17; index++) {
+      await harness.startTurn("run a command", `native-${index}`);
+      await harness.session.interrupt();
+    }
+    await harness.startTurn("correction", "native-current");
+    harness.appServer.startsTerminalCommand({
+      threadId: THREAD,
+      turnId: "native-0",
+      itemId: "evicted-201",
+      processId: "201",
+      command: "sleep 201",
+    });
+    harness.appServer.startsTerminalCommand({
+      threadId: THREAD,
+      turnId: "native-16",
+      itemId: "retained-202",
+      processId: "202",
+      command: "sleep 202",
+    });
+    await harness.runsCommand({ turnId: "native-current", processId: "301" });
+    expect(harness.terminated()).toEqual(["202"]);
+    harness.appServer.assertNoErrors();
   });
 
   test("a failing or unanswered terminate does not block or fail the next turn", async () => {
