@@ -61,8 +61,8 @@ code, so the upstream file stays upstream's and never conflicts on merge:
 cases they change. Every patch test fails under at least one mutant of its patch's lines, and
 together they kill every such mutant an earlier, larger set of tests killed.
 
-Four fork tests guard upstream behaviour this fork depends on and no upstream test guards.
-Each leaves when upstream adds an equivalent:
+Five fork tests or groups guard upstream behaviour this fork depends on and no upstream test
+guards. Each leaves when upstream adds an equivalent:
 
 - `schedule/service.test.ts`, `refuses a manual run while a scheduled claim is in flight`:
   the reservation of a schedule before its claim. With the reservation moved after the claim,
@@ -77,6 +77,21 @@ replay, and close() afterward is a no-op`: an ACP history read releases its proc
   archived agent resumed into memory for a history read stays out of a default
   `list_agents`. It stayed from the retired `archived-live-list` patch, whose fix upstream
   carries (#7532: `AgentDirectory` filters again after projection).
+- `mcp-parity.e2e.test.ts`, six finish-notification rows whose assertions this fork adapted:
+  at `v0.14.0` they fail unpatched, because #7370 added the sending host's `serverId` to a
+  notice's source and the assertions predate it. Upstream CI does not run this file, so the
+  failure went unnoticed. Each now asserts the test daemon's exact `serverId`, with a comment
+  naming this. They guard the create path's registration (detached and parented children), a
+  notice on Stop and on Reload, and a notice after `send_agent_prompt`:
+  - `create_agent 'detached' (reparent=false) sends 1 finish notification(s)`
+  - `create_agent 'subagent' (reparent=false) sends 1 finish notification(s)`
+  - `Stop tells the parent that a watched child was canceled`
+  - `Reload tells the parent that a watched child was canceled`
+  - `a watched child still reports 'finished' after send_agent_prompt`
+  - `a watched child still reports 'errored' after send_agent_prompt`
+
+  A seventh test in the file, `list_providers returns providers`, also fails at `v0.14.0`
+  unpatched: it times out at 30 s on the room's host. It is upstream's and left as it is.
 
 Three patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.test.ts` or
 `mcp-parity.e2e.test.ts` (the server's `test:integration` list names neither), so a sync runs

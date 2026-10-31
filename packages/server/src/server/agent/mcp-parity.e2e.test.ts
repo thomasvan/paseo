@@ -414,9 +414,13 @@ describe("Suite A: Core Fixes", () => {
             label: "caller finish notification",
             check: () => (callerPrompts.length > 0 ? true : null),
           });
+          // Fork guard of upstream behaviour (PATCHES.md, Where the tests live): upstream CI
+          // does not run this file, and this assertion predates #7370, which added the
+          // sending host's serverId to a notice's source.
           expect(parseAgentMessage(callerPrompts[0]).source).toEqual({
             kind: "agent-notification",
             agentId: childId,
+            serverId: daemon.daemon.getServerId(),
             title: "Notification child",
             event: "finished",
           });
@@ -527,9 +531,13 @@ describe("Suite A: Core Fixes", () => {
         });
         const notification = parseAgentMessage(parentPrompts[0]);
         expect(terminalEvents).toEqual(["turn_canceled"]);
+        // Fork guard of upstream behaviour (PATCHES.md, Where the tests live): upstream CI
+        // does not run this file, and this assertion predates #7370, which added the
+        // sending host's serverId to a notice's source.
         expect(notification.source).toEqual({
           kind: "agent-notification",
           agentId: childId,
+          serverId: daemon.daemon.getServerId(),
           title: "Watched child",
           event: "errored",
         });
@@ -587,12 +595,19 @@ describe("Suite A: Core Fixes", () => {
             return items.length > 0 ? items : null;
           },
         });
+        // Fork guard of upstream behaviour (PATCHES.md, Where the tests live): upstream CI
+        // does not run this file, and this assertion predates #7370, which added the
+        // sending host's serverId to a notice's source.
         expect(notifications).toEqual([
           expect.objectContaining({
             type: "tool_call",
             agentMessage: {
               event: outcome,
-              sender: { id: childId, title: "Follow-up child" },
+              sender: {
+                id: childId,
+                serverId: daemonHandle.daemon.getServerId(),
+                title: "Follow-up child",
+              },
               text: expect.stringContaining(`(Follow-up child) ${outcome}.`),
             },
           }),
