@@ -394,10 +394,14 @@ test("failed removal after dispatch acknowledgment retries only storage, preserv
   state.observation.waits[0]!.result.resolve(outcome("idle"));
   await until(() => state.delivery.prompts.length === 1);
   state.delivery.acknowledgments[0]!.resolve("steered");
-  await expect.poll(async () => (await state.store.list()).length, { timeout: 10000 }).toBe(0);
+  // SLP-PATCH(wakeup-each): a finish re-arms the watch in place instead of removing it, so the
+  // store keeps the one record, now awaiting a turn, and the same observation waits again.
+  await expect
+    .poll(async () => state.store.list(), { timeout: 10000 })
+    .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
   expect(state.delivery.prompts).toHaveLength(1);
   expect(state.delivery.prompts[0]).toContain("finished.");
-  expect(state.observation.waits).toHaveLength(1);
+  await until(() => state.observation.waits.length === 2);
 });
 
 test("shutdown during observation setup owns rejection of the already-canceled next result", async () => {
