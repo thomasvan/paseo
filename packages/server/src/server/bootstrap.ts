@@ -1464,6 +1464,8 @@ export async function createPaseoDaemon(
       const record = await agentStorage.get(agentId);
       return record ? !record.archivedAt : Boolean(agentManager.getAgent(agentId));
     },
+    // SLP-PATCH(wakeup-each): archive is written to storage before the runtime closes.
+    childArchived: async (agentId) => Boolean((await agentStorage.get(agentId))?.archivedAt),
     ...createFinishObservation({
       agentManager,
       agentStorage,

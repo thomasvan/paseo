@@ -34,7 +34,7 @@ is under _Where the tests live_.
 
 | Patch                                                                       | What it fixes                                                                                 | Upstream                                                                                                                                                   |
 | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a long-lived child, not only the first                         | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
+| [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a long-lived child, once each, across restarts                 | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
 | [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                                                     |
 | [`mcp-protocol-version-clip`](#mcp-protocol-version-clip)                   | an MCP client newer than the bundled SDK gets past `initialize`                               | PR [#4570](https://github.com/getpaseo/paseo/pull/4570), issue [#3009](https://github.com/getpaseo/paseo/issues/3009)                                      |
 | [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                                                     |
@@ -55,6 +55,8 @@ A patch's tests sit in a fork-only `.slp.test.ts` file where upstream owns the f
 code, so the upstream file stays upstream's and never conflicts on merge:
 `native-tools-gate.slp.test.ts`, `mcp-protocol-version-clip.slp.test.ts`,
 `agent-message-raw-body.slp.test.ts`, `agent-messages/delivery.slp.test.ts`,
+`finish-subscriptions/finish-subscriptions.slp.test.ts`,
+`finish-subscriptions/internal/observation-stream.slp.test.ts`,
 `host-operations/index.slp.test.ts`, `providers/codex-interrupted-turn-terminals.slp.test.ts`,
 `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` and, in the CLI package,
 `commands/agent/send.slp.test.ts`. The other patches extend upstream's own suites, beside the
@@ -100,27 +102,76 @@ assertion, and a sync runs it by hand too. See `Sync procedure`.
 
 ## wakeup-each
 
-- **What:** the finish watcher in `setupFinishNotification` (`agent-prompt.ts`) stays armed
-  after a finish. The idle `turn_completed` branch clears both per-cycle gates,
-  `hasSeenRunning` and `hasSeenTurn`, and sends `finished` with `{ terminal: false }`, so the
-  child's next observed turn notifies again and a repeated terminal event without one
-  notifies nothing. An archived caller's branch calls `stop()` before it returns, because a
-  watcher that outlives the first finish would otherwise hold its subscription for the child's
-  whole life.
+- **What:** a finish subscription in `agent/finish-subscriptions/` re-arms in place after an
+  acknowledged `finished` instead of being removed, behind a gate whose state its stored
+  record keeps as `awaitingTurn: true`. Upstream's subscription is one-shot.
+  - **The gate** opens on a new turn, whatever started it: a running or initializing
+    snapshot, or a `turn_started` that carries a `turnId` (`internal/observation-stream.ts`,
+    the top of `observeState`). A local observe opens with a synthetic `turn_started` with no
+    `turnId` and the current snapshot, so it opens the gate only on a running child; a remote
+    host re-fetches the snapshot per event, so the real event's `turnId` opens it after a fast
+    turn. Opening writes the record without the field, once per waiting-to-open change.
+  - **Re-arm** is one serialized, abort-checked `put` of the oldest captured record, with
+    `awaitingTurn: true` unless a turn was observed since the delivered terminal, then removal
+    of the other captured ids. The abort check stops a superseded watch's late write from
+    bringing back a record that `accept` removed.
+  - **Recovery** starts the gate waiting only when every record in a caller-child-server group
+    awaits, so a fresh registration is not hidden behind an older re-armed record.
+  - **Outcomes** (the room's D-Q2): an archived child sends `was closed` and disarms; while the
+    gate waits, any other terminal of a child that is not archived is silent and the watch stays
+    armed; once open, `finished` and a mid-turn `was closed` are delivered and re-arm, and
+    `errored`, `was canceled`, `is unavailable` and the host reasons keep upstream's
+    remove-and-stop. Archive state comes from storage through the `childArchived` dependency
+    (`bootstrap.ts`), because the live closed payload carries `archivedAt: null`; a remote child
+    is archived only when its payload says so.
+  - **The buffer** (`internal/observation-buffer.ts`) queues terminals first in, first out, and
+    stamps each with whether a turn came between it and the one before, so two finishes inside
+    one acknowledgement window both arrive and a repeated terminal is recognised.
+  - **`hasPendingForCaller`** skips a watch that awaits a turn and holds no outcome, so a
+    re-armed watch does not pin its caller, or through the family walk the caller's parent,
+    against idle-runtime cleanup.
 - **Why:** a caller that drives one long-lived child across many prompts has to hear every
-  finish. Watchers exist only for agent callers (`notifyOnFinish` and `callerAgentId`), so the
-  behaviour is derived, with no `notifyMode` parameter; upstream would want it opt-in, and that
-  is the shape to propose there.
-- **What it leaves to upstream:** the acknowledgement mechanics. A successful follow-up
-  dispatch supersedes the re-armed watcher, a rejected one stops only its own, a new turn's
-  watcher waits for the turn to start, and the watcher disarms on an idle `turn_canceled`
-  (`was canceled`), `was closed` and `errored`.
-- **Re-applying:** this is a semantic patch on a state machine upstream keeps rewriting. The
-  idle state alone must never send `finished`; the finish is the terminal `turn_completed`
-  with the child idle and a running turn observed. The shape check under `Sync procedure`
-  reads it.
-- **Tests:** `agent-prompt.slp.test.ts` drives a real `AgentManager` with the events the
-  manager publishes, the idle state followed by the terminal stream event.
+  finish, exactly once, across restarts. No field of the agent record tells a child stopped
+  mid-turn from one stopped idle (a restart rewrites `running` to `closed`, a graceful stop
+  stores every agent `closed`, and an agent-sourced prompt never moves `lastUserMessageAt`), so
+  the watch writes that mark itself. An unconditional re-arm sends a false notice on every
+  reattach to an idle child and pins the caller for good.
+- **Accepted gaps:** a crash between a turn's start and the gate-open write leaves the watch
+  silent and armed; a turn started by the stop-time message flush, which runs after the watches
+  close, is cut off silently; a remote child that runs and finishes while this daemon is down
+  is missed; a crash inside the acknowledgement window repeats one notice; an archived caller's
+  idle watch lingers until the child's next terminal or the next restart. The shutdown order in
+  `bootstrap.ts` (watches close before message delivery) stays upstream's: delivery throws once
+  closed, and finish notices go through it.
+- **Re-applying:** read `index.ts`'s `run` and the buffer against the shape check under _Sync
+  procedure_. A record upstream wrote has no field and delivers its first terminal; a rollback
+  to upstream drops the field on load.
+- **Upstream after v0.14:** `83ed52669` (#8127) resumes a child that was running at shutdown
+  with "Resume working." instead of storing it `closed`. The mid-turn rule and this gate are
+  re-read at the sync that carries it.
+- **Tests:** `finish-subscriptions.slp.test.ts` drives `createFinishSubscriptions` on the real
+  JSON store through the real `openFinishObservation` over a child fake that publishes what
+  the local observer does, including the agent-prompted cut-off across a crash and a graceful
+  stop; `internal/observation-stream.slp.test.ts` drives the gate signal and the queue on the
+  `Host` fake.
+- **Adapted upstream rows:** seven upstream assertions expect the one-shot removal, and each is
+  adapted in place with a comment naming the patch. Six change only their store assertion, to
+  one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
+  - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
+    (D-Q2's mid-turn rule; the fake's child is stored `closed` with no archive stamp):
+    `retains intent until parent dispatch acknowledgment, then restart sends nothing`,
+    `restart coalesces predecessor and queued candidate into one settled notification`,
+    `dispatch failure retains intent and retries the ordinary finish notification` and
+    `remote finish intent protects its caller through registration, observation and delivery`.
+    The last keeps its `hasPendingForCaller` and idle-sweep lines unchanged: they are the
+    guard that a re-armed watch pins no caller.
+  - `mcp-server.test.ts`, after a `finished`: both rows of `reports %s permission requests and
+final completion`.
+
+  The seventh, `failed removal after dispatch acknowledgment retries only storage, preserving
+the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
+  so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
+  older record and removes the other, and that removal is the one that fails.
 
 ## detached-arg
 
@@ -475,18 +526,40 @@ T=$(printf '%s\n' "$out" | head -1)
 
 # Marker gate against the merged tree (-h is git grep's --no-filename).
 git grep -oh "SLP-PATCH([a-z-]*)" "$T" -- packages/ | sort | uniq -c | sort -rn
+
+# The wakeup-each gate's shape, read rather than counted.
+F=packages/server/src/server/agent/finish-subscriptions
+for f in index.ts internal/observation-stream.ts internal/observation-buffer.ts internal/json-store.ts; do
+  echo "== $f"
+  git cat-file -p "$T:$F/$f" | grep -nE 'SLP-PATCH\(wakeup-each\)|awaitingTurn|turnObserved|turnPending|turn_started|terminals\.|childArchived|watch\.awaiting|serialize\(|signal\.aborted\) return'
+done
+git cat-file -p "$T:packages/server/src/server/bootstrap.ts" | grep -nE 'childArchived|finishSubscriptions\.close|agentMessages\.close'
 ```
+
+Read the control flow around the lines that prints: the gate hook sits in `observeState`
+before the `turn_started` early return and fires on a running or initializing snapshot or a
+`turn_started` with a `turnId`, never on the synthetic open alone; the buffer keeps a queue, not
+one slot; the store schema carries `awaitingTurn`; `run` starts the gate waiting only when every
+captured record awaits, drops a gated terminal of a child that is not archived, re-arms on
+`finished` and a not-archived `was closed` through `serialize` with an abort check first, and
+removes on every other outcome; `hasPendingForCaller` skips `watch.awaiting`; `bootstrap.ts`
+passes `childArchived` and still closes the finish subscriptions before message delivery.
 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-16 interrupted-turn-tasks                  3 replace-awaits-teardown
-10 interrupted-turn-terminals              2 interrupt-releases-foreground
- 8 agent-send-interrupt                    2 force-cancel-releases-foreground
- 6 native-tools-injection-independent      2 detached-arg
- 5 agent-message-raw-body                  1 dispose-releases-foreground
- 4 mcp-protocol-version-clip               1 dead-run-settles
+36 wakeup-each                             3 replace-awaits-teardown
+16 interrupted-turn-tasks                  2 interrupt-releases-foreground
+10 interrupted-turn-terminals              2 force-cancel-releases-foreground
+ 8 agent-send-interrupt                    2 detached-arg
+ 6 native-tools-injection-independent      1 dispose-releases-foreground
+ 5 agent-message-raw-body                  1 dead-run-settles
+ 4 mcp-protocol-version-clip
 ```
+
+`wakeup-each`'s 36 sites: 34 in `agent/finish-subscriptions/` (its four source files, both
+fork test files and the five adapted upstream rows there), one in `bootstrap.ts` and one in
+`mcp-server.test.ts` (its adapted row).
 
 Then merge and verify:
 
@@ -530,6 +603,8 @@ vt() {
 
 # The fork's own files first: the cheapest signal.
 vt packages/server/src/server/agent/create-agent/create.slp.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.slp.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.slp.test.ts
 vt packages/server/src/server/native-tools-gate.slp.test.ts
 vt packages/server/src/server/mcp-protocol-version-clip.slp.test.ts
 vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts
@@ -539,7 +614,9 @@ vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.s
 vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.slp.test.ts
 vt packages/cli/src/commands/agent/send.slp.test.ts
 # Upstream's suites for patched files: where a patch contradicting upstream intent shows.
-vt packages/server/src/server/agent/agent-prompt.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/internal/json-store.test.ts
 vt packages/server/src/server/agent/agent-messages/delivery.test.ts
 vt packages/server/src/server/agent/create-agent/create.test.ts
 vt packages/server/src/server/agent/mcp-server.test.ts

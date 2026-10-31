@@ -6920,7 +6920,15 @@ describe("local durable finish subscription MCP wiring", () => {
         await vi.waitFor(() => expect(prompts()).toContain("finished."));
         expect(prompts()).toContain("Permission work complete");
         expect(permissionIds()).toEqual(["first", "second"]);
-        await vi.waitFor(() => expect(serverSubscriptionRecords.get(server)!.size).toBe(0));
+        // SLP-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+        // awaiting a turn.
+        const gates: unknown[] = [];
+        await vi.waitFor(() => {
+          gates.length = 0;
+          for (const record of serverSubscriptionRecords.get(server)!.values())
+            gates.push(record.awaitingTurn);
+          expect(gates).toEqual([true]);
+        });
       } finally {
         await mcp?.close();
         await removeAgentStateDir(manager, storage, workdir);

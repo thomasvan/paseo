@@ -2,15 +2,25 @@ import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-clien
 
 export type FinishObservationResult = WaitForFinishResult & {
   reason?: "was canceled" | "host unreachable" | "host removed";
+  /** SLP-PATCH(wakeup-each): a turn was observed after the previous terminal and before this one. */
+  turnObserved?: boolean;
 };
 
-/** Coalesces duplicate checkpoints and retains one terminal result while delivery is pending. */
+/** Coalesces duplicate checkpoints and retains terminal results while delivery is pending. */
 export function createObservationBuffer(signal: AbortSignal) {
   const delivered = new Set<string>();
   const permissions = new Map<string, FinishObservationResult>();
   const resolvedBeforeInitial = new Set<string>();
   let initialPending = true;
-  let terminal: FinishObservationResult | undefined;
+  // SLP-PATCH(wakeup-each): a first-in-first-out queue, not one slot, so a finish that lands
+  // while an earlier one awaits acknowledgement is kept. Each entry carries the turn count at
+  // its push, which places every observed turn between two terminals.
+  const terminals: Array<{ result: FinishObservationResult; turns: number }> = [];
+  let terminalSeen = false;
+  let turns = 0;
+  let pushedTurns = 0;
+  let consumedTurns = 0;
+  let onTurn: (() => void) | undefined;
   let failure: unknown;
   let wake: (() => void) | undefined;
   const abort = () => {
@@ -23,7 +33,12 @@ export function createObservationBuffer(signal: AbortSignal) {
     if (result.status === "permission") {
       for (const request of result.final?.pendingPermissions ?? [])
         if (!delivered.has(request.id)) permissions.set(request.id, result);
-    } else terminal = result;
+    } else {
+      // SLP-PATCH(wakeup-each)
+      terminals.push({ result: { ...result, turnObserved: turns > pushedTurns }, turns });
+      pushedTurns = turns;
+      terminalSeen = true;
+    }
     wake?.();
   }
   return {
@@ -36,7 +51,8 @@ export function createObservationBuffer(signal: AbortSignal) {
         if (pendingPermissions.length)
           push({ ...result, final: { ...result.final, pendingPermissions } });
       } else if (
-        !terminal &&
+        // SLP-PATCH(wakeup-each): a baseline after any streamed terminal, consumed or not, repeats it.
+        !terminalSeen &&
         result.final?.status !== "running" &&
         result.final?.status !== "initializing"
       )
@@ -44,6 +60,18 @@ export function createObservationBuffer(signal: AbortSignal) {
       resolvedBeforeInitial.clear();
     },
     push,
+    /** SLP-PATCH(wakeup-each): a new turn was observed. */
+    turn() {
+      turns++;
+      onTurn?.();
+    },
+    /** SLP-PATCH(wakeup-each): a turn was observed after the last terminal `next()` returned. */
+    turnPending: () => turns > consumedTurns,
+    /** SLP-PATCH(wakeup-each): calls `listener` on each turn, and now if one is already pending. */
+    onTurn(listener: () => void) {
+      onTurn = listener;
+      if (turns > consumedTurns) listener();
+    },
     resolved(id: string) {
       if (initialPending) resolvedBeforeInitial.add(id);
       delivered.delete(id);
@@ -64,10 +92,11 @@ export function createObservationBuffer(signal: AbortSignal) {
           }
           return first[1];
         }
+        // SLP-PATCH(wakeup-each)
+        const terminal = terminals.shift();
         if (terminal) {
-          const result = terminal;
-          terminal = undefined;
-          return result;
+          consumedTurns = terminal.turns;
+          return terminal.result;
         }
         if (failure) throw failure;
         await new Promise<void>((resolve) => {

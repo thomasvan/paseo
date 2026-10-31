@@ -20,6 +20,11 @@ export interface FinishSubscription {
   serverId?: string;
   /** Creation subscriptions stop reporting after the child is detached. */
   requireParentOwnership?: boolean;
+  /**
+   * SLP-PATCH(wakeup-each): the watch re-armed after a finish and waits for the child's next
+   * turn. Absent means the gate is open, as for a fresh registration or a record upstream wrote.
+   */
+  awaitingTurn?: true;
 }
 export interface FinishSubscriptionStore {
   list(): Promise<FinishSubscription[]>;
@@ -29,6 +34,10 @@ export interface FinishSubscriptionStore {
 export interface FinishObservationSession {
   next(): Promise<FinishObservationResult>;
   close(): Promise<void>;
+  /** SLP-PATCH(wakeup-each): a turn was observed after the last terminal `next()` returned. */
+  turnPending?(): boolean;
+  /** SLP-PATCH(wakeup-each): calls `listener` on each observed turn, and now if one is pending. */
+  onTurn?(listener: () => void): void;
 }
 export interface FinishObservation {
   open(subscription: FinishSubscription, signal: AbortSignal): Promise<FinishObservationSession>;
@@ -37,6 +46,11 @@ interface Dependencies extends FinishObservation {
   store: FinishSubscriptionStore;
   messages(): AgentMessageDelivery;
   callerIsActive(agentId: string): Promise<boolean>;
+  /**
+   * SLP-PATCH(wakeup-each): archive state from agent storage, because the live closed payload
+   * carries `archivedAt: null`. Read for a local child only.
+   */
+  childArchived?(agentId: string): Promise<boolean>;
   serverId: string;
   logger: Logger;
   retryDelayMs?: number;
@@ -63,10 +77,17 @@ interface Watch {
   decision: Promise<boolean>;
   decide(accepted: boolean): void;
   pending: boolean;
+  /** SLP-PATCH(wakeup-each): waiting for a turn and holding no outcome, so the caller is free. */
+  awaiting: boolean;
   task?: Promise<void>;
 }
 function key(record: FinishSubscription): string {
   return JSON.stringify([record.callerAgentId, record.childAgentId, record.serverId]);
+}
+/** SLP-PATCH(wakeup-each): the record as stored with the gate waiting or open. */
+function gated(record: FinishSubscription, awaitingTurn: boolean): FinishSubscription {
+  const { awaitingTurn: _previous, ...rest } = record;
+  return awaitingTurn ? { ...rest, awaitingTurn: true } : rest;
 }
 
 /** Owns durable intent, live observation, supersession, and dispatch acknowledgment. */
@@ -90,7 +111,15 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     const decision = new Promise<boolean>((resolve) => {
       decide = resolve;
     });
-    const watch: Watch = { records, controller: new AbortController(), pending, decision, decide };
+    const watch: Watch = {
+      records,
+      controller: new AbortController(),
+      pending,
+      decision,
+      decide,
+      // SLP-PATCH(wakeup-each): the gate starts waiting only if every record in the group awaits.
+      awaiting: !pending && records.every((record) => record.awaitingTurn === true),
+    };
     const group = watches.get(key(records[0]!)) ?? new Set<Watch>();
     group.add(watch);
     watches.set(key(records[0]!), group);
@@ -158,6 +187,15 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     );
     return parent?.agentId !== record.callerAgentId || parent.serverId !== deps.serverId;
   }
+  /** SLP-PATCH(wakeup-each) */
+  async function childIsArchived(
+    record: FinishSubscription,
+    result: FinishObservationResult,
+  ): Promise<boolean> {
+    if (!result.final) return false;
+    if (result.final.archivedAt) return true;
+    return !record.serverId && ((await deps.childArchived?.(record.childAgentId)) ?? false);
+  }
   function reasonFor(result: FinishObservationResult): FinishNotificationReason {
     if (result.reason === "host unreachable" || result.reason === "host removed")
       return result.reason;
@@ -170,11 +208,11 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
   async function deliver(
     record: FinishSubscription,
     result: FinishObservationResult,
+    reason: FinishNotificationReason, // SLP-PATCH(wakeup-each): an archived child reads `was closed`
     permissions: Set<string>,
     signal: AbortSignal,
   ): Promise<boolean> {
     const requests = result.final?.pendingPermissions ?? [];
-    const reason = reasonFor(result);
     for (const id of permissions)
       if (!requests.some((request) => request.id === id)) permissions.delete(id);
     const acknowledgments: Promise<unknown>[] = [];
@@ -230,13 +268,95 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     let remoteFailures = 0;
     let retries = 0;
     let warned = false;
+    // SLP-PATCH(wakeup-each): the gate. Open delivers the cycle's first terminal, as upstream's
+    // one-shot watch does; waiting delivers only a terminal that follows an observed turn. The
+    // stored records hold the waiting state, so a restart cannot read an idle child as a finish.
+    let open = !watch.records.every((intent) => intent.awaitingTurn === true);
+    let storedAwaiting = !open;
+    function turnObserved(): void {
+      watch.awaiting = false;
+      if (!storedAwaiting) return;
+      // Once per waiting-to-open change, so a stop mid-turn recovers a gate that delivers.
+      storedAwaiting = false;
+      void serialize(async () => {
+        if (signal.aborted) return;
+        const opened = watch.records.map((intent) => gated(intent, false));
+        for (const intent of opened) await deps.store.put(intent);
+        watch.records = opened;
+      }).catch((error) =>
+        deps.logger.warn({ err: error, subscription: record.id }, "Failed to open finish gate"),
+      );
+    }
+    async function rearm(): Promise<void> {
+      // Serialized behind registration and supersession, and abort-checked, so a superseded
+      // watch's late write cannot bring back a record that `accept` removed.
+      await serialize(async () => {
+        if (signal.aborted) return;
+        const awaitingTurn = !(observation?.turnPending?.() ?? false);
+        const { requireParentOwnership: _captured, ...kept } = watch.records[0]!;
+        const next = gated(
+          record.requireParentOwnership ? { ...kept, requireParentOwnership: true } : kept,
+          awaitingTurn,
+        );
+        await deps.store.put(next);
+        for (const other of watch.records.slice(1)) await deps.store.remove(other.id);
+        watch.records = [next];
+        open = !awaitingTurn;
+        storedAwaiting = awaitingTurn;
+        watch.awaiting = awaitingTurn;
+        // A turn observed while the write was in flight opens the gate again.
+        if (awaitingTurn && observation?.turnPending?.()) turnObserved();
+      });
+    }
+    /** SLP-PATCH(wakeup-each): a terminal the waiting gate drops: silent, and the watch stays armed. */
+    function gatedOut(result: FinishObservationResult, archived: boolean): boolean {
+      return (
+        Boolean(result.final) &&
+        result.status !== "permission" &&
+        !archived &&
+        !open &&
+        !result.turnObserved
+      );
+    }
+    /**
+     * SLP-PATCH(wakeup-each): D-Q2. An archived child sends `was closed` and disarms. While the
+     * gate waits, any other terminal of a child that is not archived is silent and the watch
+     * stays armed. Once open, `finished` and a mid-turn `was closed` re-arm; every other outcome
+     * keeps upstream's remove-and-stop.
+     */
+    async function settle(result: FinishObservationResult): Promise<"done" | "next"> {
+      const archived = await childIsArchived(record, result);
+      const reason: FinishNotificationReason = archived ? "was closed" : reasonFor(result);
+      if (gatedOut(result, archived)) {
+        watch.awaiting = !(observation?.turnPending?.() ?? false);
+        return "next";
+      }
+      const rearms = !archived && (reason === "finished" || reason === "was closed");
+      if (!acknowledged) acknowledged = await deliver(record, result, reason, permissions, signal);
+      if (!acknowledged) return "next";
+      if (!rearms) {
+        // A removal failure retries only the commit, never the already accepted callback.
+        await remove(watch);
+        stop(watch, group);
+        return "done";
+      }
+      // A storage failure retries only the re-arm, as above.
+      await rearm();
+      acknowledged = false;
+      return signal.aborted ? "done" : "next";
+    }
     async function observeNext(): Promise<FinishObservationResult | undefined> {
       try {
-        observation ??= await deps.open(record, signal);
+        if (!observation) {
+          observation = await deps.open(record, signal);
+          observation.onTurn?.(turnObserved); // SLP-PATCH(wakeup-each)
+        }
         const result = await abortable(observation.next(), signal);
         remoteFailures = 0;
         return result;
       } catch (error) {
+        // SLP-PATCH(wakeup-each): a turn the closing observation saw stays observed.
+        if (observation?.turnPending?.()) open = true;
         await observation?.close();
         observation = undefined;
         signal.throwIfAborted();
@@ -266,6 +386,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
             await delay(signal, retries++);
             continue;
           }
+          watch.awaiting = false; // SLP-PATCH(wakeup-each): an outcome is held
           if (signal.aborted) return;
           await decisions(group);
           if (signal.aborted) return;
@@ -274,13 +395,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
             stop(watch, group);
             return;
           }
-          if (!acknowledged) acknowledged = await deliver(record, pending, permissions, signal);
-          if (acknowledged) {
-            // A removal failure retries only the commit, never the already accepted callback.
-            await remove(watch);
-            stop(watch, group);
-            return;
-          }
+          if ((await settle(pending)) === "done") return;
           pending = undefined;
           retries = 0;
           warned = false;
@@ -307,7 +422,9 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     hasPendingForCaller(agentId) {
       if (recovering || registering.has(agentId)) return true;
       for (const group of watches.values()) {
-        for (const watch of group) if (watch.records[0]!.callerAgentId === agentId) return true;
+        for (const watch of group)
+          // SLP-PATCH(wakeup-each): a watch awaiting a turn holds no outcome and pins nothing.
+          if (watch.records[0]!.callerAgentId === agentId && !watch.awaiting) return true;
       }
       return false;
     },
