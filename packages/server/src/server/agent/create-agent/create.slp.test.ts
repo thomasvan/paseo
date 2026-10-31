@@ -1,26 +1,24 @@
-// SLP-PATCH coverage (detached-wakeup).
-// Lives in its own file so create.test.ts stays upstream's and never conflicts
-// on merge.
+// Fork guard of upstream behaviour (see PATCHES.md, Where the tests live): the
+// create path registers its finish subscription before the first prompt is
+// dispatched, holds it pending, and settles it by that prompt's outcome. No
+// upstream test guards this order. Lives in its own file so create.test.ts stays
+// upstream's and never conflicts on merge.
 import { beforeEach, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import { createAgentCommand } from "./create.js";
 import type { ManagedAgent } from "../agent-manager.js";
+import type { FinishSubscriptions } from "../finish-subscriptions/index.js";
 
 const mocks = vi.hoisted(() => ({
   steps: [] as string[],
   initialPromptError: null as Error | null,
-  setupFinishNotification: vi.fn(),
 }));
 
-// The create path's watcher registration: its argument, and its place around the
-// first prompt. Each stubbed call records itself in `steps`, and the stub
-// watcher returns a stop function so the cleanup of a failed prompt shows.
 vi.mock("../agent-prompt.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agent-prompt.js")>();
   return {
     ...actual,
-    setupFinishNotification: mocks.setupFinishNotification,
     startCreatedAgentInitialPrompt: async (params: { snapshot: ManagedAgent }) => {
       mocks.steps.push("dispatch");
       if (mocks.initialPromptError) throw mocks.initialPromptError;
@@ -32,11 +30,6 @@ vi.mock("../agent-prompt.js", async (importOriginal) => {
 beforeEach(() => {
   mocks.steps.length = 0;
   mocks.initialPromptError = null;
-  mocks.setupFinishNotification.mockReset();
-  mocks.setupFinishNotification.mockImplementation(() => {
-    mocks.steps.push("arm");
-    return () => mocks.steps.push("disarm");
-  });
 });
 
 function agent(id: string): ManagedAgent {
@@ -48,11 +41,33 @@ function agent(id: string): ManagedAgent {
   } as unknown as ManagedAgent;
 }
 
-async function createChild(options: { detached: boolean; promptFailure?: "throw" }): Promise<void> {
+// Each call records itself in `steps`: the registration, then the prompt's
+// dispatch, then the registration's settlement.
+function recordingFinishSubscriptions(): FinishSubscriptions {
+  return {
+    start: async () => {},
+    hasPendingForCaller: () => false,
+    close: async () => {},
+    register: async (_input, pendingDispatch) => {
+      mocks.steps.push(pendingDispatch ? "register pending" : "register");
+      return {
+        accept: () => {
+          mocks.steps.push("accept");
+        },
+        reject: async () => {
+          mocks.steps.push("reject");
+        },
+      };
+    },
+  };
+}
+
+async function createChild(options: { detached: boolean }): Promise<void> {
   const caller = agent("caller-agent");
   const child = agent("child-agent");
 
   const dependencies: Parameters<typeof createAgentCommand>[0] = {
+    finishSubscriptions: recordingFinishSubscriptions(),
     agentManager: {
       createAgent: vi.fn(async () => child),
       getAgent: vi.fn((agentId: string) => (agentId === "caller-agent" ? caller : child)),
@@ -75,35 +90,22 @@ async function createChild(options: { detached: boolean; promptFailure?: "throw"
     notifyOnFinish: true,
     callerAgentId: "caller-agent",
     detached: options.detached,
-    ...(options.promptFailure ? { promptFailure: options.promptFailure } : {}),
+    promptFailure: "throw",
   });
 }
 
-// A child created detached has no parent label to check at fire time, so its
-// caller is notified without the ownership guard; a parented child keeps it.
-test.each([
-  { child: "a detached child", detached: true, requireParentOwnership: false },
-  { child: "a parented child", detached: false, requireParentOwnership: true },
-])(
-  "$child is watched with requireParentOwnership $requireParentOwnership",
-  async ({ detached, requireParentOwnership }) => {
-    await createChild({ detached });
-
-    expect(mocks.setupFinishNotification).toHaveBeenCalledTimes(1);
-    expect(mocks.setupFinishNotification.mock.calls[0]?.[0]).toMatchObject({
-      childAgentId: "child-agent",
-      callerAgentId: "caller-agent",
-      requireParentOwnership,
-    });
-  },
-);
-
-test("a detached child's watcher is armed before its first prompt and disarmed when that prompt fails", async () => {
+test("a detached child's subscription is registered before its first prompt and rejected when that prompt fails", async () => {
   mocks.initialPromptError = new Error("provider refused the first prompt");
 
-  await expect(createChild({ detached: true, promptFailure: "throw" })).rejects.toThrow(
+  await expect(createChild({ detached: true })).rejects.toThrow(
     "provider refused the first prompt",
   );
 
-  expect(mocks.steps).toEqual(["arm", "dispatch", "disarm"]);
+  expect(mocks.steps).toEqual(["register pending", "dispatch", "reject"]);
+});
+
+test("a detached child's subscription is accepted only after its first prompt is dispatched", async () => {
+  await createChild({ detached: true });
+
+  expect(mocks.steps).toEqual(["register pending", "dispatch", "accept"]);
 });

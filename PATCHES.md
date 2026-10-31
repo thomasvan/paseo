@@ -4,9 +4,9 @@ Local patches carried on `slp/patches` (fork `thomasvan/paseo`) on top of upstre
 `getpaseo/paseo`. A patch is a change this fork makes to upstream code; git holds how each one
 came to be, and this file says what each one does now, why, and how to carry it through a sync.
 
-Every patch site in code is marked `SLP-PATCH(<name>)`, except `archived-live-list` and
-`history-purpose-provider-contract`, which carry no marker and are checked by behaviour (see
-their sections). When a hunk conflicts, re-apply the patch's intent onto upstream's current
+Every patch site in code is marked `SLP-PATCH(<name>)`, except
+`history-purpose-provider-contract`, which carries no marker and is checked by reading its hunk
+(see its section). When a hunk conflicts, re-apply the patch's intent onto upstream's current
 shape from its section below; do not restore an old diff.
 
 ## The patches
@@ -14,12 +14,10 @@ shape from its section below; do not restore an old diff.
 | Patch                                                                       | What it fixes                                                                                 | Upstream                                                                                                                                                   |
 | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a long-lived child, not only the first                         | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
-| [`detached-wakeup`](#detached-wakeup)                                       | a child created detached still notifies the caller that created it                            | PR [#3094](https://github.com/getpaseo/paseo/pull/3094), issue [#6908](https://github.com/getpaseo/paseo/issues/6908)                                      |
 | [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                                                     |
 | [`mcp-protocol-version-clip`](#mcp-protocol-version-clip)                   | an MCP client newer than the bundled SDK gets past `initialize`                               | PR [#4570](https://github.com/getpaseo/paseo/pull/4570), issue [#3009](https://github.com/getpaseo/paseo/issues/3009)                                      |
 | [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                                                     |
 | [The Codex foreground cluster](#the-codex-foreground-cluster)               | a Codex session's foreground slot is released on every path that ends its turn (five patches) | issue [#3256](https://github.com/getpaseo/paseo/issues/3256) (the fixes described there); PR [#4041](https://github.com/getpaseo/paseo/pull/4041) open     |
-| [`archived-live-list`](#archived-live-list)                                 | an archived agent resumed for a history read stays archived in `list_agents`                  | PR [#3803](https://github.com/getpaseo/paseo/pull/3803), issue [#4753](https://github.com/getpaseo/paseo/issues/4753)                                      |
 | [`history-purpose-provider-contract`](#history-purpose-provider-contract)   | a pi history read releases the runtime it spawned                                             | not opened: no raw-log repro yet; upstream left pi out of #5550                                                                                            |
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
 | [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's send interrupts a running turn unless it asks to steer                             | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
@@ -28,13 +26,13 @@ shape from its section below; do not restore an old diff.
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
-`force-cancel-releases-foreground`, sixteen patches in all.
+`force-cancel-releases-foreground`, fourteen patches in all.
 
 ## Where the tests live
 
 A patch's tests sit in a fork-only `.slp.test.ts` file where upstream owns the file beside the
 code, so the upstream file stays upstream's and never conflicts on merge:
-`agent-prompt.slp.test.ts`, `create-agent/create.slp.test.ts`, `native-tools-gate.slp.test.ts`,
+`native-tools-gate.slp.test.ts`,
 `mcp-protocol-version-clip.slp.test.ts`, `agent-message-raw-body.slp.test.ts`,
 `providers/codex-interrupted-turn-terminals.slp.test.ts`,
 `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` and, in the CLI package,
@@ -42,7 +40,7 @@ code, so the upstream file stays upstream's and never conflicts on merge:
 cases they change. Every patch test fails under at least one mutant of its patch's lines, and
 together they kill every such mutant an earlier, larger set of tests killed.
 
-Three fork tests guard upstream behaviour this fork depends on and no upstream test guards.
+Four fork tests guard upstream behaviour this fork depends on and no upstream test guards.
 Each leaves when upstream adds an equivalent:
 
 - `schedule/service.test.ts`, `refuses a manual run while a scheduled claim is in flight`:
@@ -50,9 +48,14 @@ Each leaves when upstream adds an equivalent:
   no other test fails.
 - `providers/acp-agent.test.ts`, `purpose: history releases the child process after loadSession
 replay, and close() afterward is a no-op`: an ACP history read releases its process once.
-- `create-agent/create.slp.test.ts`, `a detached child's watcher is armed before its first
-prompt and disarmed when that prompt fails`: the create path's arm-before-dispatch and
-  disarm-on-failure.
+- `create-agent/create.slp.test.ts`, its two rows: the create path registers its finish
+  subscription pending before the first prompt's dispatch, rejects it when that prompt fails
+  and accepts it only after dispatch. The rows drive an injected `FinishSubscriptions`;
+  they stayed from the retired `detached-wakeup` patch, whose fix upstream carries (#7528).
+- `mcp-server.test.ts`, `excludes an archived agent that is also live from list_agents`: an
+  archived agent resumed into memory for a history read stays out of a default
+  `list_agents`. It stayed from the retired `archived-live-list` patch, whose fix upstream
+  carries (#7532: `AgentDirectory` filters again after projection).
 
 Two patch files are end-to-end suites that upstream CI does not run (`agent-mcp.e2e.test.ts`
 and `mcp-parity.e2e.test.ts`: the server's `test:integration` list names neither), so a sync
@@ -81,21 +84,6 @@ runs them by hand; see `Sync procedure`.
   reads it.
 - **Tests:** `agent-prompt.slp.test.ts` drives a real `AgentManager` with the events the
   manager publishes, the idle state followed by the terminal stream event.
-
-## detached-wakeup
-
-- **What:** the watcher registration in `create-agent/create.ts` passes
-  `requireParentOwnership: !(input.detached ?? false)` instead of `true`.
-- **Why:** the guard asks at fire time whether the child is still labelled as the caller's.
-  `resolveCreateAgentIntent` strips that label from a child created detached, so the guard
-  could never pass and the caller that asked for the child would never hear it finish.
-- **Why at the create site:** inside the watcher, a detached child and a child whose label
-  was removed later are the same input, and upstream's `agent-prompt.test.ts` ("detaching a
-  child ends its parent-owned finish notification") requires the second to stay silent. Only
-  the create call knows the caller asked for a detached child.
-- **Tests:** `create-agent/create.slp.test.ts`, a two-row table (detached and parented). If
-  #3094 merges with its tests in `create.test.ts`, delete this file's table rather than
-  reconcile the two.
 
 ## detached-arg
 
@@ -182,25 +170,6 @@ and wakes every `startTurn` waiting on it.
   `replace-awaits-teardown` first. The other three stay until a focused fix lands.
 - **Tests:** in upstream's `codex-app-server-agent.test.ts` and `agent-manager.test.ts`,
   beside the cases they extend, and `provider-registry-wrap.test.ts` for the forward.
-
-## archived-live-list
-
-**No marker, by design:** the code matches PR #3803's shape so that upstream's version
-converges instead of conflicting. Its survival check is behavioural: after any merge, an
-archived agent resumed by a history read must stay out of a default `list_agents` and report
-its real `archivedAt` with `includeArchived: true`.
-
-- **What:** `serializeSnapshotWithMetadata` (`mcp-shared.ts`) merges the stored record's
-  `archivedAt` into the snapshot (`agent-projections.ts`, `messages.ts`), and `list_agents`
-  (`tools/paseo-tools.ts`) filters archives after projection.
-- **Why:** a history read resumes an archived agent into memory, so `list_agents` sees it as
-  live. A live `ManagedAgent` carries no archive timestamp, and upstream's `AgentDirectory`
-  filters archives on raw live snapshots, so the agent was listed as active.
-- **Rejected alternative:** carrying `archivedAt` on `ManagedAgent`. `unarchiveSnapshot`
-  clears only the stored record, so a managed copy would report an unarchived agent as
-  archived. Storage stays the one owner.
-- **Tests:** `mcp-server.test.ts`, `excludes an archived agent that is also live from
-list_agents`; upstream's own archive cases there cover the `includeArchived` side.
 
 ## history-purpose-provider-contract
 
@@ -386,7 +355,6 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  6 native-tools-injection-independent      2 detached-arg
  4 mcp-protocol-version-clip               2 agent-message-raw-body
  3 replace-awaits-teardown                 1 dispose-releases-foreground
-                                           1 detached-wakeup
                                            1 dead-run-settles
 ```
 
@@ -431,7 +399,6 @@ vt() {
 }
 
 # The fork's own files first: the cheapest signal.
-vt packages/server/src/server/agent/agent-prompt.slp.test.ts
 vt packages/server/src/server/agent/create-agent/create.slp.test.ts
 vt packages/server/src/server/native-tools-gate.slp.test.ts
 vt packages/server/src/server/mcp-protocol-version-clip.slp.test.ts
