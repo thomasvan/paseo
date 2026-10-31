@@ -522,3 +522,58 @@ test("a completion the initial wait supplied before its streamed counterpart is 
   await storedAwaiting(d.directory);
   await sentinel(d, 3);
 });
+
+// A gate-open write that fails stays owed: a retry, or a graceful stop's last attempt, writes
+// it, so the restart still reads the turn and sends the one `was closed`.
+test.each([
+  {
+    variant: "retried, then a crash",
+    retryDelayMs: 1,
+    stop: async (d: Daemon) => {
+      await storedOpen(d.directory);
+    },
+  },
+  {
+    variant: "a graceful stop before any retry",
+    retryDelayMs: 60_000,
+    stop: (d: Daemon) => d.service.close(),
+  },
+])(
+  "a rejected gate-open write ($variant) still recovers a mid-turn close as one `was closed`",
+  async ({ retryDelayMs, stop }) => {
+    let rejections = 0;
+    const directory = await home();
+    const first = await daemon(
+      directory,
+      new Child("running"),
+      (store) => ({
+        ...store,
+        async put(record) {
+          // The first gate-open write (a record written without the field after a re-arm).
+          if (
+            !record.awaitingTurn &&
+            rejections === 0 &&
+            (await stored(directory))[0]?.awaitingTurn
+          ) {
+            rejections++;
+            throw new Error("transient store failure");
+          }
+          return store.put(record);
+        },
+      }),
+      retryDelayMs,
+    );
+    await firstFinish(first);
+    first.delivery.ack(0);
+    await storedAwaiting(directory);
+    first.child.start();
+    await until(() => rejections === 1);
+    await stop(first);
+    const second = await daemon(directory, new Child("closed", false));
+    await until(() => second.delivery.prompts.length === 1);
+    expect(second.delivery.prompts[0]).toContain("Agent child (Child) was closed.");
+    second.delivery.ack(0);
+    await storedAwaiting(directory);
+    expect(second.delivery.prompts).toHaveLength(1);
+  },
+);

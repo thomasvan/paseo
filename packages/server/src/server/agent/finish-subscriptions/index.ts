@@ -79,6 +79,8 @@ interface Watch {
   pending: boolean;
   /** SLP-PATCH(wakeup-each): waiting for a turn and holding no outcome, so the caller is free. */
   awaiting: boolean;
+  /** SLP-PATCH(wakeup-each): one last attempt at a gate-open write still owed, before close. */
+  flushGate?(): Promise<void>;
   task?: Promise<void>;
 }
 function key(record: FinishSubscription): string {
@@ -273,20 +275,50 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     // stored records hold the waiting state, so a restart cannot read an idle child as a finish.
     let open = !watch.records.every((intent) => intent.awaitingTurn === true);
     let storedAwaiting = !open;
-    function turnObserved(): void {
-      watch.awaiting = false;
-      if (!storedAwaiting) return;
-      // Once per waiting-to-open change, so a stop mid-turn recovers a gate that delivers.
-      storedAwaiting = false;
-      void serialize(async () => {
-        if (signal.aborted) return;
+    // SLP-PATCH(wakeup-each): a turn observed while the stored records await one owes a write
+    // of the records without the field, so a stop mid-turn recovers a gate that delivers. The
+    // obligation holds until a write lands or a re-arm settles the records itself: a failed
+    // write is retried, and a graceful close makes one last attempt.
+    let gateOwed = false;
+    let opening: Promise<void> | undefined;
+    async function writeGateOpen(): Promise<void> {
+      await serialize(async () => {
+        if (signal.aborted || !gateOwed) return;
         const opened = watch.records.map((intent) => gated(intent, false));
         for (const intent of opened) await deps.store.put(intent);
         watch.records = opened;
-      }).catch((error) =>
+        storedAwaiting = false;
+        gateOwed = false;
+      });
+    }
+    async function openGate(): Promise<void> {
+      for (let attempt = 0; gateOwed && !signal.aborted; attempt++) {
+        try {
+          await writeGateOpen();
+        } catch (error) {
+          if (attempt === 0)
+            deps.logger.warn(
+              { err: error, subscription: record.id },
+              "Failed to open finish gate; retrying",
+            );
+          await delay(signal, attempt);
+        }
+      }
+    }
+    function turnObserved(): void {
+      watch.awaiting = false;
+      if (!storedAwaiting) return;
+      gateOwed = true;
+      opening ??= openGate().finally(() => {
+        opening = undefined;
+      });
+    }
+    watch.flushGate = async () => {
+      if (!gateOwed) return;
+      await writeGateOpen().catch((error) =>
         deps.logger.warn({ err: error, subscription: record.id }, "Failed to open finish gate"),
       );
-    }
+    };
     async function rearm(): Promise<void> {
       // Serialized behind registration and supersession, and abort-checked, so a superseded
       // watch's late write cannot bring back a record that `accept` removed.
@@ -306,6 +338,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
         // acknowledged turn can still be queued ahead of a later turn's finish.
         open = false;
         storedAwaiting = awaitingTurn;
+        gateOwed = false; // SLP-PATCH(wakeup-each): the re-arm wrote the gate itself
         watch.awaiting = awaitingTurn;
         // A turn observed while the write was in flight opens the gate again.
         if (awaitingTurn && observation?.turnPending?.()) turnObserved();
@@ -485,6 +518,8 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     async close() {
       closed = true;
       await mutations;
+      // SLP-PATCH(wakeup-each): a gate-open write still owed gets one last attempt first.
+      for (const group of watches.values()) for (const watch of group) await watch.flushGate?.();
       for (const group of watches.values())
         for (const watch of group) {
           watch.controller.abort();
