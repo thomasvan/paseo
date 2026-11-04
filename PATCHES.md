@@ -11,28 +11,38 @@ shape from its section below; do not restore an old diff.
 
 ## Current upstream sync
 
-`slp/patches` carries upstream tag `v0.14.0` (`8c6de842a3157530c26a7a94c78a3d647fb96ce9`),
-admitted by the release-tag path of the gate: its one non-metadata `+` commit, `f59ebd4fd`,
-changes only `.github/workflows/ci.yml`. The merge resolved nine conflict blocks in seven files:
+`slp/patches` carries upstream tag `v0.15.0` (`8938fde3c713143f12eacbdd60c11fdfc0be0fb1`),
+admitted by the release-tag path of the gate after five literal paths joined its release-metadata
+list (`nix/npm-deps.hash` and `fastlane/metadata/android/en-US/changelogs/15000{1,2,3,4}.txt`; the
+cuts change only `version` and the `@getpaseo/*` pins and one `sha256-` line of that hash, which
+nothing in the npm build reads). The previous sync's pinned target was `v0.14.0`
+(`8c6de842a3157530c26a7a94c78a3d647fb96ce9`). v0.15.0 and v0.14.0 were cut from different
+release branches (their merge base is `8419c212274d60792934e53145d6abdcbadc0d91`), so Set A is
+derived from the previous target, not from `git merge-base HEAD <target>`. The merge conflicted in
+21 files:
 
-| File                                           | Resolution                                                                                                               |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `agent/agent-messages/index.ts`                | upstream's barrel (#7561); `agent-message-raw-body` moved into `envelope.ts`                                             |
-| `agent/agent-prompt.ts`                        | upstream's side; #7683 deleted the watcher, and `wakeup-each` moved into `finish-subscriptions/`                         |
-| `agent/create-agent/create.ts`                 | upstream's side; #7528 carries `detached-wakeup`                                                                         |
-| `providers/codex-app-server-agent.ts`, block 1 | both: the `interrupted-turn-terminals` helpers, `releaseForegroundTurn` and #7782's `canStopRuntime` as separate methods |
-| same file, blocks 2 and 3                      | #7954's `async …: Promise<void>` handlers, each first calling `recordTurnTerminalProcess`                                |
-| `providers/pi/agent.test.ts`                   | both; the `history-purpose` suite closes before #7782's and #7954's tests                                                |
-| `agent/tools/paseo-tools.ts`                   | upstream's `selectAgentListItems`; #7532 filters archives in `AgentDirectory`                                            |
-| `skills/paseo/SKILL.md`                        | both: the interrupt default, with upstream's queued receipt and quiet window                                             |
+| File                                                                                                                 | Resolution                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent/providers/claude/agent.ts`                                                                                    | the fork's `interrupted-turn-tasks` constants and interfaces kept; `INTERRUPT_PLACEHOLDER_PATTERN` dropped, because #6259 moved it into `interrupt-placeholder.ts` |
+| `scripts/ci-workflow.test.mjs`                                                                                       | upstream's side; the fork's CI commit is upstream #8335, so no CI delta remains                                                                                    |
+| the root, `plugins/` and eleven workspace `package.json`, `package-lock.json`                                        | upstream's side; only `version` and the `@getpaseo/*` pins differ                                                                                                  |
+| `CHANGELOG.md`, `CHANGELOG.zh-CN.md`, `docs/release.md`, `packages/app/fastlane/Fastfile`, `attachment-lightbox.tsx` | upstream's side; release-branch cherry-picks against `main`'s originals, no patch involved                                                                         |
 
-Two patches left with this sync, because upstream carries their fixes: `detached-wakeup`
-(#7528) and `archived-live-list` (#7532). Each one's last test that guards upstream behaviour
-is under _Where the tests live_. On top of the merge, the sync redesigned `wakeup-each` inside
-`finish-subscriptions/`, made `interrupted-turn-terminals` keep an accepted interrupt's record
-so a late-started command still ends, and updated `agent-message-raw-body`,
-`agent-send-interrupt` and `history-purpose-provider-contract`; the other nine patches, the
-five Codex foreground patches among them, carry over unchanged.
+No patch met its own _Retire when_. `wakeup-each` met upstream's restart recovery (#8127, #8619)
+and has its account and two upstream rows updated (below); the other twelve carry over. After
+this sync `git diff <target> --` the 19 bookkeeping files and the CI files is empty.
+
+`mcp-protocol-version-clip` left with this sync. No family needs it: on a stand-in of the agent
+MCP route, Claude 2.1.317, Codex 0.166.0 and pi 1.4.0 each initialised, listed tools and
+listed the tool with and without the clip (three runs per arm). Claude's first `server/discover`
+probe gets a 400 on the stock transport and Claude falls back on its own; Codex and pi ask for
+versions the bundled SDK supports. The sync's proof M repeats this on the merged daemon; if it
+fails, revert the commit that retired the clip. A later client that sends an unsupported
+`mcp-protocol-version` header after `initialize` shows as a seat whose Paseo tools fail to list,
+with `Unsupported protocol version` in the daemon log.
+
+`COMPAT(detachedCreate)` in `agent/create-agent/intent.ts` says "remove after 2027-01-17". A
+target past that date may delete the legacy path `detached-arg` adapts; read it first.
 
 ## The patches
 
@@ -159,9 +169,18 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
 - **Re-applying:** read `index.ts`'s `run` and the buffer against the shape check under _Sync
   procedure_. A record upstream wrote has no field and delivers its first terminal; a rollback
   to upstream drops the field on load.
-- **Upstream after v0.14:** `83ed52669` (#8127) resumes a child that was running at shutdown
-  with "Resume working." instead of storing it `closed`. The mid-turn rule and this gate are
-  re-read at the sync that carries it.
+- **Upstream at v0.15:** `83ed52669` (#8127) resumes a child that was running at shutdown with
+  "Resume working." instead of storing it `closed`, and #8619 makes that opt-in
+  (`agents.resumeOnStartup`, default off). The patch's code needed no change for either.
+  - **Recovery off (the default):** a stop still closes the finish subscriptions before the
+    message flush and then the providers; a start repairs `running` records to `closed` and
+    sends nothing. The mid-turn rule above is what tells a caller its child was cut off.
+  - **Recovery on:** a running, unarchived, unowned child is resumed with a continuation
+    prompt. The observer waits for that dispatch (`waitForResume` in
+    `internal/observation.ts`, a file the patch does not own, wired in `bootstrap.ts` beside
+    `childArchived`), so the caller hears no premature `was closed`. A running snapshot opens
+    the gate, and the resumed finish is delivered and re-arms, so the store keeps one record
+    with `awaitingTurn: true` where upstream's is empty.
 - **Tests:** `finish-subscriptions.slp.test.ts` drives `createFinishSubscriptions` on the real
   JSON store through the real `openFinishObservation` over a child fake that publishes what
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
@@ -169,8 +188,8 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
   the acknowledged finish while a later turn is pending, and a rejected gate-open write
   followed by a mid-turn close and recovery; `internal/observation-stream.slp.test.ts` drives
   the gate signal and the queue on the `Host` fake.
-- **Adapted upstream rows:** ten upstream tests expect the one-shot behaviour, and each is
-  adapted in place with a comment naming the patch. Eight change only their store assertion,
+- **Adapted upstream rows:** twelve upstream tests expect the one-shot behaviour, and each is
+  adapted in place with a comment naming the patch. Ten change only their store assertion,
   to one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
   - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
     (D-Q2's mid-turn rule; the fake's child is stored `closed` with no archive stamp):
@@ -186,8 +205,13 @@ final completion`.
 intent survives origin restart and unavailable-host recovery` and `remote finish observation
 survives a permission checkpoint until resumed completion`. Their restart, availability,
     permission and wait assertions stay as upstream wrote them.
+  - `daemon-e2e/daemon-restart-resume.e2e.test.ts`, with recovery on, after a recovered finish:
+    `durable finish subscriptions recover a running child after restart (abrupt=false)` and
+    `(abrupt=true)`. The store holds one re-armed record with `awaitingTurn: true` after the
+    second start and still after the third, where upstream's is empty. The one-notice, no
+    premature `was closed`, launch-config and idle-child assertions stay.
 
-  The ninth, the browser spec `subagent-origin-pane.spec.ts`, `MCP delegates to self and B
+  The eleventh, the browser spec `subagent-origin-pane.spec.ts`, `MCP delegates to self and B
 and opens both qualified children in ordinary conversations`, prompts each child twice (its
   MCP initial prompt, then a prompt from the UI), so the parent now hears two finishes per
   child: its two `Agent finished` button checks expect two each, and the fleet helper's
@@ -195,7 +219,7 @@ and opens both qualified children in ordinary conversations`, prompts each child
   exact count instead of a fixed one. With `rearms` limited to `was closed` (a `finished`
   disarms), the spec fails at `expectCompletion(fleet.local, 2)`: expected 2, received 1.
 
-  The tenth, `failed removal after dispatch acknowledgment retries only storage, preserving
+  The twelfth, `failed removal after dispatch acknowledgment retries only storage, preserving
 the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
   so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
   older record and removes the other, and that removal is the one that fails.
@@ -487,6 +511,13 @@ upstream_gate() {
         fastlane/metadata/android/en-US/changelogs/140002.txt) ;;
         fastlane/metadata/android/en-US/changelogs/140003.txt) ;;
         fastlane/metadata/android/en-US/changelogs/140004.txt) ;;
+        # Added for v0.15.0: the Nix package's fixed-output dependency hash (read by nothing in
+        # the npm build) and the four Android changelogs of the 0.15.0 cut.
+        nix/npm-deps.hash) ;;
+        fastlane/metadata/android/en-US/changelogs/150001.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/150002.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/150003.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/150004.txt) ;;
         packages/app/package.json | packages/cli/package.json | packages/client/package.json) ;;
         packages/desktop/package.json | packages/expo-two-way-audio/package.json) ;;
         packages/highlight/package.json | packages/plugin/package.json) ;;
@@ -505,8 +536,14 @@ upstream_gate "$(git rev-parse upstream/main)" "$UPSTREAM_OID" "${UPSTREAM_TAG:-
 
 BASE=$(git merge-base HEAD "$UPSTREAM_OID")
 
+# PREVIOUS_TARGET is the pinned target of the previous sync, named under "Current upstream
+# sync" (v0.15.0 for the next one). Set A diffs from it, not from BASE: a tag cut from another
+# release branch than the last target makes BASE older than that target, and the diff then
+# carries the previous release branch's own commits, files no patch owns.
+PREVIOUS_TARGET=8938fde3c713143f12eacbdd60c11fdfc0be0fb1
+
 # Set A: the files the fork changed, which is exactly what the patches own.
-git diff --name-only "$BASE" HEAD -- packages/ | sort > /tmp/set-a.txt
+git diff --name-only "$PREVIOUS_TARGET" HEAD -- packages/ | sort > /tmp/set-a.txt
 # Set B: the subset an upstream diff can touch (fork-only test files cannot).
 grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
@@ -521,9 +558,9 @@ The gate admits a `main` commit, or a release tag whose own commits are cherry-p
 release commits, so a tag is often not an ancestor of `main`. A tag is admitted only when it
 peels to `UPSTREAM_OID`, `base..UPSTREAM_OID` holds no merge commit, and every commit
 `git cherry` marks `+` (no patch-equivalent on `main`) touches only two path classes: the
-release metadata, as literal paths (both changelogs, the four Android changelogs, the root
-`package.json` and `package-lock.json`, `plugins/package.json` and each workspace
-`package.json`), and anything under `.github/workflows/`, none of which ships in the daemon
+release metadata, as literal paths (both changelogs, the Android changelogs of v0.14.0 and
+v0.15.0, `nix/npm-deps.hash`, the root `package.json` and `package-lock.json`,
+`plugins/package.json` and each workspace `package.json`), and anything under `.github/workflows/`, none of which ships in the daemon
 build. Otherwise it refuses, naming the commit and path it stopped on. A later `main` that
 rewrites a cherry-pick's patch turns that commit `+`, and it is refused unless its paths are
 on the list.
@@ -657,12 +694,13 @@ vt packages/server/src/server/agent/providers/pi/agent.test.ts
 vt packages/server/src/server/agent/providers/acp-agent.test.ts
 vt packages/server/src/server/schedule/service.test.ts
 vt packages/server/src/server/bootstrap.smoke.test.ts
-# The end-to-end suites: upstream CI never runs the first two, and the third carries
+# The end-to-end suites: upstream CI never runs the first two, and the third and fourth carry
 # adapted assertions. Run them below a one-minute load of 16; a timeout at the 5 s default
 # is load.
 vt packages/server/src/server/agent/mcp-parity.e2e.test.ts --testTimeout=30000
 vt packages/server/src/server/agent/agent-mcp.e2e.test.ts --testTimeout=30000
 vt packages/server/src/server/connected-hosts/hosts.e2e.test.ts --testTimeout=30000
+vt packages/server/src/server/daemon-e2e/daemon-restart-resume.e2e.test.ts --testTimeout=30000
 
 npm run format:check
 npm run lint
