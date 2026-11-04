@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (agent-send-interrupt).
+// AIROOM-PATCH coverage (agent-send-interrupt).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SendMessageOptions } from "@getpaseo/client";
 import { createCli } from "../../cli.js";

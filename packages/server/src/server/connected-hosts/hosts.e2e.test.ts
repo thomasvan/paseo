@@ -1636,7 +1636,7 @@ test(
     // A CLI process can take longer than the two-second quiet window to start.
     // Exercise each delivery across windows; delivery.test.ts owns batching with a clock.
     await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(1);
-    // SLP-PATCH(agent-message-raw-body): an agent-sent body arrives raw; upstream
+    // AIROOM-PATCH(agent-message-raw-body): an agent-sent body arrives raw; upstream
     // expects "REMOTE_REPORT &lt;ready&gt;".
     expect(parentPrompts[0]).toContain("REMOTE_REPORT <ready>");
 
@@ -1858,7 +1858,7 @@ test(
     expect(parentPrompts[0]).toContain(`Agent ${childId}`);
     expect(parentPrompts[0]).toContain(`Server: ${remoteId}`);
     expect(parentPrompts[0]).toContain('event="finished"');
-    // SLP-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+    // AIROOM-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
     // awaiting a turn.
     await expect
       .poll(() => records(restarted.paseoHome), { timeout: 5000 })
@@ -1938,7 +1938,7 @@ test(
     finish.resolve();
     await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(2);
     expect(parentPrompts[1]).toContain('event="finished"');
-    // SLP-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+    // AIROOM-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
     // awaiting a turn, where upstream removes it.
     await expect
       // Provider start precedes dispatch acknowledgment and the durable re-arm commit.

@@ -148,7 +148,7 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
   return message.includes(`no archived rollout found for thread id ${threadId}`);
 }
 
-// SLP-PATCH(replace-awaits-teardown)
+// AIROOM-PATCH(replace-awaits-teardown)
 // How long an incoming turn waits for the previous foreground turn's teardown
 // before refusing. A replace path can reach startTurn while the interrupted
 // turn is still tearing down: the manager's force-cancel settles its run
@@ -158,7 +158,7 @@ const FOREGROUND_TEARDOWN_WAIT_MS = 10_000;
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
-// SLP-PATCH(interrupted-turn-terminals)
+// AIROOM-PATCH(interrupted-turn-terminals)
 // `turn/interrupt` ends a turn but leaves the shell commands it started running.
 // Each terminate is bounded by the first constant. A turn start waits for the
 // interrupted turn's commands to end, at most the interrupt's own bound plus one
@@ -3473,7 +3473,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private startupEvents: AgentStreamEvent[] | null = null;
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
-  // SLP-PATCH(replace-awaits-teardown): resolved whenever the foreground turn
+  // AIROOM-PATCH(replace-awaits-teardown): resolved whenever the foreground turn
   // clears, so an incoming startTurn can
   // wait out a teardown instead of refusing a milliseconds-wide race.
   private foregroundTurnClearWaiters: Array<() => void> = [];
@@ -3498,7 +3498,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private pendingFileChangeOutputDeltas = new Map<string, string[]>();
   private pendingAssistantMessageBoundary = false;
   private terminalCommandByProcessId = new Map<string, string>();
-  // SLP-PATCH(interrupted-turn-terminals): the root thread's still-running command
+  // AIROOM-PATCH(interrupted-turn-terminals): the root thread's still-running command
   // process ids, keyed by the native turn that started them. Codex's
   // `thread/backgroundTerminals/list` carries no turn, so `item/started` is the only
   // record of which turn owns a process.
@@ -4440,7 +4440,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
     if (this.activeForegroundTurnId || this.pendingForegroundStart) {
-      // SLP-PATCH(replace-awaits-teardown): wait bounded for the previous
+      // AIROOM-PATCH(replace-awaits-teardown): wait bounded for the previous
       // turn's teardown; only a turn that
       // genuinely will not end is refused. The wait tracks
       // activeForegroundTurnId only, so a concurrent in-flight start returns
@@ -4507,7 +4507,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         hasDeveloperInstructions: turnStart.hasDeveloperInstructions,
         hasCodexConfig: turnStart.hasCodexConfig,
       });
-      // SLP-PATCH(interrupted-turn-terminals): the interrupted turn's commands end
+      // AIROOM-PATCH(interrupted-turn-terminals): the interrupted turn's commands end
       // before this turn begins, so none of them outlives it into the new turn.
       await this.waitForInterruptedTurnCleanup();
       if (pendingStart.cancelRequested) {
@@ -5120,7 +5120,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     await this.interruptIdentifiedTurn(turnId, foregroundTurnId);
   }
 
-  // SLP-PATCH(dead-run-settles): extracted from `interrupt` so it stays under
+  // AIROOM-PATCH(dead-run-settles): extracted from `interrupt` so it stays under
   // the complexity limit; behavior is unchanged. Nothing identifiable to
   // interrupt — resolve rather than throw, matching the claude and acp
   // providers: throwing leaves the manager reading the cancel as
@@ -5140,7 +5140,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       },
       "provider.codex.interrupt.no_identified_turn_noop",
     );
-    // SLP-PATCH(interrupt-releases-foreground): the turn was never identified,
+    // AIROOM-PATCH(interrupt-releases-foreground): the turn was never identified,
     // so no turn-end event will arrive to
     // release the foreground slot, and every later startTurn would refuse
     // with "A foreground turn is already active". Release only the slot this
@@ -5150,7 +5150,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  // SLP-PATCH(interrupt-releases-foreground): extracted from `interrupt` (see
+  // AIROOM-PATCH(interrupt-releases-foreground): extracted from `interrupt` (see
   // `interruptWithoutIdentifiedTurn`); behavior unchanged.
   private async interruptIdentifiedTurn(
     turnId: string,
@@ -5171,7 +5171,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       },
       INTERRUPT_TIMEOUT_MS,
     );
-    // SLP-PATCH(interrupted-turn-terminals): once Codex accepts the interrupt, end
+    // AIROOM-PATCH(interrupted-turn-terminals): once Codex accepts the interrupt, end
     // the commands this turn started. Registered before the await, so a turn start
     // racing this interrupt waits for it. An already-idle turn was not interrupted,
     // and what it left running stays.
@@ -5208,7 +5208,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  // SLP-PATCH(interrupted-turn-terminals): remember which turn started a command,
+  // AIROOM-PATCH(interrupted-turn-terminals): remember which turn started a command,
   // so an interrupt ends that turn's commands and no other turn's. Only the root
   // thread's: a subagent's commands live on its own thread.
   private recordTurnTerminalProcess(
@@ -5244,7 +5244,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  // SLP-PATCH(interrupted-turn-terminals): accepted interrupts also need a record
+  // AIROOM-PATCH(interrupted-turn-terminals): accepted interrupts also need a record
   // when every start is still queued behind a notification conversion.
   private getTurnTerminalRecord(turnId: string) {
     const existing = this.terminalProcessIdsByTurnId.get(turnId);
@@ -5262,7 +5262,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     return record;
   }
 
-  // SLP-PATCH(interrupted-turn-terminals)
+  // AIROOM-PATCH(interrupted-turn-terminals)
   private trackInterruptedTurnCleanup(cleanup: Promise<void>): void {
     const tracked = Promise.all([this.interruptedTurnCleanup, cleanup])
       .then(() => undefined)
@@ -5272,7 +5272,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.interruptedTurnCleanup = tracked;
   }
 
-  // SLP-PATCH(interrupted-turn-terminals): terminate each process the interrupted
+  // AIROOM-PATCH(interrupted-turn-terminals): terminate each process the interrupted
   // turn started, by its own id. `thread/backgroundTerminals/clean` is never used:
   // it ends every terminal on the thread, an earlier turn's included. A process
   // already gone answers `terminated: false`. Never rejects; failures are logged.
@@ -5311,7 +5311,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
   }
 
-  // SLP-PATCH(interrupted-turn-terminals): a new turn starts only after the last
+  // AIROOM-PATCH(interrupted-turn-terminals): a new turn starts only after the last
   // interrupted turn's commands are ended, or after the bound, whichever is first.
   private async waitForInterruptedTurnCleanup(): Promise<void> {
     if (!this.interruptedTurnCleanup) return;
@@ -5338,7 +5338,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  // SLP-PATCH(force-cancel-releases-foreground): a force-canceled run settles
+  // AIROOM-PATCH(force-cancel-releases-foreground): a force-canceled run settles
   // the manager's run record, but nothing on that
   // path clears this session's foreground slot. The slot is released only when
   // Codex reports the turn ended, and a force-cancel happens precisely because
@@ -5424,7 +5424,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private async disposeClient(): Promise<void> {
     const client = this.client;
     this.connectionState = "disconnected";
-    // SLP-PATCH(dispose-releases-foreground): a disposed client cannot own a
+    // AIROOM-PATCH(dispose-releases-foreground): a disposed client cannot own a
     // live turn, so release the foreground slot
     // with it. Without this, a failed reconnect clears the native turn id and
     // leaves activeForegroundTurnId held forever, and every later startTurn
@@ -6530,7 +6530,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     this.completePendingRootCompactions();
-    // SLP-PATCH(interrupted-turn-terminals): what a turn that was not interrupted
+    // AIROOM-PATCH(interrupted-turn-terminals): what a turn that was not interrupted
     // leaves running, it left on purpose; no later interrupt may end it.
     if (parsed.status !== "interrupted" && this.currentTurnId) {
       this.terminalProcessIdsByTurnId.delete(this.currentTurnId);

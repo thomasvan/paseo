@@ -20,7 +20,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
-// SLP-PATCH(mcp-protocol-version-clip): fork-owned module.
+// AIROOM-PATCH(mcp-protocol-version-clip): fork-owned module.
 import { clipMcpProtocolVersionHeader } from "./mcp-protocol-version-clip.js";
 
 export type ListenTarget =
@@ -164,7 +164,7 @@ import {
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
-// SLP-PATCH(native-tools-injection-independent): fork-owned gate module.
+// AIROOM-PATCH(native-tools-injection-independent): fork-owned gate module.
 import { isNativePaseoToolsEnabled } from "./native-tools-gate.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
 import {
@@ -1491,7 +1491,7 @@ export async function createPaseoDaemon(
       const record = await agentStorage.get(agentId);
       return record ? !record.archivedAt : Boolean(agentManager.getAgent(agentId));
     },
-    // SLP-PATCH(wakeup-each): archive is written to storage before the runtime closes.
+    // AIROOM-PATCH(wakeup-each): archive is written to storage before the runtime closes.
     childArchived: async (agentId) => Boolean((await agentStorage.get(agentId))?.archivedAt),
     ...createFinishObservation({
       agentManager,
@@ -1607,7 +1607,7 @@ export async function createPaseoDaemon(
     );
   };
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
-  // SLP-PATCH(native-tools-injection-independent): the native catalog follows
+  // AIROOM-PATCH(native-tools-injection-independent): the native catalog follows
   // the MCP stack being enabled, not MCP injection (see native-tools-gate.ts).
   agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(config.mcpEnabled));
   setAgentProviderToolsEnabled(isNativePaseoToolsEnabled(config.mcpEnabled));
@@ -1697,7 +1697,7 @@ export async function createPaseoDaemon(
           });
           return;
         }
-        // SLP-PATCH(mcp-protocol-version-clip)
+        // AIROOM-PATCH(mcp-protocol-version-clip)
         clipMcpProtocolVersionHeader(req);
         const callerAgentIdRaw = req.query.callerAgentId;
         let callerAgentId: string | undefined;
@@ -1778,13 +1778,13 @@ export async function createPaseoDaemon(
             agentMcpBaseUrl =
               !mcpEnabled || config.mcpInjectIntoAgents === false ? null : mcpBaseUrl;
             agentManager.setMcpBaseUrl(agentMcpBaseUrl);
-            // SLP-PATCH(native-tools-injection-independent)
+            // AIROOM-PATCH(native-tools-injection-independent)
             agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
             daemonConfigStore.onFieldChange("mcp.enabled", (value) => {
               mcpEnabled = value !== false;
               const inject = daemonConfigStore.get().mcp.injectIntoAgents !== false;
               agentManager.setMcpBaseUrl(mcpEnabled && inject ? mcpBaseUrl : null);
-              // SLP-PATCH(native-tools-injection-independent): injection only
+              // AIROOM-PATCH(native-tools-injection-independent): injection only
               // controls the injected MCP server; native tools follow
               // mcp.enabled alone.
               agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
@@ -1792,7 +1792,7 @@ export async function createPaseoDaemon(
             });
             daemonConfigStore.onFieldChange("mcp.injectIntoAgents", (value) => {
               agentManager.setMcpBaseUrl(mcpEnabled && value ? mcpBaseUrl : null);
-              // SLP-PATCH(native-tools-injection-independent)
+              // AIROOM-PATCH(native-tools-injection-independent)
               agentManager.setPaseoToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
               setAgentProviderToolsEnabled(isNativePaseoToolsEnabled(mcpEnabled));
             });

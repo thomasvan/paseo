@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (native-tools-injection-independent).
+// AIROOM-PATCH coverage (native-tools-injection-independent).
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

@@ -263,7 +263,7 @@ test("batches retain each sender's attachment context and image order", async ()
     ],
   });
   await delivery.close();
-  // SLP-PATCH(agent-message-raw-body): an agent-sent envelope carries body="raw".
+  // AIROOM-PATCH(agent-message-raw-body): an agent-sent envelope carries body="raw".
   expect(prompt).toEqual([
     {
       type: "text",

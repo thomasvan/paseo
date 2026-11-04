@@ -922,7 +922,7 @@ describe("agent MCP end-to-end (offline)", () => {
     }
   }, 60_000);
 
-  // SLP-PATCH(mcp-protocol-version-clip)
+  // AIROOM-PATCH(mcp-protocol-version-clip)
   test("a client that sends a newer MCP protocol version completes requests after initialize", async () => {
     // The client sends notifications/initialized while it is constructed: the first
     // request after initialize, which a daemon that rejects the version refuses.

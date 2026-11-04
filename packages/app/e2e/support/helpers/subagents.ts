@@ -456,7 +456,7 @@ export async function delegateFleetThroughMcp() {
       a,
       b,
       close,
-      // SLP-PATCH(wakeup-each): a parent hears every finish of a child, so the caller states
+      // AIROOM-PATCH(wakeup-each): a parent hears every finish of a child, so the caller states
       // how many turns it expects to have finished (upstream: always one).
       async expectCompletion(child: typeof local, finishes: number) {
         await expect

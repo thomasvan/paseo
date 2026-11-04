@@ -1,4 +1,4 @@
-// SLP-PATCH(mcp-protocol-version-clip): fork-owned module.
+// AIROOM-PATCH(mcp-protocol-version-clip): fork-owned module.
 import type { IncomingMessage } from "node:http";
 import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 

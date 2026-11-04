@@ -28,7 +28,7 @@ function observeState(
     buffer.push({ status: "idle", final: null, lastMessage: null, error: null });
     return;
   }
-  // SLP-PATCH(wakeup-each): a new turn opens the gate, whatever started it. A local observe opens
+  // AIROOM-PATCH(wakeup-each): a new turn opens the gate, whatever started it. A local observe opens
   // with a synthetic `turn_started` that carries no `turnId` and the current snapshot, so it opens
   // the gate only when the child is really running. A remote host re-fetches the snapshot, which
   // can read idle after a fast turn, so the real event's `turnId` opens it on its own.
@@ -122,7 +122,7 @@ export async function openFinishObservation(
   }
   return {
     next: () => buffer.next(),
-    // SLP-PATCH(wakeup-each)
+    // AIROOM-PATCH(wakeup-each)
     turnPending: () => buffer.turnPending(),
     onTurn: (listener) => buffer.onTurn(listener),
     async close() {

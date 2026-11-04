@@ -271,7 +271,7 @@ export function createHostResolver(input: {
                   : undefined,
                 sourceAgentId: input.callerAgentId,
                 sourceAgentServerId: input.callerAgentId ? input.serverId : undefined,
-                // SLP-PATCH(agent-send-interrupt): a send routed to another host by
+                // AIROOM-PATCH(agent-send-interrupt): a send routed to another host by
                 // `serverId` interrupts unless it asks to steer, an agent caller
                 // included, as on this host (upstream steers for agent callers).
                 activeTurnBehavior:

@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (mcp-protocol-version-clip).
+// AIROOM-PATCH coverage (mcp-protocol-version-clip).
 import {
   LATEST_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,

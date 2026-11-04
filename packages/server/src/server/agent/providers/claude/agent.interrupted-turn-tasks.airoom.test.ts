@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (interrupted-turn-tasks).
+// AIROOM-PATCH coverage (interrupted-turn-tasks).
 import pino from "pino";
 import { afterEach, expect, test, vi } from "vitest";
 

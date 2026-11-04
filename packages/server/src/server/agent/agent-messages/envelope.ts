@@ -66,7 +66,7 @@ function unescapeXml(value: string): string | null {
   });
 }
 
-// SLP-PATCH(agent-message-raw-body): an agent-sent body reaches the receiving model
+// AIROOM-PATCH(agent-message-raw-body): an agent-sent body reaches the receiving model
 // as the sender wrote it. Upstream XML-escapes every body, so a model receives
 // `&lt;sha&gt;` and `&amp;&amp;` and has run the entity form as a command. Only the
 // envelope's own tag can end or open an envelope, so a raw body escapes that tag
@@ -122,7 +122,7 @@ export function parseAgentMessage(text: string): AgentMessage | null {
   }
   if (attributes.get("version") !== "1") return null;
   const id = attributes.get("message-id");
-  // SLP-PATCH(agent-message-raw-body): a raw body reverses only the envelope-tag
+  // AIROOM-PATCH(agent-message-raw-body): a raw body reverses only the envelope-tag
   // escape; a body written without `body="raw"` decodes as upstream wrote it.
   const encoding = attributes.get("body");
   if (encoding !== undefined && encoding !== "raw") return null;
@@ -145,7 +145,7 @@ export function parseAgentMessage(text: string): AgentMessage | null {
 
 /** Accept only a complete sequence of envelopes; prose around them stays user text. */
 export function parseAgentMessages(text: string): AgentMessage[] | null {
-  // SLP-PATCH(agent-message-raw-body): every body escapes the envelope tag (a raw body
+  // AIROOM-PATCH(agent-message-raw-body): every body escapes the envelope tag (a raw body
   // that tag alone, any other body fully), so a literal closing tag unambiguously ends
   // an entry.
   const parts = text.split(/(?<=<\/paseo-system>)\n+(?=<paseo-system )/);

@@ -3381,7 +3381,7 @@ export class AgentManager {
         reason: "interrupted",
         turnId: runTurnId,
       });
-      // SLP-PATCH(force-cancel-releases-foreground): the dispatch above settles
+      // AIROOM-PATCH(force-cancel-releases-foreground): the dispatch above settles
       // this manager's run record only, and the
       // session clears its foreground slot only on a turn end that a
       // force-cancel means is never coming. Release it here, before awaiting

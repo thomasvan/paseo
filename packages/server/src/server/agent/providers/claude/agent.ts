@@ -431,12 +431,12 @@ const CLAUDE_ROOT_ONLY_COMMANDS = new Set([
   "usage",
 ]);
 const INTERRUPT_TOOL_USE_PLACEHOLDER = "[Request interrupted by user for tool use]";
-// SLP-PATCH(interrupted-turn-tasks): the task type Claude announces for a Bash command, and the
+// AIROOM-PATCH(interrupted-turn-tasks): the task type Claude announces for a Bash command, and the
 // bound on each stop of an interrupted turn's command, the same as the interrupt's own.
 const CLAUDE_SHELL_TASK_TYPE = "local_bash";
 const INTERRUPTED_TURN_TASK_STOP_TIMEOUT_MS = 3_000;
 
-/** SLP-PATCH(interrupted-turn-tasks): one Claude turn's shell tasks that have not ended. */
+/** AIROOM-PATCH(interrupted-turn-tasks): one Claude turn's shell tasks that have not ended. */
 interface ClaudeTurnShellTasks {
   taskIds: Set<string>;
   /** The prompts this turn took, by their `command_lifecycle` uuid. */
@@ -445,7 +445,7 @@ interface ClaudeTurnShellTasks {
   stoppedOn: Query | null;
 }
 
-/** SLP-PATCH(interrupted-turn-tasks): an interrupt, and the turn it reached once that is known. */
+/** AIROOM-PATCH(interrupted-turn-tasks): an interrupt, and the turn it reached once that is known. */
 interface ClaudeShellTaskInterrupt {
   turn: ClaudeTurnShellTasks | null;
   /** The prompts Claude had not opened a turn for when the interrupt was sent. */
@@ -2409,7 +2409,7 @@ class ClaudeAgentSession implements AgentSession {
    */
   private mainTurnInFlight = false;
   /**
-   * SLP-PATCH(interrupted-turn-tasks): the shell tasks of the Claude turn now open on the stream.
+   * AIROOM-PATCH(interrupted-turn-tasks): the shell tasks of the Claude turn now open on the stream.
    * A fresh record opens at each turn's init and is let go at its result, so an earlier turn's
    * background command and the next turn's commands are never in the record an interrupt stops.
    * Null between turns. Prompts Claude started before the init that opens their turn wait in
@@ -4354,7 +4354,7 @@ class ClaudeAgentSession implements AgentSession {
       return;
     }
     this.observeMainTurnBracket(message);
-    // SLP-PATCH(interrupted-turn-tasks): before the stale-result suppression, so an interrupted
+    // AIROOM-PATCH(interrupted-turn-tasks): before the stale-result suppression, so an interrupted
     // turn's result still closes its task set.
     this.recordOpenTurnShellTask(message);
     if (this.shouldSuppressStaleResult(message)) {
@@ -4531,7 +4531,7 @@ class ClaudeAgentSession implements AgentSession {
       );
       return;
     }
-    // SLP-PATCH(interrupted-turn-tasks): the prompts this interrupt is for, read before the
+    // AIROOM-PATCH(interrupted-turn-tasks): the prompts this interrupt is for, read before the
     // withdrawal below forgets them.
     const interruptedCommandUuids = new Set([
       ...this.unstartedMessageUuids,
@@ -4547,7 +4547,7 @@ class ClaudeAgentSession implements AgentSession {
       if (await this.withdrawUnstartedMessages(queryToInterrupt)) return;
       this.pendingInterruptAbort = true;
     }
-    // SLP-PATCH(interrupted-turn-tasks): the turn this interrupt reaches is the one open on the
+    // AIROOM-PATCH(interrupted-turn-tasks): the turn this interrupt reaches is the one open on the
     // stream now, or, with none open, the one Claude opens next for these prompts.
     const shellTaskInterrupt = this.beginShellTaskInterrupt(interruptedCommandUuids);
     try {
@@ -4558,7 +4558,7 @@ class ClaudeAgentSession implements AgentSession {
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to interrupt active turn");
     }
-    // SLP-PATCH(interrupted-turn-tasks): the stops are not awaited, so none holds up the
+    // AIROOM-PATCH(interrupted-turn-tasks): the stops are not awaited, so none holds up the
     // interrupt or the next turn.
     shellTaskInterrupt.settledOn = queryToInterrupt;
     if (shellTaskInterrupt.turn) {
@@ -4566,7 +4566,7 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  /** SLP-PATCH(interrupted-turn-tasks) */
+  /** AIROOM-PATCH(interrupted-turn-tasks) */
   private beginShellTaskInterrupt(commandUuids: Set<string>): ClaudeShellTaskInterrupt {
     const interrupt: ClaudeShellTaskInterrupt = {
       turn: this.openTurnShellTasks,
@@ -4580,7 +4580,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   /**
-   * SLP-PATCH(interrupted-turn-tasks): an interrupt sent while no turn was open reaches the turn
+   * AIROOM-PATCH(interrupted-turn-tasks): an interrupt sent while no turn was open reaches the turn
    * Claude opens for a prompt it had already dequeued. Its init alone cannot tell that turn from
    * the next one Paseo sends, so the prompt's `command_lifecycle` uuid decides: a turn that took
    * one of the interrupted prompts is the one, and a turn that took any other prompt means the
@@ -4608,7 +4608,7 @@ class ClaudeAgentSession implements AgentSession {
     if (interrupt.settledOn) this.stopTurnShellTasks(turn, interrupt.settledOn);
   }
 
-  /** SLP-PATCH(interrupted-turn-tasks) */
+  /** AIROOM-PATCH(interrupted-turn-tasks) */
   private stopTurnShellTasks(turn: ClaudeTurnShellTasks, query: Query): void {
     turn.stoppedOn = query;
     const taskIds = [...turn.taskIds];
@@ -4617,7 +4617,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   /**
-   * SLP-PATCH(interrupted-turn-tasks): with `perTaskStopAffordance`, an interrupt ends the turn's
+   * AIROOM-PATCH(interrupted-turn-tasks): with `perTaskStopAffordance`, an interrupt ends the turn's
    * foreground command but leaves its `run_in_background` commands running. `task_started` ties
    * each shell command to a task id, and only while its turn is open does this record it. A turn
    * whose tasks were already stopped has each later one stopped as it is announced. A command a
@@ -4646,7 +4646,7 @@ class ClaudeAgentSession implements AgentSession {
     if (turn && message.type === "system") this.recordShellTaskFrame(turn, message);
   }
 
-  /** SLP-PATCH(interrupted-turn-tasks) */
+  /** AIROOM-PATCH(interrupted-turn-tasks) */
   private openTurnShellTaskRecord(): void {
     const turn: ClaudeTurnShellTasks = {
       taskIds: new Set(),
@@ -4658,7 +4658,7 @@ class ClaudeAgentSession implements AgentSession {
     this.matchUnboundShellTaskInterrupt(turn);
   }
 
-  /** SLP-PATCH(interrupted-turn-tasks): which prompt each turn took, and which prompts ended. */
+  /** AIROOM-PATCH(interrupted-turn-tasks): which prompt each turn took, and which prompts ended. */
   private observeShellTaskCommandLifecycle(lifecycle: ClaudeCommandLifecycle): void {
     const unbound = this.unboundShellTaskInterrupt;
     if (
@@ -4679,7 +4679,7 @@ class ClaudeAgentSession implements AgentSession {
     if (!turn.stoppedOn) this.matchUnboundShellTaskInterrupt(turn);
   }
 
-  /** SLP-PATCH(interrupted-turn-tasks) */
+  /** AIROOM-PATCH(interrupted-turn-tasks) */
   private recordShellTaskFrame(
     turn: ClaudeTurnShellTasks,
     message: Extract<SDKMessage, { type: "system" }>,
@@ -4702,7 +4702,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   /**
-   * SLP-PATCH(interrupted-turn-tasks): stops each shell task by its id, on the query that was
+   * AIROOM-PATCH(interrupted-turn-tasks): stops each shell task by its id, on the query that was
    * interrupted. A task the interrupt already ended answers the stop harmlessly. Each stop is
    * bounded; a failed or unanswered one is logged. Never rejects.
    */

@@ -1,4 +1,4 @@
-// SLP-PATCH(wakeup-each): the gate's turn signal and the terminal queue, on the `Host` fake.
+// AIROOM-PATCH(wakeup-each): the gate's turn signal and the terminal queue, on the `Host` fake.
 import { expect, test } from "vitest";
 import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-client";
 import type { AgentStreamEvent } from "../../agent-sdk-types.js";

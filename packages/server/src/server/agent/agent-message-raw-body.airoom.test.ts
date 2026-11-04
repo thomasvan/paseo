@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (agent-message-raw-body).
+// AIROOM-PATCH coverage (agent-message-raw-body).
 // Lives in its own file so the upstream tests stay upstream's; the same rows are
 // in the upstream PR's agent-prompt.test.ts.
 import { expect, test } from "vitest";

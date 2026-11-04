@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (agent-send-interrupt), the remote surface: a send_agent_prompt
+// AIROOM-PATCH coverage (agent-send-interrupt), the remote surface: a send_agent_prompt
 // routed by `serverId` to another host decides its activeTurnBehavior here, before
 // the local handler's default can apply. Lives in its own file so upstream's tests
 // stay upstream's.

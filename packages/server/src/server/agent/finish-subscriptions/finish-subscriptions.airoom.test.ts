@@ -1,4 +1,4 @@
-// SLP-PATCH(wakeup-each): a caller hears every finish of a long-lived child, exactly once, across
+// AIROOM-PATCH(wakeup-each): a caller hears every finish of a long-lived child, exactly once, across
 // restarts. These rows drive `createFinishSubscriptions` on the real JSON store, observing through
 // the real `openFinishObservation` over a child fake that publishes what the local observer does.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

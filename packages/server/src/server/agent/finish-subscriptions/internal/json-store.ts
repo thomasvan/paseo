@@ -11,7 +11,7 @@ const recordsSchema = z.array(
     childAgentId: z.string().min(1),
     serverId: z.string().min(1).optional(),
     requireParentOwnership: z.boolean().optional(),
-    // SLP-PATCH(wakeup-each): the plain object drops an unknown field on load.
+    // AIROOM-PATCH(wakeup-each): the plain object drops an unknown field on load.
     awaitingTurn: z.literal(true).optional(),
   }),
 );

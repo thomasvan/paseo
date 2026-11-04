@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (interrupted-turn-terminals).
+// AIROOM-PATCH coverage (interrupted-turn-terminals).
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import * as providerImageOutput from "./provider-image-output.js";

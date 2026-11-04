@@ -1,4 +1,4 @@
-// SLP-PATCH coverage (agent-send-interrupt), its batching effect. An agent's send
+// AIROOM-PATCH coverage (agent-send-interrupt), its batching effect. An agent's send
 // now defaults to interrupt, and a finish notice enqueues as steer, so the two no
 // longer share one provider dispatch when they land in one quiet window: delivery
 // splits them into ordered groups, in arrival order, each dispatched after the

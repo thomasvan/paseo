@@ -237,7 +237,7 @@ test("MCP delegates to self and B and opens both qualified children in ordinary 
     await submitMessage(page, "REMOTE_UI_TARGET");
     await expect(page.getByText("REMOTE_UI_TARGET", { exact: true })).toBeVisible();
     expect((await fleet.a.fetchAgent(fleet.remote.agentId))?.agent.lastUserMessageAt).toBeNull();
-    // SLP-PATCH(wakeup-each): each child finished two turns, its MCP initial prompt and the
+    // AIROOM-PATCH(wakeup-each): each child finished two turns, its MCP initial prompt and the
     // prompt sent above from the UI, and the parent hears both (upstream: the first only).
     await fleet.expectCompletion(fleet.local, 2);
     await fleet.expectCompletion(fleet.remote, 2);
@@ -245,7 +245,7 @@ test("MCP delegates to self and B and opens both qualified children in ordinary 
       workspaceId: fleet.workspace.workspaceId,
       agentId: fleet.parent.id,
     });
-    // SLP-PATCH(wakeup-each): one finish notice per child turn, two each (upstream: one).
+    // AIROOM-PATCH(wakeup-each): one finish notice per child turn, two each (upstream: one).
     for (const title of ["MCP child on A", "MCP child on B"]) {
       const notices = page.getByRole("button", { name: new RegExp(`Agent finished.*${title}`) });
       await expect(notices).toHaveCount(2);

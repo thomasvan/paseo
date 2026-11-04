@@ -142,7 +142,7 @@ test("retains intent until parent dispatch acknowledgment, then restart sends no
   expect(first.delivery.prompts[0]).toContain("Partial work saved");
   expect(await first.store.list()).toHaveLength(1);
   first.delivery.acknowledgments[0]!.resolve("steered");
-  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // AIROOM-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
   // record stays, awaiting a turn.
   await expect
     .poll(async () => first.store.list())
@@ -163,7 +163,7 @@ test("restart coalesces predecessor and queued candidate into one settled notifi
   restarted.observation.waits[0]!.result.resolve(outcome());
   await until(() => restarted.delivery.prompts.length === 1);
   restarted.delivery.acknowledgments[0]!.resolve("steered");
-  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // AIROOM-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
   // record stays, awaiting a turn.
   await expect
     .poll(async () => restarted.store.list())
@@ -298,7 +298,7 @@ test("dispatch failure retains intent and retries the ordinary finish notificati
   expect(await state.store.list()).toHaveLength(1);
   expect(state.observation.waits).toHaveLength(1);
   state.delivery.acknowledgments[1]!.resolve("steered");
-  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // AIROOM-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
   // record stays, awaiting a turn.
   await expect
     .poll(async () => state.store.list())
@@ -400,7 +400,7 @@ test("removed-host notice retries parent dispatch without observing again or del
 });
 
 test("failed removal after dispatch acknowledgment retries only storage, preserving the accepted outcome", async () => {
-  // SLP-PATCH(wakeup-each): a finish re-arms in place, keeping the oldest captured record and
+  // AIROOM-PATCH(wakeup-each): a finish re-arms in place, keeping the oldest captured record and
   // removing the others, so the injected removal failure needs two captured records: a
   // predecessor and a queued candidate, recovered as one group.
   const first = await scenario();
@@ -483,7 +483,7 @@ test("remote finish intent protects its caller through registration, observation
   expect(s.service.hasPendingForCaller("parent")).toBe(true);
   s.delivery.acknowledgments[0]!.resolve("steered");
   await until(() => !s.service.hasPendingForCaller("parent"));
-  // SLP-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
+  // AIROOM-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
   // record stays, awaiting a turn.
   expect(await s.store.list()).toEqual([
     expect.objectContaining({ ...intent, serverId: "remote", awaitingTurn: true }),

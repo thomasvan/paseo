@@ -3662,7 +3662,7 @@ class HeldTurnAgentClient implements AgentClient {
 }
 
 describe("send_agent_prompt MCP tool", () => {
-  // SLP-PATCH(agent-send-interrupt): an agent-scoped send with no behavior
+  // AIROOM-PATCH(agent-send-interrupt): an agent-scoped send with no behavior
   // interrupts, so the unavailable-steer fallback row asks for steer explicitly.
   it.each([
     { agentScoped: true, behavior: undefined, available: true, steered: false },
@@ -3771,7 +3771,7 @@ describe("send_agent_prompt MCP tool", () => {
         const sending = send({
           agentId: child.id,
           prompt: "New message",
-          // SLP-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
+          // AIROOM-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
           activeTurnBehavior: "steer",
           notifyOnFinish: true,
         });
@@ -3784,7 +3784,7 @@ describe("send_agent_prompt MCP tool", () => {
           await send({
             agentId: child.id,
             prompt: "Retry after rejection",
-            // SLP-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
+            // AIROOM-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
             activeTurnBehavior: "steer",
           });
           client.sessions[1]!.finishTurn();
@@ -3851,7 +3851,7 @@ describe("send_agent_prompt MCP tool", () => {
         const sending = send({
           agentId: child.id,
           prompt: "New message",
-          // SLP-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
+          // AIROOM-PATCH(agent-send-interrupt): an agent send interrupts unless it asks to steer.
           activeTurnBehavior: "steer",
           notifyOnFinish: true,
         });
@@ -6932,7 +6932,7 @@ describe("local durable finish subscription MCP wiring", () => {
         await vi.waitFor(() => expect(prompts()).toContain("finished."));
         expect(prompts()).toContain("Permission work complete");
         expect(permissionIds()).toEqual(["first", "second"]);
-        // SLP-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+        // AIROOM-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
         // awaiting a turn.
         const gates: unknown[] = [];
         await vi.waitFor(() => {

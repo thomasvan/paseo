@@ -1,4 +1,4 @@
-// SLP-PATCH(native-tools-injection-independent): fork-owned gate module.
+// AIROOM-PATCH(native-tools-injection-independent): fork-owned gate module.
 //
 // Upstream gates the native Paseo tool catalog on daemon MCP injection
 // (`mcpEnabled && mcp.injectIntoAgents !== false`). A deployment can serve MCP

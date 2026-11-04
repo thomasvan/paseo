@@ -1,17 +1,17 @@
 # PATCHES
 
-Local patches carried on `slp/patches` (fork `thomasvan/paseo`) on top of upstream
+Local patches carried on `airoom/patches` (fork `thomasvan/paseo`) on top of upstream
 `getpaseo/paseo`. A patch is a change this fork makes to upstream code; git holds how each one
 came to be, and this file says what each one does now, why, and how to carry it through a sync.
 
-Every patch site in code is marked `SLP-PATCH(<name>)`, except
+Every patch site in code is marked `AIROOM-PATCH(<name>)`, except
 `history-purpose-provider-contract`, which carries no marker and is checked by reading its hunk
 (see its section). When a hunk conflicts, re-apply the patch's intent onto upstream's current
 shape from its section below; do not restore an old diff.
 
 ## Current upstream sync
 
-`slp/patches` carries upstream tag `v0.15.0` (`8938fde3c713143f12eacbdd60c11fdfc0be0fb1`),
+`airoom/patches` carries upstream tag `v0.15.0` (`8938fde3c713143f12eacbdd60c11fdfc0be0fb1`),
 admitted by the release-tag path of the gate after five literal paths joined its release-metadata
 list (`nix/npm-deps.hash` and `fastlane/metadata/android/en-US/changelogs/15000{1,2,3,4}.txt`; the
 cuts change only `version` and the `@getpaseo/*` pins and one `sha256-` line of that hash, which
@@ -65,14 +65,14 @@ The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-r
 
 ## Where the tests live
 
-A patch's tests sit in a fork-only `.slp.test.ts` file where upstream owns the file beside the
+A patch's tests sit in a fork-only `.airoom.test.ts` file where upstream owns the file beside the
 code, so the upstream file stays upstream's and never conflicts on merge:
-`native-tools-gate.slp.test.ts`, `mcp-protocol-version-clip.slp.test.ts`,
-`agent-message-raw-body.slp.test.ts`, `finish-subscriptions/finish-subscriptions.slp.test.ts`,
-`finish-subscriptions/internal/observation-stream.slp.test.ts`,
-`host-operations/index.slp.test.ts`, `providers/codex-interrupted-turn-terminals.slp.test.ts`,
-`providers/claude/agent.interrupted-turn-tasks.slp.test.ts` and, in the CLI package,
-`commands/agent/send.slp.test.ts`. The other patches extend upstream's own suites, beside the
+`native-tools-gate.airoom.test.ts`, `mcp-protocol-version-clip.airoom.test.ts`,
+`agent-message-raw-body.airoom.test.ts`, `finish-subscriptions/finish-subscriptions.airoom.test.ts`,
+`finish-subscriptions/internal/observation-stream.airoom.test.ts`,
+`host-operations/index.airoom.test.ts`, `providers/codex-interrupted-turn-terminals.airoom.test.ts`,
+`providers/claude/agent.interrupted-turn-tasks.airoom.test.ts` and, in the CLI package,
+`commands/agent/send.airoom.test.ts`. The other patches extend upstream's own suites, beside the
 cases they change. Every patch test fails under at least one mutant of its patch's lines, and
 together they kill every such mutant an earlier, larger set of tests killed. Each fork guard
 listed next fails instead under a mutant of the upstream behaviour it guards.
@@ -80,7 +80,7 @@ listed next fails instead under a mutant of the upstream behaviour it guards.
 Six fork tests or groups guard upstream behaviour this fork depends on and no upstream test
 guards. Each leaves when upstream adds an equivalent:
 
-- `agent-messages/delivery.slp.test.ts`: delivery dispatches adjacent messages whose
+- `agent-messages/delivery.airoom.test.ts`: delivery dispatches adjacent messages whose
   behaviour differs as separate groups, in arrival order, each after the previous group's
   acknowledgement and none waiting for a turn to end. `agent-send-interrupt` relies on it
   (see its _Batching_). The rows pass explicit behaviours, so they never reach the sender
@@ -90,7 +90,7 @@ guards. Each leaves when upstream adds an equivalent:
   no other test fails.
 - `providers/acp-agent.test.ts`, `purpose: history releases the child process after loadSession
 replay, and close() afterward is a no-op`: an ACP history read releases its process once.
-- `create-agent/create.slp.test.ts`, its two rows: the create path registers its finish
+- `create-agent/create.airoom.test.ts`, its two rows: the create path registers its finish
   subscription pending before the first prompt's dispatch, rejects it when that prompt fails
   and accepts it only after dispatch. The rows drive an injected `FinishSubscriptions`;
   they stayed from the retired `detached-wakeup` patch, whose fix upstream carries (#7528).
@@ -181,12 +181,12 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
     `childArchived`), so the caller hears no premature `was closed`. A running snapshot opens
     the gate, and the resumed finish is delivered and re-arms, so the store keeps one record
     with `awaitingTurn: true` where upstream's is empty.
-- **Tests:** `finish-subscriptions.slp.test.ts` drives `createFinishSubscriptions` on the real
+- **Tests:** `finish-subscriptions.airoom.test.ts` drives `createFinishSubscriptions` on the real
   JSON store through the real `openFinishObservation` over a child fake that publishes what
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
   stop, a repeated completion (streamed, or supplied first by the initial wait) queued behind
   the acknowledged finish while a later turn is pending, and a rejected gate-open write
-  followed by a mid-turn close and recovery; `internal/observation-stream.slp.test.ts` drives
+  followed by a mid-turn close and recovery; `internal/observation-stream.airoom.test.ts` drives
   the gate signal and the queue on the `Host` fake.
 - **Adapted upstream rows:** twelve upstream tests expect the one-shot behaviour, and each is
   adapted in place with a comment naming the patch. Ten change only their store assertion,
@@ -253,7 +253,7 @@ the accepted outcome`, follows a `finished` too, and a re-arm of one record remo
   comma-separated value the SDK also rejects.
 - **Retire when:** the bundled SDK supports the protocols the room's clients speak. Claude Code
   also takes `MCP_PROTOCOL_NEGOTIATION=legacy`, a client-side alternative.
-- **Tests:** `mcp-protocol-version-clip.slp.test.ts`, a table that CI runs; one end-to-end case
+- **Tests:** `mcp-protocol-version-clip.airoom.test.ts`, a table that CI runs; one end-to-end case
   in `agent-mcp.e2e.test.ts` proves the route calls it.
 
 ## native-tools-injection-independent
@@ -267,7 +267,7 @@ the accepted outcome`, follows a `finished` too, and a re-arm of one record remo
   `{ enabled: false }` as every new agent's Paseo tool policy, and the caller-scoped server,
   which builds its catalog from that stored policy, serves no tools at all. The per-provider
   `paseoTools` policy is a second gate on top and cannot undo it.
-- **Tests:** `native-tools-gate.slp.test.ts` starts a daemon with injection off and reads the
+- **Tests:** `native-tools-gate.airoom.test.ts` starts a daemon with injection off and reads the
   launch context of a new agent after each change: at start, after injection is turned on and
   off by a config patch, after `mcp.enabled` is turned off and on by a config reload. A unit row
   keeps an absent `mcp.enabled` enabled, and a read of `bootstrap.ts` checks every switch's
@@ -365,7 +365,7 @@ and wakes every `startTurn` waiting on it.
   arrives as `REMOTE_REPORT <ready>`) and the two exact envelopes in
   `agent-messages/delivery.test.ts`'s batch case, each with a comment naming the patch.
   `agent-manager.test.ts`'s escaped envelope is a deliberate legacy input and stays.
-- **Tests:** `agent-message-raw-body.slp.test.ts` drives `formatAgentMessage`,
+- **Tests:** `agent-message-raw-body.airoom.test.ts` drives `formatAgentMessage`,
   `parseAgentMessage` and `prepareAgentMessage` through the `agent-messages/index.ts` barrel,
   the same rows as the upstream PR's `agent-prompt.test.ts`.
 
@@ -400,9 +400,9 @@ and wakes every `startTurn` waiting on it.
   for an agent caller, and the daemon honours it.
 - **Tests:** the guards of the sender default are upstream's `send_agent_prompt` dispatch table
   in `mcp-server.test.ts`, whose agent-scoped default row expects an interrupt and whose steer
-  cases ask for `steer`; the remote table in `host-operations/index.slp.test.ts` (omitted,
+  cases ask for `steer`; the remote table in `host-operations/index.airoom.test.ts` (omitted,
   explicit steer, explicit interrupt, and a human caller as the control); and the CLI's
-  `send.slp.test.ts`. The batching account rests on `agent-messages/delivery.slp.test.ts`, a
+  `send.airoom.test.ts`. The batching account rests on `agent-messages/delivery.airoom.test.ts`, a
   fork guard of upstream delivery (see _Where the tests live_). `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md` and their `zh-CN` copies state the default.
 
@@ -432,7 +432,7 @@ and wakes every `startTurn` waiting on it.
   the session, an earlier turn's included; that is upstream's behaviour, not this patch's.
 - **Retire when:** Codex ends an interrupted turn's commands itself. If `list` gains a turn
   id, match on it instead of the record.
-- **Tests:** `codex-interrupted-turn-terminals.slp.test.ts` drives a real session against the
+- **Tests:** `codex-interrupted-turn-terminals.airoom.test.ts` drives a real session against the
   scripted app-server in `codex/test-utils/fake-app-server.ts`. It covers ownership,
   autonomous next turns, queued and post-acknowledgement starts, completed versus failed
   commands, deduplication, the 16-turn bound and bounded cleanup before the next start.
@@ -463,7 +463,7 @@ and wakes every `startTurn` waiting on it.
   close the Claude CLI, which ends every command of the session.
 - **Retire when:** Claude Code ends an interrupted turn's background commands while sparing
   background subagents, or upstream stops passing `perTaskStopAffordance`.
-- **Tests:** `providers/claude/agent.interrupted-turn-tasks.slp.test.ts` drives a real
+- **Tests:** `providers/claude/agent.interrupted-turn-tasks.airoom.test.ts` drives a real
   `ClaudeAgentSession` against a scripted SDK query.
 
 ## Sync procedure
@@ -545,11 +545,11 @@ PREVIOUS_TARGET=8938fde3c713143f12eacbdd60c11fdfc0be0fb1
 # Set A: the files the fork changed, which is exactly what the patches own.
 git diff --name-only "$PREVIOUS_TARGET" HEAD -- packages/ | sort > /tmp/set-a.txt
 # Set B: the subset an upstream diff can touch (fork-only test files cannot).
-grep -v '\.slp\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
+grep -v '\.airoom\.test\.ts$' /tmp/set-a.txt > /tmp/set-b.txt
 git diff --name-only "$BASE" "$UPSTREAM_OID" -- $(cat /tmp/set-b.txt)
 
 # Patched files with nothing to grep for, which only the diff above can see:
-git grep -l 'SLP-PATCH' HEAD -- packages/ | sed 's|^[^:]*:||' | sort > /tmp/marked.txt
+git grep -l 'AIROOM-PATCH' HEAD -- packages/ | sed 's|^[^:]*:||' | sort > /tmp/marked.txt
 comm -23 /tmp/set-a.txt /tmp/marked.txt
 ```
 
@@ -589,13 +589,13 @@ T=$(printf '%s\n' "$out" | head -1)
 [ $rc -eq 0 ] || { echo "CONFLICTS:"; printf '%s\n' "$out" | tail -n +2; }
 
 # Marker gate against the merged tree (-h is git grep's --no-filename).
-git grep -oh "SLP-PATCH([a-z-]*)" "$T" -- packages/ | sort | uniq -c | sort -rn
+git grep -oh "AIROOM-PATCH([a-z-]*)" "$T" -- packages/ | sort | uniq -c | sort -rn
 
 # The wakeup-each gate's shape, read rather than counted.
 F=packages/server/src/server/agent/finish-subscriptions
 for f in index.ts internal/observation-stream.ts internal/observation-buffer.ts internal/json-store.ts; do
   echo "== $f"
-  git cat-file -p "$T:$F/$f" | grep -nE 'SLP-PATCH\(wakeup-each\)|awaitingTurn|turnObserved|turnPending|turn_started|terminals\.|childArchived|watch\.awaiting|serialize\(|signal\.aborted\) return'
+  git cat-file -p "$T:$F/$f" | grep -nE 'AIROOM-PATCH\(wakeup-each\)|awaitingTurn|turnObserved|turnPending|turn_started|terminals\.|childArchived|watch\.awaiting|serialize\(|signal\.aborted\) return'
 done
 git cat-file -p "$T:packages/server/src/server/bootstrap.ts" | grep -nE 'childArchived|finishSubscriptions\.close|agentMessages\.close'
 ```
@@ -668,17 +668,17 @@ vt() {
 }
 
 # The fork's own files first: the cheapest signal.
-vt packages/server/src/server/agent/create-agent/create.slp.test.ts
-vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.slp.test.ts
-vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.slp.test.ts
-vt packages/server/src/server/native-tools-gate.slp.test.ts
-vt packages/server/src/server/mcp-protocol-version-clip.slp.test.ts
-vt packages/server/src/server/agent/agent-message-raw-body.slp.test.ts
-vt packages/server/src/server/agent/agent-messages/delivery.slp.test.ts
-vt packages/server/src/server/agent/host-operations/index.slp.test.ts
-vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.slp.test.ts
-vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.slp.test.ts
-vt packages/cli/src/commands/agent/send.slp.test.ts
+vt packages/server/src/server/agent/create-agent/create.airoom.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.airoom.test.ts
+vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.airoom.test.ts
+vt packages/server/src/server/native-tools-gate.airoom.test.ts
+vt packages/server/src/server/mcp-protocol-version-clip.airoom.test.ts
+vt packages/server/src/server/agent/agent-message-raw-body.airoom.test.ts
+vt packages/server/src/server/agent/agent-messages/delivery.airoom.test.ts
+vt packages/server/src/server/agent/host-operations/index.airoom.test.ts
+vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.airoom.test.ts
+vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.airoom.test.ts
+vt packages/cli/src/commands/agent/send.airoom.test.ts
 # Upstream's suites for patched files: where a patch contradicting upstream intent shows.
 vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.test.ts
 vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.test.ts
@@ -704,7 +704,7 @@ vt packages/server/src/server/daemon-e2e/daemon-restart-resume.e2e.test.ts --tes
 
 npm run format:check
 npm run lint
-git push origin slp/patches
+git push origin airoom/patches
 ```
 
 When a run fails on an upstream assertion a carried patch deliberately changes, adapt that
@@ -718,7 +718,7 @@ A sync reaches no seat until the room activates it. The room repository (`~/Site
 owns each step, and its `runtime/paseo/README.md` holds the commands; this list gives the
 order, which is the safeguard:
 
-1. **Land the sync** by fast-forwarding `slp/patches` to the reviewed head.
+1. **Land the sync** by fast-forwarding `airoom/patches` to the reviewed head.
 2. **Advance this clone's git HEAD, with the daemon still running.** No `npm` yet: `npm ci`
    replaces `node_modules` under a running daemon. Seats reach this repository's `skills/`
    through membership links into the clone's working tree, so a skill change is live from

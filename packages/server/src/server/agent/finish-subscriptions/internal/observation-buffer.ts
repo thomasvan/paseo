@@ -2,7 +2,7 @@ import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-clien
 
 export type FinishObservationResult = WaitForFinishResult & {
   reason?: "was canceled" | "host unreachable" | "host removed";
-  /** SLP-PATCH(wakeup-each): a turn was observed after the previous terminal and before this one. */
+  /** AIROOM-PATCH(wakeup-each): a turn was observed after the previous terminal and before this one. */
   turnObserved?: boolean;
 };
 
@@ -12,7 +12,7 @@ export function createObservationBuffer(signal: AbortSignal) {
   const permissions = new Map<string, FinishObservationResult>();
   const resolvedBeforeInitial = new Set<string>();
   let initialPending = true;
-  // SLP-PATCH(wakeup-each): a first-in-first-out queue, not one slot, so a finish that lands
+  // AIROOM-PATCH(wakeup-each): a first-in-first-out queue, not one slot, so a finish that lands
   // while an earlier one awaits acknowledgement is kept. Each entry carries the turn count at
   // its push, which places every observed turn between two terminals.
   const terminals: Array<{ result: FinishObservationResult; turns: number }> = [];
@@ -34,7 +34,7 @@ export function createObservationBuffer(signal: AbortSignal) {
       for (const request of result.final?.pendingPermissions ?? [])
         if (!delivered.has(request.id)) permissions.set(request.id, result);
     } else {
-      // SLP-PATCH(wakeup-each)
+      // AIROOM-PATCH(wakeup-each)
       terminals.push({ result: { ...result, turnObserved: turns > pushedTurns }, turns });
       pushedTurns = turns;
       terminalSeen = true;
@@ -51,7 +51,7 @@ export function createObservationBuffer(signal: AbortSignal) {
         if (pendingPermissions.length)
           push({ ...result, final: { ...result.final, pendingPermissions } });
       } else if (
-        // SLP-PATCH(wakeup-each): a baseline after any streamed terminal, consumed or not, repeats it.
+        // AIROOM-PATCH(wakeup-each): a baseline after any streamed terminal, consumed or not, repeats it.
         !terminalSeen &&
         result.final?.status !== "running" &&
         result.final?.status !== "initializing"
@@ -60,14 +60,14 @@ export function createObservationBuffer(signal: AbortSignal) {
       resolvedBeforeInitial.clear();
     },
     push,
-    /** SLP-PATCH(wakeup-each): a new turn was observed. */
+    /** AIROOM-PATCH(wakeup-each): a new turn was observed. */
     turn() {
       turns++;
       onTurn?.();
     },
-    /** SLP-PATCH(wakeup-each): a turn was observed after the last terminal `next()` returned. */
+    /** AIROOM-PATCH(wakeup-each): a turn was observed after the last terminal `next()` returned. */
     turnPending: () => turns > consumedTurns,
-    /** SLP-PATCH(wakeup-each): calls `listener` on each turn, and now if one is already pending. */
+    /** AIROOM-PATCH(wakeup-each): calls `listener` on each turn, and now if one is already pending. */
     onTurn(listener: () => void) {
       onTurn = listener;
       if (turns > consumedTurns) listener();
@@ -92,7 +92,7 @@ export function createObservationBuffer(signal: AbortSignal) {
           }
           return first[1];
         }
-        // SLP-PATCH(wakeup-each)
+        // AIROOM-PATCH(wakeup-each)
         const terminal = terminals.shift();
         if (terminal) {
           consumedTurns = terminal.turns;

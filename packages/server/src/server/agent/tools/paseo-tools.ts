@@ -1219,7 +1219,7 @@ function createToolCatalog(
       .describe(
         "Get notified when the created agent finishes, errors, or needs permission. Set false for explicit reporting or no completion callback.",
       ),
-    // SLP-PATCH(detached-arg): the canonical schema hardcoded `detached: false`,
+    // AIROOM-PATCH(detached-arg): the canonical schema hardcoded `detached: false`,
     // so a detached child could only be requested through the COMPAT nested
     // `relationship` shape — which the schema does not advertise. A client that
     // trusts the advertised schema therefore cannot express the request at all;
@@ -1278,7 +1278,7 @@ function createToolCatalog(
     .object(legacyTopLevelCreateAgentInputSchema)
     .strict();
   const commonSendAgentPromptInputSchema = {
-    // SLP-PATCH(agent-send-interrupt): the default this text states is set in the handler.
+    // AIROOM-PATCH(agent-send-interrupt): the default this text states is set in the handler.
     activeTurnBehavior: ActiveTurnBehaviorSchema.optional().describe(
       'How to send into a running turn: "steer" joins it, falling back to interrupt when unavailable; "interrupt" replaces it. Defaults to interrupt.',
     ),
@@ -1755,7 +1755,7 @@ function createToolCatalog(
       return {
         kind: "agent-scoped",
         parsedArgs: parsed,
-        // SLP-PATCH(detached-arg): honour the advertised flag.
+        // AIROOM-PATCH(detached-arg): honour the advertised flag.
         detached: parsed.detached ?? false,
         cwd,
         workspaceId,
@@ -1978,7 +1978,7 @@ function createToolCatalog(
       prompt,
       sessionMode,
       notifyOnFinish = Boolean(callerAgentId),
-      // SLP-PATCH(agent-send-interrupt): every caller interrupts unless it asks
+      // AIROOM-PATCH(agent-send-interrupt): every caller interrupts unless it asks
       // to steer, an agent included (upstream steers for agent callers). A
       // steered correction can be ignored by a turn that finishes its original
       // task, and the sender never learns.
