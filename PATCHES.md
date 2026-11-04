@@ -28,7 +28,7 @@ derived from the previous target, not from `git merge-base HEAD <target>`. The m
 | the root, `plugins/` and eleven workspace `package.json`, `package-lock.json`                                        | upstream's side; only `version` and the `@getpaseo/*` pins differ                                                                                                  |
 | `CHANGELOG.md`, `CHANGELOG.zh-CN.md`, `docs/release.md`, `packages/app/fastlane/Fastfile`, `attachment-lightbox.tsx` | upstream's side; release-branch cherry-picks against `main`'s originals, no patch involved                                                                         |
 
-No patch met its own _Retire when_. `wakeup-each` met upstream's restart recovery (#8127, #8619)
+No patch met its own _Retire when_ by upstream's change. `wakeup-each` met upstream's restart recovery (#8127, #8619)
 and has its account and two upstream rows updated (below); the other twelve carry over. After
 this sync `git diff <target> --` the 19 bookkeeping files and the CI files is empty.
 
@@ -50,7 +50,6 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a long-lived child, once each, across restarts                 | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
 | [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                                                     |
-| [`mcp-protocol-version-clip`](#mcp-protocol-version-clip)                   | an MCP client newer than the bundled SDK gets past `initialize`                               | PR [#4570](https://github.com/getpaseo/paseo/pull/4570), issue [#3009](https://github.com/getpaseo/paseo/issues/3009)                                      |
 | [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                                                     |
 | [The Codex foreground cluster](#the-codex-foreground-cluster)               | a Codex session's foreground slot is released on every path that ends its turn (five patches) | issue [#3256](https://github.com/getpaseo/paseo/issues/3256) (the fixes described there); PR [#4041](https://github.com/getpaseo/paseo/pull/4041) open     |
 | [`history-purpose-provider-contract`](#history-purpose-provider-contract)   | a pi history read releases the runtime it spawned                                             | not opened: no raw-log repro yet; upstream left pi out of #5550                                                                                            |
@@ -61,13 +60,13 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
-`force-cancel-releases-foreground`, fourteen patches in all.
+`force-cancel-releases-foreground`, thirteen patches in all.
 
 ## Where the tests live
 
 A patch's tests sit in a fork-only `.airoom.test.ts` file where upstream owns the file beside the
 code, so the upstream file stays upstream's and never conflicts on merge:
-`native-tools-gate.airoom.test.ts`, `mcp-protocol-version-clip.airoom.test.ts`,
+`native-tools-gate.airoom.test.ts`,
 `agent-message-raw-body.airoom.test.ts`, `finish-subscriptions/finish-subscriptions.airoom.test.ts`,
 `finish-subscriptions/internal/observation-stream.airoom.test.ts`,
 `host-operations/index.airoom.test.ts`, `providers/codex-interrupted-turn-terminals.airoom.test.ts`,
@@ -114,9 +113,10 @@ replay, and close() afterward is a no-op`: an ACP history read releases its proc
   A seventh test in the file, `list_providers returns providers`, also fails at `v0.14.0`
   unpatched: it times out at 30 s on the room's host. It is upstream's and left as it is.
 
-Three patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.test.ts` or
+Two patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.test.ts` or
 `mcp-parity.e2e.test.ts` (the server's `test:integration` list names neither), so a sync runs
-them by hand; `connected-hosts/hosts.e2e.test.ts` is in that list and carries adapted
+them by hand (`agent-mcp.e2e.test.ts` carries no patch now, but its offline MCP cases guard the
+agent MCP route); `connected-hosts/hosts.e2e.test.ts` is in that list and carries adapted
 assertions, and a sync runs it by hand too. See `Sync procedure`.
 
 ## wakeup-each
@@ -238,23 +238,6 @@ the accepted outcome`, follows a `finished` too, and a re-arm of one record remo
   removed or rewritten first, adapt this patch so `detached: true` still creates a parentless
   agent.
 - **Tests:** `mcp-parity.e2e.test.ts`, a two-row table beside the legacy-shape test.
-
-## mcp-protocol-version-clip
-
-- **What:** `clipMcpProtocolVersionHeader` (`mcp-protocol-version-clip.ts`), called at the top
-  of the agent MCP route in `bootstrap.ts`, normalizes an unsupported `mcp-protocol-version`
-  header to the newest version the bundled SDK server supports. It rewrites `headers` and
-  every matching `rawHeaders` pair, in any case, and collapses duplicate raw pairs to one.
-- **Why:** clients negotiate protocols newer than the bundled `@modelcontextprotocol/sdk`
-  knows (Claude Code speaks `2026-07-28`). The streamable-HTTP transport checks the header on
-  every request but `initialize` and rejects an unknown version, so the client fails on its
-  first request after `initialize`. `@hono/node-server` builds the Web Request from
-  `rawHeaders`, so rewriting `headers` alone does nothing, and it joins duplicate pairs into a
-  comma-separated value the SDK also rejects.
-- **Retire when:** the bundled SDK supports the protocols the room's clients speak. Claude Code
-  also takes `MCP_PROTOCOL_NEGOTIATION=legacy`, a client-side alternative.
-- **Tests:** `mcp-protocol-version-clip.airoom.test.ts`, a table that CI runs; one end-to-end case
-  in `agent-mcp.e2e.test.ts` proves the route calls it.
 
 ## native-tools-injection-independent
 
@@ -618,7 +601,6 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  8 agent-send-interrupt                    2 detached-arg
  6 native-tools-injection-independent      1 dispose-releases-foreground
  5 agent-message-raw-body                  1 dead-run-settles
- 4 mcp-protocol-version-clip
 ```
 
 `wakeup-each`'s 48 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
@@ -673,7 +655,6 @@ vt packages/server/src/server/agent/create-agent/create.airoom.test.ts
 vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.airoom.test.ts
 vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.airoom.test.ts
 vt packages/server/src/server/native-tools-gate.airoom.test.ts
-vt packages/server/src/server/mcp-protocol-version-clip.airoom.test.ts
 vt packages/server/src/server/agent/agent-message-raw-body.airoom.test.ts
 vt packages/server/src/server/agent/agent-messages/delivery.airoom.test.ts
 vt packages/server/src/server/agent/host-operations/index.airoom.test.ts
