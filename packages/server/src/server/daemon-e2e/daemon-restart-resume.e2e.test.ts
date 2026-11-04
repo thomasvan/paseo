@@ -206,6 +206,8 @@ test.each([false, true])(
         cwd: original.cwd,
       });
 
+      // Adapted for the wakeup-each patch (PATCHES.md): upstream's one-shot subscription is empty here. The patch re-arms
+      // after a delivered finish, so the store keeps this watch, waiting for the child's next turn.
       await expect
         .poll(
           async () =>
@@ -214,7 +216,7 @@ test.each([false, true])(
             ),
           { timeout: 5000 },
         )
-        .toEqual([]);
+        .toMatchObject([{ callerAgentId: parent.id, childAgentId: childId, awaitingTurn: true }]);
       client = new DaemonClient({ url: `ws://127.0.0.1:${second.port}/ws`, appVersion: "0.13.0" });
       await client.connect();
       await client.fetchAgents({ subscribe: {} });
@@ -225,9 +227,10 @@ test.each([false, true])(
       const third = await restartFixture(root, { resumeOnStartup: true });
       processes.push(third.child);
       expect(await readPrompts(root)).toHaveLength(1);
+      // Adapted for the wakeup-each patch (PATCHES.md): the re-armed watch survives a start that sends nothing.
       expect(
         JSON.parse(await readFile(path.join(third.paseoHome, "finish-subscriptions.json"), "utf8")),
-      ).toEqual([]);
+      ).toMatchObject([{ callerAgentId: parent.id, childAgentId: childId, awaitingTurn: true }]);
     } catch (error) {
       console.error(
         await readFile(path.join(root, "fixture.log"), "utf8").catch(() => "No fixture log"),
