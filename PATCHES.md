@@ -612,7 +612,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-46 wakeup-each                             3 replace-awaits-teardown
+48 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
 10 interrupted-turn-terminals              2 force-cancel-releases-foreground
  8 agent-send-interrupt                    2 detached-arg
@@ -621,10 +621,11 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
  4 mcp-protocol-version-clip
 ```
 
-`wakeup-each`'s 46 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
+`wakeup-each`'s 48 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
 fork test files and the five adapted upstream rows there), one in `bootstrap.ts`, one in
 `mcp-server.test.ts` (its adapted row), two in `connected-hosts/hosts.e2e.test.ts` (its
-adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one
+adapted rows), two in `daemon-e2e/daemon-restart-resume.e2e.test.ts` (the second- and
+third-start assertions of its adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one
 in `e2e/support/helpers/subagents.ts`).
 
 Then merge and verify:

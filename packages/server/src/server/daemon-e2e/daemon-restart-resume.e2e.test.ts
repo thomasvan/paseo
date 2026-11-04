@@ -206,8 +206,8 @@ test.each([false, true])(
         cwd: original.cwd,
       });
 
-      // Adapted for the wakeup-each patch (PATCHES.md): upstream's one-shot subscription is empty here. The patch re-arms
-      // after a delivered finish, so the store keeps this watch, waiting for the child's next turn.
+      // AIROOM-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
+      // awaiting a turn, where upstream's one-shot subscription is removed.
       await expect
         .poll(
           async () =>
@@ -227,7 +227,7 @@ test.each([false, true])(
       const third = await restartFixture(root, { resumeOnStartup: true });
       processes.push(third.child);
       expect(await readPrompts(root)).toHaveLength(1);
-      // Adapted for the wakeup-each patch (PATCHES.md): the re-armed watch survives a start that sends nothing.
+      // AIROOM-PATCH(wakeup-each): the re-armed watch survives a start that sends nothing.
       expect(
         JSON.parse(await readFile(path.join(third.paseoHome, "finish-subscriptions.json"), "utf8")),
       ).toMatchObject([{ callerAgentId: parent.id, childAgentId: childId, awaitingTurn: true }]);
