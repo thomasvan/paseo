@@ -3171,7 +3171,9 @@ export class AgentManager {
     // AIROOM-PATCH(archived-out-of-band-declines): an archived agent has no interactive session
     // to run a command beside a turn, so it declines instead of throwing `Agent is archived`.
     // The prompt then goes to normal dispatch, which unarchives the agent and starts its turn.
-    // A live interactive agent skips the read: only the case below that would throw changes.
+    // A live interactive agent skips both reads: only the case below that would throw changes.
+    // The read in the lane decides, ordered against every archive; this first one only spares
+    // an agent that is already archived a history load.
     const live = this.agents.get(agentId);
     const interactive =
       live?.session &&
@@ -3186,6 +3188,14 @@ export class AgentManager {
         logger: this.logger,
       });
     }
+    const archivedInLane =
+      !interactive &&
+      (await this.runLifecycleMutation(agentId, async () => {
+        if ((await this.registry?.get(agentId))?.archivedAt) return true;
+        await this.ensureInteractiveSessionUnlocked(agentId);
+        return false;
+      }));
+    if (archivedInLane) return false;
     const agent = await this.ensureInteractiveSession(agentId);
     // Providers parse slash commands from the raw text, so a command another agent sent
     // must reach them without its sender envelope.
