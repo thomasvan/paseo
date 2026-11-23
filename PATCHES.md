@@ -61,11 +61,12 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | [`pi-capture-rejection-observed`](#pi-capture-rejection-observed)           | a pi capture prompt that fails cannot crash the daemon worker                                 | not opened                                                                                                                                                 |
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
 | [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's unflagged send interrupts a running turn                                           | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
+| [`archived-out-of-band-declines`](#archived-out-of-band-declines)           | an urgent agent message to an archived agent unarchives it and starts its turn                | not opened                                                                                                                                                 |
 | [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
-`force-cancel-releases-foreground`, twelve patches in all.
+`force-cancel-releases-foreground`, thirteen patches in all.
 
 ## Where the tests live
 
@@ -121,7 +122,7 @@ Two patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.t
 `mcp-parity.e2e.test.ts` (the server's `test:integration` list names neither), so a sync runs
 them by hand (`agent-mcp.e2e.test.ts` carries no patch now, but its offline MCP cases guard the
 agent MCP route); `connected-hosts/hosts.e2e.test.ts` is in that list and carries adapted
-assertions, and a sync runs it by hand too. See `Sync procedure`.
+assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
 
 ## wakeup-each
 
@@ -390,31 +391,9 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
     (`host-operations/index.ts`), which fills `interrupt` for an identified caller. That call
     is routed before the local handler, so the local default never reaches it.
 
-  None of the three fills `interrupt` for an archived recipient. That send goes out unset and
-  gets upstream's default (`queue`), which unarchives the recipient and starts its turn.
+  An archived recipient gets the same `interrupt`: `archived-out-of-band-declines` makes the
+  receiving daemon unarchive it and start its turn.
 
-- **Why archived is excepted:** in v0.17.3 an urgent agent message (`interrupt` or `steer`) is
-  first offered out of band (`agent-messages/delivery.ts` `advance` → `offerOutOfBand` →
-  `AgentManager.tryRunOutOfBand`). That loads the recipient as a history session, and
-  `ensureInteractiveSessionUnlocked` throws `Agent is archived`. The offer then fails the
-  message before `deliver` reaches `sendPreparedPromptToAgent`, where the unarchive happens.
-  The sender already holds a queued receipt and no turn starts. A `queue` message to an idle
-  recipient skips the offer. Stock v0.17.3 does the same for an explicit `interrupt`.
-- **How archived is read:** at each sender, just before the send, only when the agent named
-  no behaviour:
-  - the MCP handler reads the stored record (`agentStorage.get(agentId)?.archivedAt`);
-  - the remote route reads `archivedAt` from the snapshot of the `fetchAgent` preflight it
-    already makes;
-  - the CLI calls `fetchAgent` on the same identifier it sends to (the daemon resolves both
-    the same way) and reads `archivedAt`.
-- **Races:** the read and the send are not atomic.
-  - An archive that lands after the read sends `interrupt` to a now-archived agent. The
-    message fails as above, exactly as an explicit `interrupt` does upstream, and the daemon
-    logs the failed dispatch. An archive is a deliberate stop of the recipient, and the
-    fallback would otherwise have unarchived it.
-  - An unarchive that lands after the read sends the message unset, so it queues
-    (upstream's behaviour). The message still arrives and starts or follows a turn; the
-    sender loses only that one send's urgency.
 - **Why:** a correction that waits for the turn to end can arrive after the work it corrects,
   and a steered one can be ignored by a turn that goes on to finish its original task.
 - **Where the default is decided:** at each sender. The daemon's own default for an omitted
@@ -425,7 +404,7 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   daemon's `queue`; and the compatibility mapping that reads an older client's `steer` as
   `queue`. `session.ts`'s message-id fingerprint takes the wire value, so the fork CLI's send
   fingerprints as `interrupt`.
-- **What a sender sees:** an unflagged send to a running (not archived) agent replaces its turn at once, after
+- **What a sender sees:** an unflagged send to a running agent replaces its turn at once, after
   any messages the sender queued before it, in the same prompt. `queue` waits for the turn to
   end; `steer` joins a turn whose provider can take it and otherwise interrupts, and a steer
   the provider has not read is lost if the turn ends first. The receipt reports admission; the
@@ -441,14 +420,50 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   `host-operations/index.airoom.test.ts` (omitted, each explicit value, the source identities,
   and a person's omitted send unset); and the CLI's `send.airoom.test.ts` through
   `createCli().parseAsync` (omitted agent send, each explicit value, a person's omitted send
-  unset). The archived exception: `mcp-server.test.ts`'s `an agent-scoped send with no
-behavior to an archived agent queues and starts its turn` (local), an archived row in each
-  fork table, and upstream's `connected-hosts/hosts.e2e.test.ts` row `remote prompt to a
-closed agent (archived=true)…`, which times out without the exception.
+  unset). An omitted send to an archived agent is the omitted row of
+  `archived-out-of-band-declines`' tables.
   `daemon-e2e/agent-message-behaviors.test.ts` stays upstream's and checks the scope: a raw
   RPC omission still queues. `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md`, `public-docs/mcp.md`, their `zh-CN` copies,
   `docs/agent-lifecycle.md` and `docs/glossary.md` state the default.
+
+## archived-out-of-band-declines
+
+- **What:** `AgentManager.tryRunOutOfBand` (`agent-manager.ts`) returns `false` for an agent
+  that is not a live interactive session and whose stored record is archived. Upstream loads
+  that agent as a history session, and `ensureInteractiveSessionUnlocked` throws `Agent is
+archived`.
+- **Why:** an urgent agent message (`interrupt` or `steer`) is offered out of band before it
+  is dispatched (`agent-messages/delivery.ts` `advance` → `offerOutOfBand`). The throw fails the
+  message there, before `deliver` reaches `sendPreparedPromptToAgent`, the only place that
+  unarchives the recipient. The sender already holds a queued receipt, and no turn starts. A
+  decline sends the message on to that dispatch, which unarchives the agent and starts its turn,
+  as a `queue` message to an idle archived agent already does upstream. `agent-send-interrupt`
+  sends every omitted agent send as `interrupt`, so without this patch no unflagged agent send
+  could wake an archived agent.
+- **What it leaves alone:** a live interactive agent skips the read, and an unarchived agent
+  that is not live reads `false` and takes upstream's path. `delivery.ts` is upstream's. A
+  person's send (the app, the CLI without `PASEO_AGENT_ID`, a top-level MCP call) goes
+  through `sendPromptToAgent`, which unarchives before its own out-of-band check, so it never
+  reached the throw. A slash command sent to an archived agent is declined first, then
+  dispatch unarchives the agent and `startAgentRun`'s own out-of-band check runs it as a
+  command.
+- **Races:** the read sits outside the agent's lifecycle lane. An archive that lands after a
+  `false` read reaches upstream's throw and fails the message as upstream does. An unarchive
+  that lands after a `true` read declines a message the agent could have run out of band;
+  dispatch then reads the record unarchived and sends it, and a command still runs out of band
+  there.
+- **Retire when:** upstream's out-of-band offer stops failing a message for an archived
+  recipient: `tryRunOutOfBand` declines or unarchives it, or `offerOutOfBand` hands such a
+  message to `deliver`. Delete the guard and the two tables' markers, and keep the tables if
+  upstream's own tests do not cover an archived recipient.
+- **Tests:** `mcp-server.test.ts`, `an agent-scoped $behavior send to an archived agent unarchives it
+and starts its turn` (omitted, `interrupt`, `steer`), on the agent-scoped MCP route; and
+  `connected-hosts/hosts.e2e.test.ts`, `remote %s agent send to an archived agent starts its
+turn` (the same three), on the `serverId` route. Each waits at most 10 s, then asserts on the
+  outcome (dispatched, a turn started), so a lost message fails by assertion, not by the test
+  timeout. Upstream's `remote prompt to a closed agent (archived=true)…` row also needs the
+  patch now, and fails only by its timeout without it.
 
 ## interrupted-turn-tasks
 
@@ -631,18 +646,20 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-49 wakeup-each                             2 pi-capture-rejection-observed
-16 interrupted-turn-tasks                  2 interrupt-releases-foreground
- 9 agent-send-interrupt                    2 force-cancel-releases-foreground
- 6 native-tools-injection-independent      2 detached-arg
- 5 agent-message-raw-body                  1 dispose-releases-foreground
- 3 replace-awaits-teardown                 1 dead-run-settles
+49 wakeup-each                             3 archived-out-of-band-declines
+16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
+ 7 agent-send-interrupt                    2 interrupt-releases-foreground
+ 6 native-tools-injection-independent      2 force-cancel-releases-foreground
+ 5 agent-message-raw-body                  2 detached-arg
+ 3 replace-awaits-teardown                 1 dispose-releases-foreground
+                                           1 dead-run-settles
 ```
 
-98 sites under 12 names. `agent-send-interrupt`'s nine: the CLI sender, the remote sender, the
-agent schema, the archive read and the agent enqueue in `paseo-tools.ts`, and four in
-`mcp-server.test.ts` (the behaviour matrix, the idle-guidance row, the archived-recipient row,
-the queued-dispatch acknowledgement fixture).
+99 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
+agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
+behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
+`archived-out-of-band-declines`' three: the guard in `agent-manager.ts`, its table in
+`mcp-server.test.ts` and its table in `connected-hosts/hosts.e2e.test.ts`.
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
