@@ -3168,6 +3168,16 @@ export class AgentManager {
     options?: AgentRunOptions,
     onAccepted?: () => void,
   ): Promise<boolean> {
+    // AIROOM-PATCH(archived-out-of-band-declines): an archived agent has no interactive session
+    // to run a command beside a turn, so it declines instead of throwing `Agent is archived`.
+    // The prompt then goes to normal dispatch, which unarchives the agent and starts its turn.
+    // A live interactive agent skips the read: only the case below that would throw changes.
+    const live = this.agents.get(agentId);
+    const interactive =
+      live?.session &&
+      !this.historySessions.has(live.session) &&
+      !this.collectingRuntimes.has(agentId);
+    if (!interactive && (await this.registry?.get(agentId))?.archivedAt) return false;
     if (this.collectingRuntimes.has(agentId) || !this.agents.has(agentId)) {
       await this.waitForAgentClose(agentId);
       await ensureAgentLoaded(agentId, {

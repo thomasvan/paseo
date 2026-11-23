@@ -2730,3 +2730,73 @@ test.each([false, true])(
       .toEqual([expect.objectContaining({ childAgentId: child.id, awaitingTurn: true })]);
   },
 );
+
+// AIROOM-PATCH(archived-out-of-band-declines): an urgent agent message to an archived remote agent
+// unarchives it and starts its turn. The receiving daemon offers it out of band first, and that
+// offer declines instead of failing the message. The wait is bounded, so a lost message fails on
+// the assertion, not on the test timeout.
+test.each([undefined, "interrupt", "steer"] as const)(
+  "remote %s agent send to an archived agent starts its turn",
+  { timeout: 30000 },
+  async (behavior) => {
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const a = await daemon();
+    const b = await daemon({
+      agentClients: createTestAgentClients({
+        onStartTurn: () => started.resolve(),
+        beforeTurnComplete: () => finish.promise,
+      }),
+    });
+    cleanup.push(async () => finish.resolve());
+    const origin = await api(a);
+    const destination = await api(b);
+    await origin.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
+    const remoteId = (await online(origin.paseo)).hosts[0]!.serverId!;
+    const workspace = await origin.paseo.workspaces.create({
+      source: { kind: "directory", path: a.staticDir },
+    });
+    const remoteWorkspace = await destination.paseo.workspaces.create({
+      source: { kind: "directory", path: b.staticDir },
+    });
+    const parent = await workspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Archived target caller",
+    });
+    const child = await remoteWorkspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Archived target",
+    });
+    await child.archive();
+    expect((await destination.client.fetchAgent(child.id))?.agent.archivedAt).toBeTruthy();
+    const mcp = new Client({ name: "archived-target-caller", version: "1" });
+    await mcp.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${a.port}/mcp/agents?callerAgentId=${parent.id}`),
+      ),
+    );
+    cleanup.push(() => mcp.close());
+    const result = await mcp.callTool({
+      name: "send_agent_prompt",
+      arguments: {
+        serverId: remoteId,
+        agentId: child.id,
+        prompt: "Start the new task",
+        notifyOnFinish: false,
+        ...(behavior ? { activeTurnBehavior: behavior } : {}),
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ deliveryStatus: "queued" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const turn = await Promise.race([
+      started.promise.then(() => "started"),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve("no turn within 10 s"), 10_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    expect(turn).toBe("started");
+    expect((await destination.client.fetchAgent(child.id))?.agent.archivedAt).toBeNull();
+  },
+);
