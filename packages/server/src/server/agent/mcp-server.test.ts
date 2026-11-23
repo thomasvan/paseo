@@ -7689,8 +7689,9 @@ describe("local durable finish subscription MCP wiring", () => {
 });
 
 // AIROOM-PATCH(archived-out-of-band-declines): an agent's slash command to a closed agent that is
-// not archived. The queue's offer declines it unloaded, and dispatch's own out-of-band check runs
-// it once the agent is loaded, so it ends as on upstream: run out of band, no turn.
+// not archived. The queue's offer declines it with the agent still unloaded, and dispatch's own
+// out-of-band check runs it once the agent is loaded, so it ends as on upstream: run out of band,
+// no turn.
 describe("an agent's slash command to a closed agent", () => {
   const logger = createTestLogger();
 
@@ -7714,6 +7715,14 @@ describe("an agent's slash command to a closed agent", () => {
       await manager.closeAgent(child.id);
       expect(manager.getAgent(child.id)).toBeNull();
       expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
+      const queueOffers: { accepted: boolean; loadedAfter: boolean }[] = [];
+      const queueOffer = manager.offerOutOfBand.bind(manager);
+      vi.spyOn(manager, "offerOutOfBand").mockImplementation(async (id, ...rest) => {
+        const accepted = await queueOffer(id, ...rest);
+        if (id === child.id)
+          queueOffers.push({ accepted, loadedAfter: manager.getAgent(child.id) !== null });
+        return accepted;
+      });
       const offers: boolean[] = [];
       const offer = manager.tryRunOutOfBand.bind(manager);
       vi.spyOn(manager, "tryRunOutOfBand").mockImplementation(async (id, ...rest) => {
@@ -7760,6 +7769,8 @@ describe("an agent's slash command to a closed agent", () => {
         activeTurnBehavior: "interrupt",
       });
       expect(dispatch).toBe("dispatched");
+      // The queue's offer declined and loaded nothing; dispatch then accepted it, once loaded.
+      expect(queueOffers).toEqual([{ accepted: false, loadedAfter: false }]);
       expect(offers).toEqual([true]);
       expect(session.compactRequests).toEqual([{ customInstructions: "keep the plan" }]);
       expect(session.prompts.filter((p) => p.message.includes("compact"))).toEqual([]);
