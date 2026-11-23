@@ -284,6 +284,8 @@ function buildAgentManagerSpies() {
     hasPendingPermissions: () => false,
     steerOrReplaceActiveTurn: async () => ({ status: "inactive" as const }),
     tryRunOutOfBand: vi.fn().mockReturnValue(false),
+    // AIROOM-PATCH(archived-out-of-band-declines): the queue offers through this.
+    offerOutOfBand: vi.fn().mockReturnValue(false),
     subscribe: vi.fn().mockReturnValue(() => {}),
     onStop: () => () => {},
     streamAgent: vi.fn(
