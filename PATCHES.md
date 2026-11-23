@@ -204,8 +204,8 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
   the acknowledged finish while a later turn is pending, and a rejected gate-open write
   followed by a mid-turn close and recovery; `internal/observation-stream.airoom.test.ts` drives
   the gate signal and the queue on the `Host` fake.
-- **Adapted upstream rows:** twelve upstream tests expect the one-shot behaviour, and each is
-  adapted in place with a comment naming the patch. Ten change only their store assertion,
+- **Adapted upstream rows:** fourteen upstream tests expect the one-shot behaviour, and each is
+  adapted in place with a comment naming the patch. Twelve change only their store assertion,
   to one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
   - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
     (D-Q2's mid-turn rule; the fake's child is stored `closed` with no archive stamp):
@@ -220,7 +220,9 @@ final completion`.
   - `connected-hosts/hosts.e2e.test.ts`, after a remote `finished`: `durable remote finish
 intent survives origin restart and unavailable-host recovery` and `remote finish observation
 survives a permission checkpoint until resumed completion`. Their restart, availability,
-    permission and wait assertions stay as upstream wrote them.
+    permission and wait assertions stay as upstream wrote them. Added at v0.17.3: both rows of
+    `remote prompt to a closed agent (archived=%s) reports its new turn instead of stale
+    closure` (one `test.each`, one marked assertion), whose prompt and notice assertions stay.
   - `daemon-e2e/daemon-restart-resume.e2e.test.ts`, with recovery on, after a recovered finish:
     `durable finish subscriptions recover a running child after restart (abrupt=false)` and
     `(abrupt=true)`. The store holds one re-armed record with `awaitingTurn: true` after the
@@ -387,6 +389,32 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   - MCP `send_agent_prompt` with a `serverId` naming another host
     (`host-operations/index.ts`), which fills `interrupt` for an identified caller. That call
     is routed before the local handler, so the local default never reaches it.
+
+  None of the three fills `interrupt` for an archived recipient. That send goes out unset and
+  gets upstream's default (`queue`), which unarchives the recipient and starts its turn.
+
+- **Why archived is excepted:** in v0.17.3 an urgent agent message (`interrupt` or `steer`) is
+  first offered out of band (`agent-messages/delivery.ts` `advance` → `offerOutOfBand` →
+  `AgentManager.tryRunOutOfBand`). That loads the recipient as a history session, and
+  `ensureInteractiveSessionUnlocked` throws `Agent is archived`. The offer then fails the
+  message before `deliver` reaches `sendPreparedPromptToAgent`, where the unarchive happens.
+  The sender already holds a queued receipt and no turn starts. A `queue` message to an idle
+  recipient skips the offer. Stock v0.17.3 does the same for an explicit `interrupt`.
+- **How archived is read:** at each sender, just before the send, only when the agent named
+  no behaviour:
+  - the MCP handler reads the stored record (`agentStorage.get(agentId)?.archivedAt`);
+  - the remote route reads `archivedAt` from the snapshot of the `fetchAgent` preflight it
+    already makes;
+  - the CLI calls `fetchAgent` on the same identifier it sends to (the daemon resolves both
+    the same way) and reads `archivedAt`.
+- **Races:** the read and the send are not atomic.
+  - An archive that lands after the read sends `interrupt` to a now-archived agent. The
+    message fails as above, exactly as an explicit `interrupt` does upstream, and the daemon
+    logs the failed dispatch. An archive is a deliberate stop of the recipient, and the
+    fallback would otherwise have unarchived it.
+  - An unarchive that lands after the read sends the message unset, so it queues
+    (upstream's behaviour). The message still arrives and starts or follows a turn; the
+    sender loses only that one send's urgency.
 - **Why:** a correction that waits for the turn to end can arrive after the work it corrects,
   and a steered one can be ignored by a turn that goes on to finish its original task.
 - **Where the default is decided:** at each sender. The daemon's own default for an omitted
@@ -397,7 +425,7 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   daemon's `queue`; and the compatibility mapping that reads an older client's `steer` as
   `queue`. `session.ts`'s message-id fingerprint takes the wire value, so the fork CLI's send
   fingerprints as `interrupt`.
-- **What a sender sees:** an unflagged send to a running agent replaces its turn at once, after
+- **What a sender sees:** an unflagged send to a running (not archived) agent replaces its turn at once, after
   any messages the sender queued before it, in the same prompt. `queue` waits for the turn to
   end; `steer` joins a turn whose provider can take it and otherwise interrupts, and a steer
   the provider has not read is lost if the turn ends first. The receipt reports admission; the
@@ -413,8 +441,12 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   `host-operations/index.airoom.test.ts` (omitted, each explicit value, the source identities,
   and a person's omitted send unset); and the CLI's `send.airoom.test.ts` through
   `createCli().parseAsync` (omitted agent send, each explicit value, a person's omitted send
-  unset). `daemon-e2e/agent-message-behaviors.test.ts` stays upstream's and checks the scope:
-  a raw RPC omission still queues. `skills/paseo/SKILL.md`, `public-docs/cli.md`,
+  unset). The archived exception: `mcp-server.test.ts`'s `an agent-scoped send with no
+behavior to an archived agent queues and starts its turn` (local), an archived row in each
+  fork table, and upstream's `connected-hosts/hosts.e2e.test.ts` row `remote prompt to a
+closed agent (archived=true)…`, which times out without the exception.
+  `daemon-e2e/agent-message-behaviors.test.ts` stays upstream's and checks the scope: a raw
+  RPC omission still queues. `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md`, `public-docs/mcp.md`, their `zh-CN` copies,
   `docs/agent-lifecycle.md` and `docs/glossary.md` state the default.
 
@@ -599,23 +631,24 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-48 wakeup-each                             2 pi-capture-rejection-observed
+49 wakeup-each                             2 pi-capture-rejection-observed
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
- 7 agent-send-interrupt                    2 force-cancel-releases-foreground
+ 9 agent-send-interrupt                    2 force-cancel-releases-foreground
  6 native-tools-injection-independent      2 detached-arg
  5 agent-message-raw-body                  1 dispose-releases-foreground
  3 replace-awaits-teardown                 1 dead-run-settles
 ```
 
-95 sites under 12 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
-agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
-behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
+98 sites under 12 names. `agent-send-interrupt`'s nine: the CLI sender, the remote sender, the
+agent schema, the archive read and the agent enqueue in `paseo-tools.ts`, and four in
+`mcp-server.test.ts` (the behaviour matrix, the idle-guidance row, the archived-recipient row,
+the queued-dispatch acknowledgement fixture).
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
-`wakeup-each`'s 48 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
+`wakeup-each`'s 49 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
 fork test files and the five adapted upstream rows there), one in `bootstrap.ts`, one in
-`mcp-server.test.ts` (its adapted row), two in `connected-hosts/hosts.e2e.test.ts` (its
+`mcp-server.test.ts` (its adapted row), three in `connected-hosts/hosts.e2e.test.ts` (its
 adapted rows), two in `daemon-e2e/daemon-restart-resume.e2e.test.ts` (the second- and
 third-start assertions of its adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one
 in `e2e/support/helpers/subagents.ts`).
