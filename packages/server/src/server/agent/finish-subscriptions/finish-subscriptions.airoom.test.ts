@@ -51,6 +51,7 @@ class Child implements HostObservation {
         archivedAt: null,
       },
       ["codex"],
+      (_provider, own) => own ?? {},
     );
   }
   result(): WaitForFinishResult {

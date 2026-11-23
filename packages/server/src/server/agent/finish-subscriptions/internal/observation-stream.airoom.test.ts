@@ -33,6 +33,7 @@ function snapshot(status: Status) {
       updatedAt: "2026-01-01",
     },
     ["codex"],
+    (_provider, own) => own ?? {},
   );
 }
 async function scenario() {

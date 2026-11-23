@@ -6977,7 +6977,9 @@ describe("agent snapshot MCP serialization", () => {
       createManagedAgent({ id: "resumed-archived", cwd: "/tmp/workspace" }),
       createManagedAgent({ id: "in-cwd", cwd: "/tmp/workspace" }),
     ]);
-    spies.agentStorage.list.mockResolvedValue([archivedRecord]);
+    // v0.17 reads stored records through listActive; the record is offered all the same, so
+    // the stored branch still drops it as already-live.
+    spies.agentStorage.listActive.mockResolvedValue([archivedRecord]);
     spies.agentStorage.get.mockImplementation(async (id: string) =>
       id === "resumed-archived" ? archivedRecord : null,
     );
