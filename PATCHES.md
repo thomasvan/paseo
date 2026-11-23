@@ -61,7 +61,7 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | [`pi-capture-rejection-observed`](#pi-capture-rejection-observed)           | a pi capture prompt that fails cannot crash the daemon worker                                 | not opened                                                                                                                                                 |
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
 | [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's unflagged send interrupts a running turn                                           | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
-| [`archived-out-of-band-declines`](#archived-out-of-band-declines)           | an urgent agent message to an archived agent unarchives it and starts its turn                | not opened                                                                                                                                                 |
+| [`archived-out-of-band-declines`](#archived-out-of-band-declines)           | an urgent agent message to an archived agent unarchives it and starts its turn                | issue [#10598](https://github.com/getpaseo/paseo/issues/10598)                                                                                             |
 | [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
@@ -413,6 +413,11 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   sends no field, and an older one sends `steer`, which the daemon reads as `queue`. An
   unflagged send to a compacting Claude seat interrupts, and Claude's interrupt cancels the
   compaction; upstream's `steer` would have waited for it.
+- **Rollout requirement:** a connected destination daemon must carry
+  `archived-out-of-band-declines`. The `serverId` route sends an agent's omitted behaviour as an
+  explicit `interrupt`, and a destination without that patch (stock v0.17.3, issue
+  [#10598](https://github.com/getpaseo/paseo/issues/10598)) acknowledges an urgent send to an
+  archived agent and never starts its turn.
 - **Tests:** the agent-scoped rows of upstream's `send_agent_prompt` behaviour matrix in
   `mcp-server.test.ts` (the two omitted rows expect an applied interrupt and a new turn, with
   an explicit `queue` row for waiting); the same file's idle-guidance row and queued-dispatch
@@ -432,7 +437,10 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
 - **What:** `AgentManager.tryRunOutOfBand` (`agent-manager.ts`) returns `false` for an agent
   that is not a live interactive session and whose stored record is archived. Upstream loads
   that agent as a history session, and `ensureInteractiveSessionUnlocked` throws `Agent is
-archived`.
+archived`. The patch reads the record twice. The first read, before any load, declines an agent
+  already archived without starting a history runtime for it. The second, inside the agent's
+  lifecycle lane and just before the interactive upgrade, decides: a non-interactive agent's
+  upgrade now runs in that lane step, and an archived record there declines instead.
 - **Why:** an urgent agent message (`interrupt` or `steer`) is offered out of band before it
   is dispatched (`agent-messages/delivery.ts` `advance` → `offerOutOfBand`). The throw fails the
   message there, before `deliver` reaches `sendPreparedPromptToAgent`, the only place that
@@ -441,24 +449,37 @@ archived`.
   as a `queue` message to an idle archived agent already does upstream. `agent-send-interrupt`
   sends every omitted agent send as `interrupt`, so without this patch no unflagged agent send
   could wake an archived agent.
-- **What it leaves alone:** a live interactive agent skips the read, and an unarchived agent
-  that is not live reads `false` and takes upstream's path. `delivery.ts` is upstream's. A
-  person's send (the app, the CLI without `PASEO_AGENT_ID`, a top-level MCP call) goes
-  through `sendPromptToAgent`, which unarchives before its own out-of-band check, so it never
+- **What it leaves alone:** a live interactive agent skips both reads, and an unarchived agent
+  that is not live reads `false` twice and takes upstream's path, apart from the lane wait
+  below. `delivery.ts` is upstream's. A person's send (the app, the CLI without
+  `PASEO_AGENT_ID`, a top-level MCP call) goes through `sendPromptToAgent`, which unarchives before its own out-of-band check, so it never
   reached the throw. A slash command sent to an archived agent is declined first, then
   dispatch unarchives the agent and `startAgentRun`'s own out-of-band check runs it as a
   command.
-- **Races:** the read sits outside the agent's lifecycle lane. An archive that lands after a
-  `false` read reaches upstream's throw and fails the message as upstream does. An unarchive
-  that lands after a `true` read declines a message the agent could have run out of band;
-  dispatch then reads the record unarchived and sends it, and a command still runs out of band
-  there.
+- **Races:** archive and unarchive both run in the lifecycle lane, so the read in the lane is
+  ordered against each of them. An archive that lands after the first read, before the resume
+  or during it, is seen there: the resume has loaded a history session, or the archive has
+  closed the interactive one it loaded, and the offer declines. An archive that lands after the
+  lane step meets an agent the offer already holds live and interactive, the race any send to
+  a live agent has with an archive upstream; the offer has no upgrade left to throw `Agent is
+archived`. The other way, an unarchive that lands after a `true` read declines a message the
+  agent could have run out of band; dispatch then reads the record unarchived and sends it, and
+  a command still runs out of band there. A race on the offer's own reads falls on the decline
+  side, which is safe: dispatch sends the message and unarchives the agent.
+- **Cost for an unarchived agent that is not loaded:** its upgrade check now waits its turn in
+  the lifecycle lane even when the resume loaded an interactive session, which upstream's check
+  skips. That wait is what orders the read against a queued archive. A live interactive agent
+  never enters it.
 - **Retire when:** upstream's out-of-band offer stops failing a message for an archived
   recipient: `tryRunOutOfBand` declines or unarchives it, or `offerOutOfBand` hands such a
-  message to `deliver`. Delete the guard and the two tables' markers, and keep the tables if
+  message to `deliver`. Delete both reads and the tests' markers, and keep the tables if
   upstream's own tests do not cover an archived recipient.
 - **Tests:** `mcp-server.test.ts`, `an agent-scoped $behavior send to an archived agent unarchives it
-and starts its turn` (omitted, `interrupt`, `steer`), on the agent-scoped MCP route; and
+and starts its turn` (omitted, `interrupt`, `steer`), on the agent-scoped MCP route, which also
+  asserts that only an interactive resume ran (the first read's job); the same file's `an
+interrupt to a closed agent archived during the out-of-band offer still starts its turn`, whose
+  storage spy completes an archive inside the offer's first read and hands that read the record
+  from before it, so the archive lands after the first read and before the resume; and
   `connected-hosts/hosts.e2e.test.ts`, `remote %s agent send to an archived agent starts its
 turn` (the same three), on the `serverId` route. Each waits at most 10 s, then asserts on the
   outcome (dispatched, a turn started), so a lost message fails by assertion, not by the test
@@ -646,7 +667,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-49 wakeup-each                             3 archived-out-of-band-declines
+49 wakeup-each                             4 archived-out-of-band-declines
 16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
  7 agent-send-interrupt                    2 interrupt-releases-foreground
  6 native-tools-injection-independent      2 force-cancel-releases-foreground
@@ -655,11 +676,11 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
                                            1 dead-run-settles
 ```
 
-99 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
+100 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
 agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
 behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
-`archived-out-of-band-declines`' three: the guard in `agent-manager.ts`, its table in
-`mcp-server.test.ts` and its table in `connected-hosts/hosts.e2e.test.ts`.
+`archived-out-of-band-declines`' four: the guard in `agent-manager.ts`, its table and its race
+row in `mcp-server.test.ts`, and its table in `connected-hosts/hosts.e2e.test.ts`.
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
