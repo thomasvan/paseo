@@ -55,7 +55,6 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | [`history-purpose-provider-contract`](#history-purpose-provider-contract)   | a pi history read releases the runtime it spawned                                             | not opened: no raw-log repro yet; upstream left pi out of #5550                                                                                            |
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
 | [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's send interrupts a running turn unless it asks to steer                             | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
-| [`interrupted-turn-terminals`](#interrupted-turn-terminals)                 | an interrupted Codex turn's shell commands end                                                | PR [#7525](https://github.com/getpaseo/paseo/pull/7525), issue [#7522](https://github.com/getpaseo/paseo/issues/7522)                                      |
 | [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
@@ -69,7 +68,7 @@ code, so the upstream file stays upstream's and never conflicts on merge:
 `native-tools-gate.airoom.test.ts`,
 `agent-message-raw-body.airoom.test.ts`, `finish-subscriptions/finish-subscriptions.airoom.test.ts`,
 `finish-subscriptions/internal/observation-stream.airoom.test.ts`,
-`host-operations/index.airoom.test.ts`, `providers/codex-interrupted-turn-terminals.airoom.test.ts`,
+`host-operations/index.airoom.test.ts`,
 `providers/claude/agent.interrupted-turn-tasks.airoom.test.ts` and, in the CLI package,
 `commands/agent/send.airoom.test.ts`. The other patches extend upstream's own suites, beside the
 cases they change. Every patch test fails under at least one mutant of its patch's lines, and
@@ -389,37 +388,6 @@ and wakes every `startTurn` waiting on it.
   fork guard of upstream delivery (see _Where the tests live_). `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md` and their `zh-CN` copies state the default.
 
-## interrupted-turn-terminals
-
-- **What:** once Codex accepts `turn/interrupt`, the provider ends each shell command the
-  interrupted turn started and that has not exited, by process id, with
-  `thread/backgroundTerminals/terminate`. A turn Paseo starts waits for those calls before its
-  `turn/start`.
-- **Why:** `turn/interrupt` ends the turn and leaves its commands running.
-- **Attribution:** `thread/backgroundTerminals/list` carries no turn, so the provider records
-  each root-thread `commandExecution` process id under the turn of its `item/started`. A
-  `completed` item drops its id; a `failed` one keeps it, because Codex reports an interrupted
-  turn's still-running command as failed. A turn that ends any way but `interrupted` forgets
-  its ids, so what an earlier turn left running on purpose is never ended. At most 16 turns are
-  remembered, including accepted interrupts with no commands yet. After acknowledgement,
-  the record stays in an interrupt-accepted state: a late root start is terminated at once,
-  even when notification conversion held it in the queue. Each process is terminated once,
-  and late termination calls join the cleanup the next turn waits for.
-- **What it never does:** send `thread/backgroundTerminals/clean`, which ends every terminal on
-  the thread. It ends nothing after an already-idle interrupt, nothing on a subagent's thread,
-  and nothing after an interrupt of a turn Codex never identified.
-- **Bounds:** each terminate times out after 2 s; a failed one is logged
-  (`provider.codex.interrupt.terminal_terminate_failed`) and fails nothing. `startTurn` waits
-  at most the interrupt's bound plus one terminate's plus 500 ms.
-- **Known limit:** archive and reload close the Codex app-server, which ends every terminal of
-  the session, an earlier turn's included; that is upstream's behaviour, not this patch's.
-- **Retire when:** Codex ends an interrupted turn's commands itself. If `list` gains a turn
-  id, match on it instead of the record.
-- **Tests:** `codex-interrupted-turn-terminals.airoom.test.ts` drives a real session against the
-  scripted app-server in `codex/test-utils/fake-app-server.ts`. It covers ownership,
-  autonomous next turns, queued and post-acknowledgement starts, completed versus failed
-  commands, deduplication, the 16-turn bound and bounded cleanup before the next start.
-
 ## interrupted-turn-tasks
 
 - **What:** after the provider interrupts a Claude turn, it stops each shell command that turn
@@ -658,7 +626,6 @@ vt packages/server/src/server/native-tools-gate.airoom.test.ts
 vt packages/server/src/server/agent/agent-message-raw-body.airoom.test.ts
 vt packages/server/src/server/agent/agent-messages/delivery.airoom.test.ts
 vt packages/server/src/server/agent/host-operations/index.airoom.test.ts
-vt packages/server/src/server/agent/providers/codex-interrupted-turn-terminals.airoom.test.ts
 vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.airoom.test.ts
 vt packages/cli/src/commands/agent/send.airoom.test.ts
 # Upstream's suites for patched files: where a patch contradicting upstream intent shows.
