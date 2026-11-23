@@ -29,6 +29,8 @@ import { AgentStorage, type StoredAgentRecord } from "./agent-storage.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
 import { OmpAgentClient } from "./providers/omp/agent.js";
 import { FakeOmp } from "./providers/omp/test-utils/fake-omp.js";
+import { PiRpcAgentClient } from "./providers/pi/agent.js";
+import { FakePi } from "./providers/pi/test-utils/fake-pi.js";
 import {
   AgentTurnStartCanceledError,
   type AgentClient,
@@ -3993,7 +3995,7 @@ describe("send_agent_prompt MCP tool", () => {
         expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
         expect(client.sessions.at(-1)!.prompts).toHaveLength(1);
         expect(JSON.stringify(client.sessions.at(-1)!.prompts[0])).toContain("Start work");
-        // The offer's first read declines before any load: only the interactive resume ran.
+        // The offer declines before any load: only the interactive resume ran.
         expect(resume.mock.calls.map((call) => call[3]?.purpose)).toEqual(["interactive"]);
       } finally {
         vi.restoreAllMocks();
@@ -4001,94 +4003,6 @@ describe("send_agent_prompt MCP tool", () => {
       }
     },
   );
-
-  // AIROOM-PATCH(archived-out-of-band-declines): an archive that lands after the offer's first
-  // read and before the resume. The resume loads a history session, and the read in the
-  // lifecycle lane declines instead of the upgrade throwing `Agent is archived`.
-  it("an interrupt to a closed agent archived during the out-of-band offer still starts its turn", async () => {
-    const workdir = await mkdtemp(join(tmpdir(), "mcp-send-archive-race-"));
-    const storage = new AgentStorage(join(workdir, "agents"), logger);
-    const client = new HeldTurnAgentClient("codex", false);
-    const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
-    try {
-      const parent = await manager.createAgent({ provider: "codex", cwd: existingCwd }, undefined, {
-        workspaceId: "wks_parent",
-      });
-      const child = await manager.createAgent({ provider: "codex", cwd: existingCwd }, undefined, {
-        workspaceId: "wks_parent",
-      });
-      await manager.closeAgent(child.id);
-      expect(manager.getAgent(child.id)).toBeNull();
-      expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
-
-      // The offer's first storage read returns the unarchived record, and the archive completes
-      // before that read returns: the archive is ordered after the read and before the resume.
-      let armed = false;
-      let guardRead: StoredAgentRecord | null | undefined;
-      let archivedBeforeResume: string | null | undefined;
-      const read = storage.get.bind(storage);
-      vi.spyOn(storage, "get").mockImplementation(async (id) => {
-        if (!armed || id !== child.id) return read(id);
-        armed = false;
-        guardRead = await read(id);
-        await manager.archiveSnapshot(child.id, new Date().toISOString());
-        archivedBeforeResume = manager.getAgent(child.id) ? null : (await read(id))?.archivedAt;
-        return guardRead;
-      });
-      const offer = manager.tryRunOutOfBand.bind(manager);
-      vi.spyOn(manager, "tryRunOutOfBand").mockImplementation((id, ...rest) => {
-        if (id === child.id && guardRead === undefined) armed = true;
-        return offer(id, ...rest);
-      });
-
-      const server = await createAgentMcpServer({
-        agentManager: manager,
-        agentStorage: storage,
-        callerAgentId: parent.id,
-        providerSnapshotManager: createOpenCodeManager().manager,
-        logger,
-      });
-      const response = await invokeToolWithParsedInput(
-        registeredTool(server, "send_agent_prompt"),
-        {
-          agentId: child.id,
-          prompt: "Start work",
-          notifyOnFinish: false,
-          activeTurnBehavior: "interrupt",
-        },
-        false,
-      );
-      expect(response.structuredContent).toMatchObject({
-        deliveryStatus: "queued",
-        activeTurnBehavior: "interrupt",
-      });
-      // Bounded, so a lost message fails on the assertion below rather than the test timeout.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const dispatch = await Promise.race([
-        serverDeliveries
-          .get(server)!
-          .waitForDispatch(child.id, new AbortController().signal)
-          .then(
-            () => "dispatched",
-            (error: unknown) => `failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        new Promise<string>((resolve) => {
-          timer = setTimeout(() => resolve("still pending after 10 s"), 10_000);
-        }),
-      ]);
-      clearTimeout(timer);
-      // The ordering happened: the first read saw the agent unarchived, then it was archived.
-      expect(guardRead?.archivedAt).toBeFalsy();
-      expect(archivedBeforeResume).toBeTruthy();
-      expect(dispatch).toBe("dispatched");
-      expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
-      expect(client.sessions.at(-1)!.prompts).toHaveLength(1);
-      expect(JSON.stringify(client.sessions.at(-1)!.prompts[0])).toContain("Start work");
-    } finally {
-      vi.restoreAllMocks();
-      await removeAgentStateDir(manager, storage, workdir);
-    }
-  });
 
   it.each([
     { rejected: false, priorNotification: false },
@@ -7767,6 +7681,90 @@ describe("local durable finish subscription MCP wiring", () => {
       expect(await subscriptions.list()).toEqual([]);
     } finally {
       await mcp?.close();
+      await removeAgentStateDir(manager, storage, workdir);
+    }
+  });
+});
+
+// AIROOM-PATCH(archived-out-of-band-declines): an agent's slash command to a closed agent that is
+// not archived. The queue's offer declines it unloaded, and dispatch's own out-of-band check runs
+// it once the agent is loaded, so it ends as on upstream: run out of band, no turn.
+describe("an agent's slash command to a closed agent", () => {
+  const logger = createTestLogger();
+
+  it("runs out of band after the agent loads, and starts no turn", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-send-closed-command-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const runtime = new FakePi();
+    const pi = new PiRpcAgentClient({
+      runtime,
+      logger,
+      runtimeSettings: { command: { mode: "replace", argv: [process.execPath] } },
+    });
+    const manager = new AgentManager({ clients: { pi }, registry: storage, logger });
+    try {
+      const parent = await manager.createAgent({ provider: "pi", cwd: process.cwd() }, undefined, {
+        workspaceId: "wks_parent",
+      });
+      const child = await manager.createAgent({ provider: "pi", cwd: process.cwd() }, undefined, {
+        workspaceId: "wks_parent",
+      });
+      await manager.closeAgent(child.id);
+      expect(manager.getAgent(child.id)).toBeNull();
+      expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
+      const offers: boolean[] = [];
+      const offer = manager.tryRunOutOfBand.bind(manager);
+      vi.spyOn(manager, "tryRunOutOfBand").mockImplementation(async (id, ...rest) => {
+        const accepted = await offer(id, ...rest);
+        if (id === child.id) offers.push(accepted);
+        return accepted;
+      });
+      const server = await createAgentMcpServer({
+        agentManager: manager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const response = await invokeToolWithParsedInput(
+        registeredTool(server, "send_agent_prompt"),
+        {
+          agentId: child.id,
+          prompt: "/compact keep the plan",
+          notifyOnFinish: false,
+          activeTurnBehavior: "interrupt",
+        },
+        false,
+      );
+      // Bounded, so a lost message fails on the assertion below rather than the test timeout.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const dispatch = await Promise.race([
+        serverDeliveries
+          .get(server)!
+          .waitForDispatch(child.id, new AbortController().signal)
+          .then(
+            () => "dispatched",
+            (error: unknown) => `failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        new Promise<string>((resolve) => {
+          timer = setTimeout(() => resolve("still pending after 10 s"), 10_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      await vi.waitFor(() => expect(runtime.latestSession().compactRequests).toHaveLength(1));
+      const session = runtime.latestSession();
+      expect(response.structuredContent).toMatchObject({
+        deliveryStatus: "queued",
+        activeTurnBehavior: "interrupt",
+      });
+      expect(dispatch).toBe("dispatched");
+      expect(offers).toEqual([true]);
+      expect(session.compactRequests).toEqual([{ customInstructions: "keep the plan" }]);
+      expect(session.prompts.filter((p) => p.message.includes("compact"))).toEqual([]);
+      expect(manager.getAgent(child.id)?.lifecycle).toBe("idle");
+      expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
+    } finally {
+      vi.restoreAllMocks();
       await removeAgentStateDir(manager, storage, workdir);
     }
   });

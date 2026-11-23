@@ -16,7 +16,7 @@ export function createTestAgentMessages(params: {
 }) {
   return createAgentMessageDelivery({
     tryRunOutOfBand: (request, onAccepted) =>
-      params.agentManager.tryRunOutOfBand(
+      params.agentManager.offerOutOfBand(
         request.recipientId,
         request.prompt,
         { clientMessageId: request.messageIds[0] },

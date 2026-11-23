@@ -3155,6 +3155,16 @@ export class AgentManager {
     };
   }
 
+  // AIROOM-PATCH(archived-out-of-band-declines): the message queue's offer declines, before any
+  // load, for an agent that is not live and interactive. Normal dispatch then loads it, unarchives
+  // an archived one, and runs a command out of band there; upstream's load here threw first.
+  offerOutOfBand(...args: Parameters<AgentManager["tryRunOutOfBand"]>): Promise<boolean> {
+    const live = this.agents.get(args[0]);
+    if (!live || this.historySessions.has(live.session) || this.collectingRuntimes.has(args[0]))
+      return Promise.resolve(false);
+    return this.tryRunOutOfBand(...args);
+  }
+
   /**
    * Try to run a prompt out-of-band — i.e. without allocating a foreground turn
    * and without canceling any active turn. Returns true when the session
@@ -3168,18 +3178,6 @@ export class AgentManager {
     options?: AgentRunOptions,
     onAccepted?: () => void,
   ): Promise<boolean> {
-    // AIROOM-PATCH(archived-out-of-band-declines): an archived agent has no interactive session
-    // to run a command beside a turn, so it declines instead of throwing `Agent is archived`.
-    // The prompt then goes to normal dispatch, which unarchives the agent and starts its turn.
-    // A live interactive agent skips both reads: only the case below that would throw changes.
-    // The read in the lane decides, ordered against every archive; this first one only spares
-    // an agent that is already archived a history load.
-    const live = this.agents.get(agentId);
-    const interactive =
-      live?.session &&
-      !this.historySessions.has(live.session) &&
-      !this.collectingRuntimes.has(agentId);
-    if (!interactive && (await this.registry?.get(agentId))?.archivedAt) return false;
     if (this.collectingRuntimes.has(agentId) || !this.agents.has(agentId)) {
       await this.waitForAgentClose(agentId);
       await ensureAgentLoaded(agentId, {
@@ -3188,14 +3186,6 @@ export class AgentManager {
         logger: this.logger,
       });
     }
-    const archivedInLane =
-      !interactive &&
-      (await this.runLifecycleMutation(agentId, async () => {
-        if ((await this.registry?.get(agentId))?.archivedAt) return true;
-        await this.ensureInteractiveSessionUnlocked(agentId);
-        return false;
-      }));
-    if (archivedInLane) return false;
     const agent = await this.ensureInteractiveSession(agentId);
     // Providers parse slash commands from the raw text, so a command another agent sent
     // must reach them without its sender envelope.

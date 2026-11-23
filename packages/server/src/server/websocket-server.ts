@@ -740,7 +740,7 @@ export class VoiceAssistantWebSocketServer {
     this.agentStorage = agentStorage;
     this.agentMessages = createAgentMessageDelivery({
       tryRunOutOfBand: (request, onAccepted) =>
-        agentManager.tryRunOutOfBand(
+        agentManager.offerOutOfBand(
           request.recipientId,
           request.prompt,
           { clientMessageId: request.messageIds[0] },
