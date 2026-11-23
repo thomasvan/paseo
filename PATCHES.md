@@ -4,39 +4,45 @@ Local patches carried on `airoom/patches` (fork `thomasvan/paseo`) on top of ups
 `getpaseo/paseo`. A patch is a change this fork makes to upstream code; git holds how each one
 came to be, and this file says what each one does now, why, and how to carry it through a sync.
 
-Every patch site in code is marked `AIROOM-PATCH(<name>)`, except
-`history-purpose-provider-contract`, which carries no marker and is checked by reading its hunk
-(see its section). When a hunk conflicts, re-apply the patch's intent onto upstream's current
-shape from its section below; do not restore an old diff.
+Every patch site in code is marked `AIROOM-PATCH(<name>)`, except two one-line sites of
+`force-cancel-releases-foreground`: the optional `releaseForegroundTurn` in `agent-sdk-types.ts`
+and its forward in `provider-registry.ts`'s `wrapSessionProvider`, which its section names. Test
+rows a patch adds to an upstream suite are named in its section, and fork-only test files open
+with `AIROOM-PATCH coverage (<name>)`. When a hunk conflicts, re-apply the patch's intent onto
+upstream's current shape from its section below; do not restore an old diff.
 
 ## Current upstream sync
 
-`airoom/patches` carries upstream tag `v0.15.0` (`8938fde3c713143f12eacbdd60c11fdfc0be0fb1`),
-admitted by the release-tag path of the gate after five literal paths joined its release-metadata
-list (`nix/npm-deps.hash` and `fastlane/metadata/android/en-US/changelogs/15000{1,2,3,4}.txt`; the
-cuts change only `version` and the `@getpaseo/*` pins and one `sha256-` line of that hash, which
-nothing in the npm build reads). The previous sync's pinned target was `v0.14.0`
-(`8c6de842a3157530c26a7a94c78a3d647fb96ce9`). v0.15.0 and v0.14.0 were cut from different
-release branches (their merge base is `8419c212274d60792934e53145d6abdcbadc0d91`), so Set A is
-derived from the previous target, not from `git merge-base HEAD <target>`. The merge conflicted in
-21 files:
+`airoom/patches` carries upstream tag `v0.17.3` (commit
+`dd7c0499a8c311fae7b3244722a64d73cc178e4a`, tag object `4dd1b201a6da3b75d7908be308d64a7fbb49a1c8`),
+merged by its OID. The gate admitted it by the release-tag path after four literal paths joined
+the release-metadata list: `fastlane/metadata/android/en-US/changelogs/17003{1,2,3,4}.txt`. The
+paths of v0.17.1 and v0.17.2 reached `main` (`6ea095cb4`, `3e4f67d88`), so no line admits them.
+The previous sync's pinned target was `v0.15.0` (`8938fde3c713143f12eacbdd60c11fdfc0be0fb1`).
+v0.17.3 and v0.15.0 were cut from different release branches: `git merge-base HEAD <target>` was
+`82d5f6c580fccf500ed718aa8dad1be03639df7a`, older than v0.15.0, so Set A comes from the previous
+target. The merge conflicted in 32 files, 66 blocks:
 
-| File                                                                                                                 | Resolution                                                                                                                                                         |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent/providers/claude/agent.ts`                                                                                    | the fork's `interrupted-turn-tasks` constants and interfaces kept; `INTERRUPT_PLACEHOLDER_PATTERN` dropped, because #6259 moved it into `interrupt-placeholder.ts` |
-| `scripts/ci-workflow.test.mjs`                                                                                       | upstream's side; the fork's CI commit is upstream #8335, so no CI delta remains                                                                                    |
-| the root, `plugins/` and eleven workspace `package.json`, `package-lock.json`                                        | upstream's side; only `version` and the `@getpaseo/*` pins differ                                                                                                  |
-| `CHANGELOG.md`, `CHANGELOG.zh-CN.md`, `docs/release.md`, `packages/app/fastlane/Fastfile`, `attachment-lightbox.tsx` | upstream's side; release-branch cherry-picks against `main`'s originals, no patch involved                                                                         |
+| File                                                                                                                                                    | Resolution                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| both changelogs, `nix/npm-deps.hash`, `package-lock.json`, the root, `plugins/` and eleven workspace `package.json`                                     | upstream's blob; release bookkeeping of the two branches                                                                                         |
+| `scripts/ci-workflow.test.mjs`, `settings-host-page.spec.ts`, `toast-host.tsx`                                                                          | upstream's blob; no patch involved                                                                                                               |
+| `providers/codex-app-server-agent.ts`, seven blocks                                                                                                     | #7525's terminal cleanup as upstream wrote it, one copy of its helpers; the foreground cluster re-applied around #9931's pending-start handshake |
+| `providers/claude/agent.ts`                                                                                                                             | upstream's `observeNotificationTurn` (#10092), then the task observer, both before the stale-result return                                       |
+| `providers/pi/agent.ts`, three blocks                                                                                                                   | upstream's side (#8554, #10496); `history-purpose-provider-contract` retired, its capture observer kept as `pi-capture-rejection-observed`       |
+| `cli/.../send.ts`, `host-operations/index.ts`, `tools/paseo-tools.ts`, `mcp-server.test.ts`, `skills/paseo/SKILL.md`, the four `public-docs` send files | upstream's #10483 shape, then `agent-send-interrupt` re-applied in its own commit                                                                |
 
-No patch met its own _Retire when_ by upstream's change. `wakeup-each` met upstream's restart recovery (#8127, #8619)
-and has its account and two upstream rows updated (below); the other twelve carry over. After
-this sync `git diff <target> --` the 19 bookkeeping files and the CI files is empty.
+`.github/workflows/desktop-release.yml` merged cleanly and brought back v0.15.0's cherry-pick of
+#8445's signing backport, which #8450 removed upstream. It takes upstream's blob. After this sync
+`git diff <target> --` the 20 bookkeeping and CI files and `.github/` is empty. Retired by this sync: `interrupted-turn-terminals`, which upstream's #7525 replaces, and the
+release half of `history-purpose-provider-contract`, which #8554 replaces. Its unhandled-rejection
+observer stays as `pi-capture-rejection-observed`. The other eleven carry over.
 
-`mcp-protocol-version-clip` left with this sync. No family needs it: on a stand-in of the agent
+`mcp-protocol-version-clip` left with the v0.15.0 sync. No family needs it: on a stand-in of the agent
 MCP route, Claude 2.1.317, Codex 0.166.0 and pi 1.4.0 each initialised, listed tools and
 listed the tool with and without the clip (three runs per arm). Claude's first `server/discover`
 probe gets a 400 on the stock transport and Claude falls back on its own; Codex and pi ask for
-versions the bundled SDK supports. The sync's proof M repeats this on the merged daemon; if it
+versions the bundled SDK supports. That sync's proof M repeats this on the merged daemon; if it
 fails, revert the commit that retired the clip. A later client that sends an unsupported
 `mcp-protocol-version` header after `initialize` shows as a seat whose Paseo tools fail to list,
 with `Unsupported protocol version` in the daemon log.
@@ -52,14 +58,14 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                                                     |
 | [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                                                     |
 | [The Codex foreground cluster](#the-codex-foreground-cluster)               | a Codex session's foreground slot is released on every path that ends its turn (five patches) | issue [#3256](https://github.com/getpaseo/paseo/issues/3256) (the fixes described there); PR [#4041](https://github.com/getpaseo/paseo/pull/4041) open     |
-| [`history-purpose-provider-contract`](#history-purpose-provider-contract)   | a pi history read releases the runtime it spawned                                             | not opened: no raw-log repro yet; upstream left pi out of #5550                                                                                            |
+| [`pi-capture-rejection-observed`](#pi-capture-rejection-observed)           | a pi capture prompt that fails cannot crash the daemon worker                                 | not opened                                                                                                                                                 |
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
-| [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's send interrupts a running turn unless it asks to steer                             | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
+| [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's unflagged send interrupts a running turn                                           | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
 | [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
-`force-cancel-releases-foreground`, thirteen patches in all.
+`force-cancel-releases-foreground`, twelve patches in all.
 
 ## Where the tests live
 
@@ -75,14 +81,12 @@ cases they change. Every patch test fails under at least one mutant of its patch
 together they kill every such mutant an earlier, larger set of tests killed. Each fork guard
 listed next fails instead under a mutant of the upstream behaviour it guards.
 
-Six fork tests or groups guard upstream behaviour this fork depends on and no upstream test
-guards. Each leaves when upstream adds an equivalent:
+Five fork tests or groups guard upstream behaviour this fork depends on and no upstream test
+guards. Each leaves when upstream adds an equivalent. (`agent-messages/delivery.airoom.test.ts`
+left with the v0.17.3 sync: #10404 deliberately orders what it asserted apart, a steer or
+interrupt carrying the messages queued before it, and upstream's `delivery.test.ts` and
+`mcp-server.test.ts` guard the new order.)
 
-- `agent-messages/delivery.airoom.test.ts`: delivery dispatches adjacent messages whose
-  behaviour differs as separate groups, in arrival order, each after the previous group's
-  acknowledgement and none waiting for a turn to end. `agent-send-interrupt` relies on it
-  (see its _Batching_). The rows pass explicit behaviours, so they never reach the sender
-  default; mutants of delivery's grouping and serialization turn them red.
 - `schedule/service.test.ts`, `refuses a manual run while a scheduled claim is in flight`:
   the reservation of a schedule before its claim. With the reservation moved after the claim,
   no other test fails.
@@ -95,7 +99,8 @@ replay, and close() afterward is a no-op`: an ACP history read releases its proc
 - `mcp-server.test.ts`, `excludes an archived agent that is also live from list_agents`: an
   archived agent resumed into memory for a history read stays out of a default
   `list_agents`. It stayed from the retired `archived-live-list` patch, whose fix upstream
-  carries (#7532: `AgentDirectory` filters again after projection).
+  carries (#7532: `AgentDirectory` filters again after projection). v0.17 reads stored records
+  through `listActive`, so its fixture offers the archived record there.
 - `mcp-parity.e2e.test.ts`, six finish-notification rows whose assertions this fork adapted:
   at `v0.14.0` they fail unpatched, because #7370 added the sending host's `serverId` to a
   notice's source and the assertions predate it. Upstream CI does not run this file, so the
@@ -180,6 +185,18 @@ assertions, and a sync runs it by hand too. See `Sync procedure`.
     `childArchived`), so the caller hears no premature `was closed`. A running snapshot opens
     the gate, and the resumed finish is delivered and re-arms, so the store keeps one record
     with `awaitingTurn: true` where upstream's is empty.
+- **Upstream at v0.17:** #9757 makes the observer wait for a queued follow-up's dispatch before
+  it reads a terminal, and lets a permission checkpoint through while that follow-up is still
+  pending (`run`'s `pending.status !== "permission" || watch.pending`). #10483 enqueues every
+  notice as `queue`, so a busy caller hears a finish when its own turn ends, or earlier as the
+  rider of a later steer, interrupt or person's prompt. Both stay as upstream wrote them, and
+  the patch's code needed no change for either.
+- **Known defect, carried:** a crash restart can send an acknowledged child's idle state again
+  as `finished`. A timeline fetch loads a stored child for history, its registration publishes
+  an `initializing` snapshot, the gate takes that snapshot for a turn and writes itself open,
+  and the next crash restart delivers the idle baseline. The fix is a gate that opens only on a
+  turn the child runs (a running snapshot or a `turn_started` with a `turnId`). That changes
+  the gate's design, so it goes in its own fork PR, not in a sync.
 - **Tests:** `finish-subscriptions.airoom.test.ts` drives `createFinishSubscriptions` on the real
   JSON store through the real `openFinishObservation` over a child fake that publishes what
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
@@ -286,39 +303,40 @@ and wakes every `startTurn` waiting on it.
   force-cancel settles only the manager's record. The registry facade forwards the method:
   `wrapSessionProvider` enumerates the session surface by hand, so a method it does not
   forward never runs.
+- **Upstream at v0.17:** #9931 adds a pending-start handshake (`pendingForegroundStart`): an
+  `interrupt()` that arrives while `startTurn` is still preparing marks the start cancelled and
+  waits for it. The teardown wait tracks `activeForegroundTurnId` only, so a second start that
+  overlaps one in flight still refuses, as upstream's does. #7525's interrupted-turn cleanup
+  sits in the same `interrupt()`. The merge keeps the fork's split of `interrupt()` into
+  `interruptWithoutIdentifiedTurn` and `interruptIdentifiedTurn`, with #7525's sweep inside the
+  second.
 - **Retire when:** upstream's runtime reconciliation (#4041) replaces the provider runtime
   after a forced settlement; re-evaluate `force-cancel-releases-foreground` and
   `replace-awaits-teardown` first. The other three stay until a focused fix lands.
 - **Tests:** in upstream's `codex-app-server-agent.test.ts` and `agent-manager.test.ts`,
   beside the cases they extend, and `provider-registry-wrap.test.ts` for the forward.
 
-## history-purpose-provider-contract
+## pi-capture-rejection-observed
 
-**No marker.** A sync reads the hunk: pi's `streamHistory()` release must survive.
-
-- **What:** a pi session resumed with `{ purpose: "history" }` (`providers/pi/agent.ts`)
-  releases its runtime after its first history read, in a `try`/`finally`, so a read that
-  completes, throws, is abandoned early, or whose capture prompt rejects before it begins all
-  release. Only a completed read is cached and replayed to later calls.
-  `requestEntryCapture`'s pending result carries a no-op `catch`: `close()` rejects pending
-  extension results, so without it a capture prompt that rejects first leaves a rejection
-  nothing awaits.
-- **Why:** the pi handle's `nativeHandle` is the session file (`describePersistence`, and
-  resume reads it), but the history read goes through the live runtime: the entry capture and
-  `get_messages`. Without the release, every archived pi agent whose history is read keeps a
-  runtime resident. Upstream's idle-runtime release (`canStopRuntime`, #7782) also collects it
-  while `agents.idleRuntimeCleanup` is on; the room runs it off, so there the runtime stays
-  for the rest of the daemon's life.
-- **Better design:** upstream PR [#4473](https://github.com/getpaseo/paseo/pull/4473) (open)
-  reads the JSONL session file directly and returns the whole history with no runtime. That
-  is this patch's natural successor.
-- **Tests:** `providers/pi/agent.test.ts`, the `resumeSession purpose: history` suite: a
-  completed read, an interactive control, an abandoned read, a capture rejection, and a
-  `getMessages()` rejection after a successful capture.
-- **Retire when:** upstream releases a history-purpose pi runtime itself or reads history
-  without one (#4473), or at the first sync where this patch conflicts in `pi/agent.ts` while
-  upstream has not taken it. A collision of test blocks at the end of `pi/agent.test.ts` is
-  not such a conflict.
+- **What:** `requestEntryCapture` (`providers/pi/agent.ts`) attaches a no-op `catch` to the
+  pending capture result before it sends the capture prompt.
+- **Why:** the function starts waiting for the extension result, then awaits
+  `runtimeSession.prompt`, and awaits the result only after that. When the prompt rejects,
+  nothing awaits the pending result. `close()` rejects it then, and a history read's `finally`
+  calls `close()` (#8554), and so does the extension timeout. The daemon worker treats an
+  unhandled rejection as fatal: it logs "Unhandled promise rejection — daemon crashing" and
+  exits (`daemon-worker.ts`), taking every seat's runtime with it. The `catch` observes the
+  rejection, and the `await` that follows still throws when it is reached.
+- **History:** the observer was part of `history-purpose-provider-contract`, which released a
+  history-purpose pi runtime after its first read. Upstream's #8554 does that release itself
+  (`streamHistory`'s `finally`, with `closeAfterHistory`). The v0.17.3 sync retired the release,
+  its replay cache and its option plumbing for upstream's, and kept this one site.
+- **Tests:** `providers/pi/agent.test.ts`, `a capture prompt that rejects before a history read
+leaves no unhandled rejection when the runtime closes`. It drives a history-purpose resume
+  whose capture prompt rejects, and asserts that the read rejects, that upstream's `finally`
+  closed the runtime once, and that no `unhandledRejection` reached the process.
+- **Retire when:** upstream observes the pending capture result, or reads pi history without a
+  runtime (PR [#4473](https://github.com/getpaseo/paseo/pull/4473), open).
 
 ## agent-message-raw-body
 
@@ -337,7 +355,9 @@ and wakes every `startTurn` waiting on it.
 - **What it leaves alone:** an envelope without `body="raw"` decodes as upstream wrote it, and
   the human send path still quotes a pasted envelope as a fully escaped `user-message`. Every
   reader goes through `parseAgentMessage`; batch parsing, plural and heartbeat projection are
-  upstream's.
+  upstream's. A `change-request-update` envelope (#10148) keeps the full escape and no marker:
+  the daemon writes it from a forge, not from an agent sender. Its `source-url` stays an
+  XML-escaped attribute.
 - **Known limit:** a daemon without this patch reads raw history as XML: a body with a raw
   `<`, `>` or bare `&` falls back to a plain user row without its sender. A cross-host send
   carries no envelope: the receiving daemon formats it (`host-operations/index.ts`,
@@ -349,44 +369,54 @@ and wakes every `startTurn` waiting on it.
   `agent-manager.test.ts`'s escaped envelope is a deliberate legacy input and stays.
 - **Tests:** `agent-message-raw-body.airoom.test.ts` drives `formatAgentMessage`,
   `parseAgentMessage` and `prepareAgentMessage` through the `agent-messages/index.ts` barrel,
-  the same rows as the upstream PR's `agent-prompt.test.ts`.
+  the same rows as the upstream PR's `agent-prompt.test.ts`, and a row that keeps a
+  change-request update fully escaped and round-trips it.
 
 ## agent-send-interrupt
 
-- **What:** an agent's send into a running turn interrupts it unless it asks for `steer`, on
-  the three surfaces where an agent's send is decided. Upstream defaults agent callers to
-  `steer` on each:
-  - MCP `send_agent_prompt` on an agent-scoped server (`tools/paseo-tools.ts`, the handler
-    default and the schema text);
-  - `paseo send` with `PASEO_AGENT_ID` set (`cli/src/commands/agent/send.ts`), which always
-    sends the field;
+- **What:** an agent's send that names no `activeTurnBehavior` interrupts the recipient's running
+  turn. Upstream (#10483) gives an agent sender three behaviours, `queue`, `steer` and
+  `interrupt`, and defaults an omitted one to `queue`, which waits for the turn to end. The
+  patch fills `interrupt` for an omitted value at the three places an agent's send is decided,
+  each with nullish fallback, so an explicit value passes through:
+  - MCP `send_agent_prompt` on an agent-scoped server (`tools/paseo-tools.ts`): the agent
+    enqueue passes `activeTurnBehavior ?? "interrupt"`, and the agent schema's text and the
+    tool summary say so;
+  - `paseo send` with `PASEO_AGENT_ID` set (`cli/src/commands/agent/send.ts`), which sends
+    `interrupt` explicitly; a person's omitted send stays unset;
   - MCP `send_agent_prompt` with a `serverId` naming another host
-    (`host-operations/index.ts`). That call is routed before the local handler, so the
-    local default never reaches it.
-- **Why:** a steered correction can be ignored by a turn that goes on to finish its original
-  task, and the sender never learns.
-- **Where the default is decided:** at each sender, because the daemon cannot tell an explicit
-  `steer` from a defaulted one.
-- **What it leaves alone:** sends the daemon makes itself (a finish notice enqueues as `steer`
-  into the caller's running turn), and top-level sends: the app, the Hub, voice, and direct
-  RPC sends, including RPC sends that carry `sourceAgentId` (`session.ts`), which keep
-  upstream's steer default.
-- **Batching:** an agent-scoped send is queued and delivered after two quiet seconds for its
-  recipient (`agent-messages/delivery.ts`). Delivery splits adjacent messages whose
-  behaviour or session mode differs into ordered groups, each dispatched after the previous
-  group's dispatch is acknowledged. So a seat's interrupt that lands in the same window as a
-  pending finish notice is dispatched on its own, before or after the notice in arrival
-  order, and no longer shares the notice's dispatch. Neither group waits for the recipient's
-  turn to end.
-- **Known limit:** an upstream `paseo` CLI on a seat's `PATH` still sends an explicit `steer`
-  for an agent caller, and the daemon honours it.
-- **Tests:** the guards of the sender default are upstream's `send_agent_prompt` dispatch table
-  in `mcp-server.test.ts`, whose agent-scoped default row expects an interrupt and whose steer
-  cases ask for `steer`; the remote table in `host-operations/index.airoom.test.ts` (omitted,
-  explicit steer, explicit interrupt, and a human caller as the control); and the CLI's
-  `send.airoom.test.ts`. The batching account rests on `agent-messages/delivery.airoom.test.ts`, a
-  fork guard of upstream delivery (see _Where the tests live_). `skills/paseo/SKILL.md`, `public-docs/cli.md`,
-  `public-docs/orchestration-workflows.md` and their `zh-CN` copies state the default.
+    (`host-operations/index.ts`), which fills `interrupt` for an identified caller. That call
+    is routed before the local handler, so the local default never reaches it.
+- **Why:** a correction that waits for the turn to end can arrive after the work it corrects,
+  and a steered one can be ignored by a turn that goes on to finish its original task.
+- **Where the default is decided:** at each sender. The daemon's own default for an omitted
+  agent behaviour (`session.ts`'s `agentSenderBehavior`, delivery's enqueue) stays `queue`.
+- **What it leaves alone:** sends the daemon makes itself (finish notices and change-request
+  updates enqueue as `queue`); top-level sends (the app, the Hub, voice), which default to
+  `interrupt` upstream already; raw RPC sends that carry `sourceAgentId`, which keep the
+  daemon's `queue`; and the compatibility mapping that reads an older client's `steer` as
+  `queue`. `session.ts`'s message-id fingerprint takes the wire value, so the fork CLI's send
+  fingerprints as `interrupt`.
+- **What a sender sees:** an unflagged send to a running agent replaces its turn at once, after
+  any messages the sender queued before it, in the same prompt. `queue` waits for the turn to
+  end; `steer` joins a turn whose provider can take it and otherwise interrupts, and a steer
+  the provider has not read is lost if the turn ends first. The receipt reports admission; the
+  recipient's later output is what shows it acted.
+- **Known limits:** an upstream `paseo` CLI on a seat's `PATH` queues: a v0.17.2 or later CLI
+  sends no field, and an older one sends `steer`, which the daemon reads as `queue`. An
+  unflagged send to a compacting Claude seat interrupts, and Claude's interrupt cancels the
+  compaction; upstream's `steer` would have waited for it.
+- **Tests:** the agent-scoped rows of upstream's `send_agent_prompt` behaviour matrix in
+  `mcp-server.test.ts` (the two omitted rows expect an applied interrupt and a new turn, with
+  an explicit `queue` row for waiting); the same file's idle-guidance row and queued-dispatch
+  acknowledgement fixture, which ask for `queue`; the remote table in
+  `host-operations/index.airoom.test.ts` (omitted, each explicit value, the source identities,
+  and a person's omitted send unset); and the CLI's `send.airoom.test.ts` through
+  `createCli().parseAsync` (omitted agent send, each explicit value, a person's omitted send
+  unset). `daemon-e2e/agent-message-behaviors.test.ts` stays upstream's and checks the scope:
+  a raw RPC omission still queues. `skills/paseo/SKILL.md`, `public-docs/cli.md`,
+  `public-docs/orchestration-workflows.md`, `public-docs/mcp.md`, their `zh-CN` copies,
+  `docs/agent-lifecycle.md` and `docs/glossary.md` state the default.
 
 ## interrupted-turn-tasks
 
@@ -469,6 +499,12 @@ upstream_gate() {
         fastlane/metadata/android/en-US/changelogs/150002.txt) ;;
         fastlane/metadata/android/en-US/changelogs/150003.txt) ;;
         fastlane/metadata/android/en-US/changelogs/150004.txt) ;;
+        # Added for v0.17.3: the four Android changelogs of the 0.17.3 cut. v0.17.1's and
+        # v0.17.2's reached main, so their commits are patch-equivalent there.
+        fastlane/metadata/android/en-US/changelogs/170031.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/170032.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/170033.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/170034.txt) ;;
         packages/app/package.json | packages/cli/package.json | packages/client/package.json) ;;
         packages/desktop/package.json | packages/expo-two-way-audio/package.json) ;;
         packages/highlight/package.json | packages/plugin/package.json) ;;
@@ -488,10 +524,10 @@ upstream_gate "$(git rev-parse upstream/main)" "$UPSTREAM_OID" "${UPSTREAM_TAG:-
 BASE=$(git merge-base HEAD "$UPSTREAM_OID")
 
 # PREVIOUS_TARGET is the pinned target of the previous sync, named under "Current upstream
-# sync" (v0.15.0 for the next one). Set A diffs from it, not from BASE: a tag cut from another
+# sync" (v0.17.3 for the next one). Set A diffs from it, not from BASE: a tag cut from another
 # release branch than the last target makes BASE older than that target, and the diff then
 # carries the previous release branch's own commits, files no patch owns.
-PREVIOUS_TARGET=8938fde3c713143f12eacbdd60c11fdfc0be0fb1
+PREVIOUS_TARGET=dd7c0499a8c311fae7b3244722a64d73cc178e4a
 
 # Set A: the files the fork changed, which is exactly what the patches own.
 git diff --name-only "$PREVIOUS_TARGET" HEAD -- packages/ | sort > /tmp/set-a.txt
@@ -509,8 +545,8 @@ The gate admits a `main` commit, or a release tag whose own commits are cherry-p
 release commits, so a tag is often not an ancestor of `main`. A tag is admitted only when it
 peels to `UPSTREAM_OID`, `base..UPSTREAM_OID` holds no merge commit, and every commit
 `git cherry` marks `+` (no patch-equivalent on `main`) touches only two path classes: the
-release metadata, as literal paths (both changelogs, the Android changelogs of v0.14.0 and
-v0.15.0, `nix/npm-deps.hash`, the root `package.json` and `package-lock.json`,
+release metadata, as literal paths (both changelogs, the Android changelogs of v0.14.0,
+v0.15.0 and v0.17.3, `nix/npm-deps.hash`, the root `package.json` and `package-lock.json`,
 `plugins/package.json` and each workspace `package.json`), and anything under `.github/workflows/`, none of which ships in the daemon
 build. Otherwise it refuses, naming the commit and path it stopped on. A later `main` that
 rewrites a cherry-pick's patch turns that commit `+`, and it is refused unless its paths are
@@ -563,13 +599,19 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-48 wakeup-each                             3 replace-awaits-teardown
+48 wakeup-each                             2 pi-capture-rejection-observed
 16 interrupted-turn-tasks                  2 interrupt-releases-foreground
-10 interrupted-turn-terminals              2 force-cancel-releases-foreground
- 8 agent-send-interrupt                    2 detached-arg
- 6 native-tools-injection-independent      1 dispose-releases-foreground
- 5 agent-message-raw-body                  1 dead-run-settles
+ 7 agent-send-interrupt                    2 force-cancel-releases-foreground
+ 6 native-tools-injection-independent      2 detached-arg
+ 5 agent-message-raw-body                  1 dispose-releases-foreground
+ 3 replace-awaits-teardown                 1 dead-run-settles
 ```
+
+95 sites under 12 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
+agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
+behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
+`pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
+`pi/agent.test.ts`.
 
 `wakeup-each`'s 48 sites: 39 in `agent/finish-subscriptions/` (its four source files, both
 fork test files and the five adapted upstream rows there), one in `bootstrap.ts`, one in
@@ -618,38 +660,50 @@ vt() {
     ./node_modules/.bin/vitest run "$@"
 }
 
+# Server files run from packages/server, under the server's own vitest config (globals,
+# its setup env, a 30 s test timeout), as its npm test scripts do: run from the root,
+# agent-manager.test.ts does not load (`describe is not defined`).
+cd packages/server
 # The fork's own files first: the cheapest signal.
-vt packages/server/src/server/agent/create-agent/create.airoom.test.ts
-vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.airoom.test.ts
-vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.airoom.test.ts
-vt packages/server/src/server/native-tools-gate.airoom.test.ts
-vt packages/server/src/server/agent/agent-message-raw-body.airoom.test.ts
-vt packages/server/src/server/agent/agent-messages/delivery.airoom.test.ts
-vt packages/server/src/server/agent/host-operations/index.airoom.test.ts
-vt packages/server/src/server/agent/providers/claude/agent.interrupted-turn-tasks.airoom.test.ts
-vt packages/cli/src/commands/agent/send.airoom.test.ts
+vt src/server/agent/create-agent/create.airoom.test.ts
+vt src/server/agent/finish-subscriptions/finish-subscriptions.airoom.test.ts
+vt src/server/agent/finish-subscriptions/internal/observation-stream.airoom.test.ts
+vt src/server/native-tools-gate.airoom.test.ts
+vt src/server/agent/agent-message-raw-body.airoom.test.ts
+vt src/server/agent/host-operations/index.airoom.test.ts
+vt src/server/agent/providers/claude/agent.interrupted-turn-tasks.airoom.test.ts
 # Upstream's suites for patched files: where a patch contradicting upstream intent shows.
-vt packages/server/src/server/agent/finish-subscriptions/finish-subscriptions.test.ts
-vt packages/server/src/server/agent/finish-subscriptions/internal/observation-stream.test.ts
-vt packages/server/src/server/agent/finish-subscriptions/internal/json-store.test.ts
-vt packages/server/src/server/agent/agent-messages/delivery.test.ts
-vt packages/server/src/server/agent/create-agent/create.test.ts
-vt packages/server/src/server/agent/mcp-server.test.ts
-vt packages/server/src/server/agent/agent-manager.test.ts
-vt packages/server/src/server/agent/provider-registry-wrap.test.ts
-vt packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
-vt packages/server/src/server/agent/providers/claude/agent.test.ts
-vt packages/server/src/server/agent/providers/pi/agent.test.ts
-vt packages/server/src/server/agent/providers/acp-agent.test.ts
-vt packages/server/src/server/schedule/service.test.ts
-vt packages/server/src/server/bootstrap.smoke.test.ts
+vt src/server/agent/finish-subscriptions/finish-subscriptions.test.ts
+vt src/server/agent/finish-subscriptions/internal/observation-stream.test.ts
+vt src/server/agent/finish-subscriptions/internal/json-store.test.ts
+vt src/server/agent/agent-messages/delivery.test.ts
+vt src/server/agent/create-agent/create.test.ts
+vt src/server/agent/mcp-server.test.ts
+vt src/server/agent/agent-manager.test.ts
+vt src/server/agent/provider-registry-wrap.test.ts
+vt src/server/agent/providers/codex-app-server-agent.test.ts
+vt src/server/agent/providers/codex-interrupted-turn-terminals.test.ts
+vt src/server/agent/providers/claude/agent.test.ts
+vt src/server/agent/providers/pi/agent.test.ts
+vt src/server/agent/providers/acp-agent.test.ts
+vt src/server/schedule/service.test.ts
+vt src/server/bootstrap.smoke.test.ts
+# The scope of agent-send-interrupt: upstream's raw-RPC, CLI, client and protocol guards.
+vt src/server/daemon-e2e/agent-message-behaviors.test.ts
 # The end-to-end suites: upstream CI never runs the first two, and the third and fourth carry
 # adapted assertions. Run them below a one-minute load of 16; a timeout at the 5 s default
 # is load.
-vt packages/server/src/server/agent/mcp-parity.e2e.test.ts --testTimeout=30000
-vt packages/server/src/server/agent/agent-mcp.e2e.test.ts --testTimeout=30000
-vt packages/server/src/server/connected-hosts/hosts.e2e.test.ts --testTimeout=30000
-vt packages/server/src/server/daemon-e2e/daemon-restart-resume.e2e.test.ts --testTimeout=30000
+vt src/server/agent/mcp-parity.e2e.test.ts --testTimeout=30000
+vt src/server/agent/agent-mcp.e2e.test.ts --testTimeout=30000
+vt src/server/connected-hosts/hosts.e2e.test.ts --testTimeout=30000
+vt src/server/daemon-e2e/daemon-restart-resume.e2e.test.ts --testTimeout=30000
+cd ../..
+# The CLI, client and protocol packages have no vitest config of their own: from the root.
+vt packages/cli/src/commands/agent/send.airoom.test.ts
+vt packages/cli/src/commands/agent/send.test.ts
+vt packages/cli/src/cli-surface.test.ts
+vt packages/client/src/daemon-client.test.ts
+vt packages/protocol/src/messages.active-turn-behavior.test.ts
 
 npm run format:check
 npm run lint
