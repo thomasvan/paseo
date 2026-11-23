@@ -14,13 +14,10 @@ const REMOTE_SERVER = "remote-server";
 async function sendToRemote(input: {
   callerAgentId?: string;
   activeTurnBehavior?: "queue" | "steer" | "interrupt";
-  archivedAt?: string;
 }): Promise<unknown[]> {
   const sent: unknown[] = [];
   const client = {
-    fetchAgent: async (agentId: string) => ({
-      agent: { id: agentId, status: "running", archivedAt: input.archivedAt ?? null },
-    }),
+    fetchAgent: async (agentId: string) => ({ agent: { id: agentId, status: "running" } }),
     setAgentMode: async () => {},
     sendMessage: async (_agentId: string, _text: string, options: unknown) => {
       sent.push(options);
@@ -75,14 +72,6 @@ test.each([
     callerAgentId: "caller",
     activeTurnBehavior: "interrupt" as const,
     expected: "interrupt",
-  },
-  // An archived recipient keeps the receiver's default: an urgent message to it is offered out of
-  // band first, and that offer refuses an archived agent before dispatch would unarchive it.
-  {
-    name: "an agent caller to an archived recipient, behaviour omitted",
-    callerAgentId: "caller",
-    archivedAt: "2026-11-23T00:00:00.000Z",
-    expected: undefined,
   },
   // A person's omitted send goes out unset; the receiving daemon interrupts it (upstream's).
   { name: "a human caller, behaviour omitted", expected: undefined },

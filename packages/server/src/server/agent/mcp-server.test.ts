@@ -3922,6 +3922,8 @@ describe("send_agent_prompt MCP tool", () => {
   // out of band first. That offer declines, so normal dispatch unarchives the agent and starts its
   // turn; upstream's offer threw `Agent is archived` and the message never reached dispatch.
   it.each([
+    // agent-send-interrupt fills `interrupt` for an agent's omitted behaviour.
+    { behavior: undefined, applied: "interrupt" },
     { behavior: "interrupt", applied: "interrupt" },
     { behavior: "steer", applied: "steer" },
   ] as const)(
