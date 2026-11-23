@@ -1988,13 +1988,12 @@ export class PiRpcAgentSession implements AgentSession {
   private async requestEntryCapture(reason: string): Promise<void> {
     const requestId = randomUUID();
     const resultPromise = this.waitForExtensionResult(requestId);
-    // If the prompt below rejects, this function throws before ever awaiting
-    // resultPromise. It stays pending in pendingExtensionResults and a later
-    // close() (e.g. the history-purpose release in streamHistory()) rejects
-    // it via rejectAllExtensionResults — with no awaiter, that is an
-    // unhandled rejection. Attach a no-op handler now so that rejection is
-    // always observed; it does not affect the `await resultPromise` below,
-    // which still throws normally when reached.
+    // AIROOM-PATCH(pi-capture-rejection-observed): if the prompt below rejects, this
+    // function throws before it awaits resultPromise. The result stays pending, and
+    // close() (the history-purpose close in streamHistory's finally included) or the
+    // extension timeout rejects it with nothing awaiting it. The daemon worker treats an
+    // unhandled rejection as fatal. The no-op handler observes that rejection; the
+    // `await resultPromise` below still throws when it is reached.
     resultPromise.catch(() => undefined);
     const payload = Buffer.from(JSON.stringify({ requestId, reason })).toString("base64url");
     await this.runtimeSession.prompt(`/${PASEO_PI_CAPTURE_EXTENSION_COMMAND} ${payload}`);

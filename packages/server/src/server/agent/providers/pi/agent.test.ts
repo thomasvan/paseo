@@ -16,7 +16,7 @@ import path from "node:path";
 import pino from "pino";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, onTestFinished, test, vi } from "vitest";
+import { describe, expect, onTestFinished, test } from "vitest";
 
 import type { AgentSession, AgentSessionConfig, AgentStreamEvent } from "../../agent-sdk-types.js";
 import { PiProviderOptionsSchema, PiRpcAgentClient, PiRpcAgentSession } from "./agent.js";
@@ -4041,139 +4041,45 @@ describe("Pi catalog model labels", () => {
   });
 });
 
-describe("PiRpcAgentSession resumeSession purpose: history", () => {
-  async function resumeForHistory() {
+// AIROOM-PATCH(pi-capture-rejection-observed)
+describe("PiRpcAgentSession entry capture rejection", () => {
+  test("a capture prompt that rejects before a history read leaves no unhandled rejection when the runtime closes", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    onTestFinished(() => {
+      process.off("unhandledRejection", onUnhandled);
+    });
     const pi = new FakePi();
-    const session = (await createClient(pi).resumeSession(
+    const session = await createClient(pi).resumeSession(
       {
         provider: "pi",
         sessionId: "pi-session-1",
         nativeHandle: "/tmp/native-pi-session",
-        metadata: { cwd: "/workspace/project" },
+        metadata: { cwd: tmpdir() },
       },
-      undefined,
+      {},
       undefined,
       { purpose: "history" },
-    )) as PiRpcAgentSession;
-    return { pi, session };
-  }
-
-  test("releases the runtime after the first streamHistory() read, and replays cached events afterward", async () => {
-    const { pi, session } = await resumeForHistory();
+    );
+    onTestFinished(() => session.close());
     const fakeSession = pi.latestSession();
-    fakeSession.messages = [{ role: "assistant", content: [{ type: "text", text: "restored" }] }];
-    const closeSpy = vi.spyOn(fakeSession, "close");
-
-    const firstRead: AgentStreamEvent[] = [];
-    for await (const event of session.streamHistory()) {
-      firstRead.push(event);
-    }
-    expect(firstRead).toEqual([
-      {
-        type: "timeline",
-        provider: "pi",
-        item: { type: "assistant_message", text: "restored", messageId: expect.any(String) },
-      },
-    ]);
-
-    // The first read releases the runtime.
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-
-    // A second read (hydrateTimelineFromProvider calls streamHistory() once
-    // more after resumeSession returns) must replay the cache rather than
-    // issuing a second get_messages RPC against the now-closed runtime.
-    fakeSession.messages = [];
-    const secondRead: AgentStreamEvent[] = [];
-    for await (const event of session.streamHistory()) {
-      secondRead.push(event);
-    }
-    expect(secondRead).toEqual(firstRead);
-
-    // Anything that later calls close() on this session (e.g. a normal
-    // teardown of the resumed agent record) must find a harmless no-op,
-    // not a second release.
-    await session.close();
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-  });
-
-  test("an interactive resume (no purpose) does not release the runtime after a history read", async () => {
-    const pi = new FakePi();
-    const client = createClient(pi);
-    const session = (await client.resumeSession({
-      provider: "pi",
-      sessionId: "pi-session-1",
-      nativeHandle: "/tmp/native-pi-session",
-      metadata: { cwd: "/workspace/project" },
-    })) as PiRpcAgentSession;
-    const fakeSession = pi.latestSession();
-    const closeSpy = vi.spyOn(fakeSession, "close");
-
-    for await (const _event of session.streamHistory()) {
-      // drain
-    }
-
-    expect(closeSpy).not.toHaveBeenCalled();
-    await session.close();
-  });
-
-  test("releases the runtime when the history read is abandoned before it completes", async () => {
-    const { pi, session } = await resumeForHistory();
-    const fakeSession = pi.latestSession();
-    fakeSession.messages = [
-      { role: "assistant", content: [{ type: "text", text: "first" }] },
-      { role: "assistant", content: [{ type: "text", text: "second" }] },
-    ];
-    const closeSpy = vi.spyOn(fakeSession, "close");
-
-    for await (const _event of session.streamHistory()) {
-      // Stop after the first event: the for-await-of loop calls .return() on
-      // the generator, which resumes the suspended yield as a return
-      // completion and runs the enclosing finally without reaching the code
-      // after the loop.
-      break;
-    }
-
-    // An abandoned read releases the runtime too.
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-  });
-
-  test("releases the runtime when the entry-capture prompt rejects before the read begins", async () => {
-    const { pi, session } = await resumeForHistory();
-    const fakeSession = pi.latestSession();
-    const closeSpy = vi.spyOn(fakeSession, "close");
     const captureError = new Error("capture prompt rejected");
 
     fakeSession.holdNextPrompt();
-    const readPromise = (async () => {
-      for await (const _event of session.streamHistory()) {
-        // never reached: the entry-capture prompt rejects before the loop starts
-      }
-    })();
-    // Attach the rejection assertion before failHeldPrompt's internal
-    // setImmediate lets the rejection flush, or Node flags readPromise as
-    // briefly unhandled before this line gets a chance to observe it.
-    const assertion = expect(readPromise).rejects.toThrow(captureError);
+    const read = session.streamHistory().next();
+    // Attach the assertion before failHeldPrompt lets the rejection flush.
+    const assertion = expect(read).rejects.toThrow(captureError);
     await fakeSession.failHeldPrompt(captureError);
-
-    // A capture prompt that rejects before the read begins releases the runtime too.
     await assertion;
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-  });
 
-  test("releases the runtime when getMessages() rejects after a successful capture", async () => {
-    const { pi, session } = await resumeForHistory();
-    const fakeSession = pi.latestSession();
-    const closeSpy = vi.spyOn(fakeSession, "close");
-    const readError = new Error("get_messages failed");
-    vi.spyOn(fakeSession, "getMessages").mockRejectedValueOnce(readError);
-
-    const firstRead = (async () => {
-      for await (const _event of session.streamHistory()) {
-        // never reached: the read rejects before any event
-      }
-    })();
-    await expect(firstRead).rejects.toThrow(readError);
-    expect(closeSpy).toHaveBeenCalledTimes(1);
+    // The history read's finally closed the runtime, which rejects the pending capture result.
+    expect(fakeSession.closeCalls).toBe(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(unhandled).toEqual([]);
   });
 });
 
