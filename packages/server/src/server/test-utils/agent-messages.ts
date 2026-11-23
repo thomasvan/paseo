@@ -15,6 +15,7 @@ export function createTestAgentMessages(params: {
   schedule?: (delayMs: number, callback: () => void) => () => void;
 }) {
   return createAgentMessageDelivery({
+    // AIROOM-PATCH(archived-out-of-band-declines): declines unloaded for an agent not live.
     tryRunOutOfBand: (request, onAccepted) =>
       params.agentManager.offerOutOfBand(
         request.recipientId,

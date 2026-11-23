@@ -434,57 +434,50 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
 
 ## archived-out-of-band-declines
 
-- **What:** `AgentManager.tryRunOutOfBand` (`agent-manager.ts`) returns `false` for an agent
-  that is not a live interactive session and whose stored record is archived. Upstream loads
-  that agent as a history session, and `ensureInteractiveSessionUnlocked` throws `Agent is
-archived`. The patch reads the record twice. The first read, before any load, declines an agent
-  already archived without starting a history runtime for it. The second, inside the agent's
-  lifecycle lane and just before the interactive upgrade, decides: a non-interactive agent's
-  upgrade now runs in that lane step, and an archived record there declines instead.
+- **What:** the agent-message queue offers a message out of band through
+  `AgentManager.offerOutOfBand` (`agent-manager.ts`), wired in `websocket-server.ts` and the
+  tests' `test-utils/agent-messages.ts`. It returns `false`, before any load or read, unless the
+  agent is a live interactive session, and the message goes on to normal dispatch. A live
+  interactive agent gets upstream's `tryRunOutOfBand`, which the patch leaves as upstream's.
 - **Why:** an urgent agent message (`interrupt` or `steer`) is offered out of band before it
-  is dispatched (`agent-messages/delivery.ts` `advance` → `offerOutOfBand`). The throw fails the
-  message there, before `deliver` reaches `sendPreparedPromptToAgent`, the only place that
-  unarchives the recipient. The sender already holds a queued receipt, and no turn starts. A
-  decline sends the message on to that dispatch, which unarchives the agent and starts its turn,
-  as a `queue` message to an idle archived agent already does upstream. `agent-send-interrupt`
-  sends every omitted agent send as `interrupt`, so without this patch no unflagged agent send
-  could wake an archived agent.
-- **What it leaves alone:** a live interactive agent skips both reads, and an unarchived agent
-  that is not live reads `false` twice and takes upstream's path, apart from the lane wait
-  below. `delivery.ts` is upstream's. A person's send (the app, the CLI without
-  `PASEO_AGENT_ID`, a top-level MCP call) goes through `sendPromptToAgent`, which unarchives before its own out-of-band check, so it never
-  reached the throw. A slash command sent to an archived agent is declined first, then
-  dispatch unarchives the agent and `startAgentRun`'s own out-of-band check runs it as a
-  command.
-- **Races:** archive and unarchive both run in the lifecycle lane, so the read in the lane is
-  ordered against each of them. An archive that lands after the first read, before the resume
-  or during it, is seen there: the resume has loaded a history session, or the archive has
-  closed the interactive one it loaded, and the offer declines. An archive that lands after the
-  lane step meets an agent the offer already holds live and interactive, the race any send to
-  a live agent has with an archive upstream; the offer has no upgrade left to throw `Agent is
-archived`. The other way, an unarchive that lands after a `true` read declines a message the
-  agent could have run out of band; dispatch then reads the record unarchived and sends it, and
-  a command still runs out of band there. A race on the offer's own reads falls on the decline
-  side, which is safe: dispatch sends the message and unarchives the agent.
-- **Cost for an unarchived agent that is not loaded:** its upgrade check now waits its turn in
-  the lifecycle lane even when the resume loaded an interactive session, which upstream's check
-  skips. That wait is what orders the read against a queued archive. A live interactive agent
-  never enters it.
+  is dispatched (`agent-messages/delivery.ts` `advance` → `offerOutOfBand`). Upstream's offer
+  loads the recipient; an archived one loads as a history session, and
+  `ensureInteractiveSessionUnlocked` throws `Agent is archived`. That fails the message before
+  `deliver` reaches `sendPreparedPromptToAgent`, the only place that unarchives the recipient.
+  The sender already holds a queued receipt, and no turn starts. After the decline, dispatch
+  unarchives the agent and starts its turn, as it does upstream for a `queue` message to an idle
+  archived agent. `agent-send-interrupt` sends every omitted agent send as `interrupt`, so
+  without this patch no unflagged agent send could wake an archived agent.
+- **What it leaves alone:** `delivery.ts` and `tryRunOutOfBand` are upstream's. So is
+  `startAgentRun`'s own out-of-band check, which every prompt entrypoint reaches after its load:
+  a command a declined message carries still runs out of band there, on the agent dispatch just
+  loaded. A person's send (the app, the CLI without `PASEO_AGENT_ID`, a top-level MCP call) goes
+  through `sendPromptToAgent` and never reaches the queue's offer.
+- **What changes for a closed agent that is not archived:** a slash command sent alone ends as
+  upstream: run out of band after dispatch loads the agent, no turn. A slash command that
+  releases messages still waiting in their quiet window differs. Upstream's offer loads the
+  agent and runs the command alone, ahead of them; here the declined command goes with them in
+  one prompt, so the provider gets it as text and starts a turn.
+- **Known limit, upstream's:** an archive or close that lands while dispatch loads the agent
+  still fails the message, for every behaviour. Pi shows it: an archive closes the resumed
+  session while its history replay waits for entry capture, and the load throws `Pi session
+closed` (`agent-prompt.ts` `sendPreparedPromptToAgent` → `ensureAgentLoaded`). Stock v0.17.3
+  fails a `queue` send, which no offer touches, the same way.
 - **Retire when:** upstream's out-of-band offer stops failing a message for an archived
-  recipient: `tryRunOutOfBand` declines or unarchives it, or `offerOutOfBand` hands such a
-  message to `deliver`. Delete both reads and the tests' markers, and keep the tables if
-  upstream's own tests do not cover an archived recipient.
-- **Tests:** `mcp-server.test.ts`, `an agent-scoped $behavior send to an archived agent unarchives it
-and starts its turn` (omitted, `interrupt`, `steer`), on the agent-scoped MCP route, which also
-  asserts that only an interactive resume ran (the first read's job); the same file's `an
-interrupt to a closed agent archived during the out-of-band offer still starts its turn`, whose
-  storage spy completes an archive inside the offer's first read and hands that read the record
-  from before it, so the archive lands after the first read and before the resume; and
-  `connected-hosts/hosts.e2e.test.ts`, `remote %s agent send to an archived agent starts its
-turn` (the same three), on the `serverId` route. Each waits at most 10 s, then asserts on the
-  outcome (dispatched, a turn started), so a lost message fails by assertion, not by the test
-  timeout. Upstream's `remote prompt to a closed agent (archived=true)…` row also needs the
-  patch now, and fails only by its timeout without it.
+  recipient: `tryRunOutOfBand` declines or unarchives it, or `delivery.ts`'s `offerOutOfBand`
+  hands such a message to `deliver`. Delete `AgentManager.offerOutOfBand`, point both wirings back at
+  `tryRunOutOfBand`, drop the suite mock's line, and keep the tables if upstream's own tests do
+  not cover an archived recipient.
+- **Tests:** `mcp-server.test.ts`, `an agent-scoped $behavior send to an archived agent unarchives
+it and starts its turn` (omitted, `interrupt`, `steer`), on the agent-scoped MCP route, which
+  also asserts that only an interactive resume ran; the same file's `an agent's slash command to
+a closed agent runs out of band after the agent loads, and starts no turn`, whose outcome
+  matches stock v0.17.3's; and `connected-hosts/hosts.e2e.test.ts`, `remote %s agent send to an
+archived agent starts its turn` (the same three), on the `serverId` route. Each waits at most
+  10 s, then asserts on the outcome, so a lost message fails by assertion, not by the test
+  timeout. Upstream's `remote prompt to a closed agent (archived=true)…` row also needs the patch,
+  and fails only by its timeout without it. The suite's mocked manager in `mcp-server.test.ts`
+  carries `offerOutOfBand`.
 
 ## interrupted-turn-tasks
 
@@ -667,7 +660,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-49 wakeup-each                             4 archived-out-of-band-declines
+49 wakeup-each                             7 archived-out-of-band-declines
 16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
  7 agent-send-interrupt                    2 interrupt-releases-foreground
  6 native-tools-injection-independent      2 force-cancel-releases-foreground
@@ -676,11 +669,12 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
                                            1 dead-run-settles
 ```
 
-100 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
+103 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
 agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
 behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
-`archived-out-of-band-declines`' four: the guard in `agent-manager.ts`, its table and its race
-row in `mcp-server.test.ts`, and its table in `connected-hosts/hosts.e2e.test.ts`.
+`archived-out-of-band-declines`' seven: `offerOutOfBand` in `agent-manager.ts`, its wiring in
+`websocket-server.ts` and `test-utils/agent-messages.ts`, its table, its slash-command row and the
+suite mock's line in `mcp-server.test.ts`, and its table in `connected-hosts/hosts.e2e.test.ts`.
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
