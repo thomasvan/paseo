@@ -2047,6 +2047,10 @@ function createToolCatalog(
       }
 
       if (callerAgentId) {
+        // AIROOM-PATCH(agent-send-interrupt): read before the enqueue; see the behaviour below.
+        const recipientArchived =
+          activeTurnBehavior === undefined &&
+          Boolean((await agentStorage.get(agentId))?.archivedAt);
         const receipt = (() => {
           try {
             return agentMessages().enqueue({
@@ -2060,8 +2064,11 @@ function createToolCatalog(
               sessionMode,
               // AIROOM-PATCH(agent-send-interrupt): an agent's send interrupts a running turn
               // unless it asks for queue or steer; delivery's own default (queue) stays upstream's
-              // for the sends the daemon makes itself.
-              activeTurnBehavior: activeTurnBehavior ?? "interrupt",
+              // for the sends the daemon makes itself. An archived recipient keeps upstream's
+              // default: an urgent message to it is offered out of band first, and that offer
+              // refuses an archived agent before dispatch would unarchive it.
+              activeTurnBehavior:
+                activeTurnBehavior ?? (recipientArchived ? undefined : "interrupt"),
               onDispatch: confirmDispatch,
             });
           } catch (error) {

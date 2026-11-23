@@ -3918,6 +3918,46 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
+  // AIROOM-PATCH(agent-send-interrupt): an archived recipient keeps upstream's default. An urgent
+  // message to it is offered out of band first, and that offer refuses an archived agent before
+  // dispatch would unarchive it, so the message would never start a turn.
+  it("an agent-scoped send with no behavior to an archived agent queues and starts its turn", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-send-archived-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const client = new HeldTurnAgentClient("codex", false, { steerResult: "accepted" });
+    const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+    try {
+      const parent = await manager.createAgent({ provider: "codex", cwd: existingCwd }, undefined, {
+        workspaceId: "wks_parent",
+      });
+      const child = await manager.createAgent({ provider: "codex", cwd: existingCwd }, undefined, {
+        workspaceId: "wks_parent",
+      });
+      await manager.archiveAgent(child.id);
+      expect((await storage.get(child.id))?.archivedAt).toBeTruthy();
+      const server = await createAgentMcpServer({
+        agentManager: manager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const response = await invokeToolWithParsedInput(
+        registeredTool(server, "send_agent_prompt"),
+        { agentId: child.id, prompt: "Start work", notifyOnFinish: false },
+      );
+      expect(response.structuredContent).toMatchObject({
+        deliveryStatus: "queued",
+        activeTurnBehavior: "queue",
+      });
+      await serverDeliveries.get(server)!.waitForDispatch(child.id, new AbortController().signal);
+      expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
+      expect(client.sessions.at(-1)!.prompts).toHaveLength(1);
+    } finally {
+      await removeAgentStateDir(manager, storage, workdir);
+    }
+  });
+
   it.each([
     { rejected: false, priorNotification: false },
     { rejected: false, priorNotification: true },

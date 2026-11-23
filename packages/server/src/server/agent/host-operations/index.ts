@@ -285,10 +285,13 @@ export function createHostResolver(input: {
                 sourceAgentId: input.callerAgentId,
                 sourceAgentServerId: input.callerAgentId ? input.serverId : undefined,
                 // AIROOM-PATCH(agent-send-interrupt): this route runs before the local handler, so
-                // an agent caller's omitted behaviour is decided here: interrupt, sent explicitly.
+                // an agent caller's omitted behaviour is decided here: interrupt, sent explicitly,
+                // unless the recipient is archived (the preflight snapshot above), which keeps
+                // upstream's default. An urgent message to an archived agent is offered out of
+                // band first, and that offer refuses it before dispatch would unarchive it.
                 activeTurnBehavior:
                   (args.activeTurnBehavior as AgentActiveTurnBehavior | undefined) ??
-                  (input.callerAgentId ? "interrupt" : undefined),
+                  (input.callerAgentId && !agent.archivedAt ? "interrupt" : undefined),
               })
               .catch((error) => {
                 if (isAmbiguousPromptFailure(error)) throw error;

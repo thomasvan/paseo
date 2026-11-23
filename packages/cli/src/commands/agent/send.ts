@@ -219,14 +219,21 @@ export async function runSendCommand(
       options.image && options.image.length > 0 ? await readImageFiles(options.image) : undefined;
 
     const sourceAgentId = process.env.PASEO_AGENT_ID?.trim() || undefined;
+    // AIROOM-PATCH(agent-send-interrupt): an agent's send interrupts unless it asks for queue or
+    // steer, and goes out explicit, so the receiving daemon's agent default (queue) never
+    // applies. A person's omitted send, and an agent's to an archived recipient, stay unset:
+    // the daemon offers an urgent message out of band first, and that offer refuses an
+    // archived agent before dispatch would unarchive it.
+    let defaultBehavior: "interrupt" | undefined;
+    if (sourceAgentId && !options.behavior) {
+      const recipient = await client.fetchAgent(agentIdArg);
+      if (!recipient?.agent.archivedAt) defaultBehavior = "interrupt";
+    }
     // Send the message
     const receipt = await client.sendAgentMessage(agentIdArg, promptInput, {
       images,
       sourceAgentId,
-      // AIROOM-PATCH(agent-send-interrupt): an agent's send interrupts unless it asks for
-      // queue or steer, and goes out explicit, so the receiving daemon's agent default (queue)
-      // never applies. A person's omitted send stays unset, and the daemon interrupts it.
-      activeTurnBehavior: options.behavior ?? (sourceAgentId ? "interrupt" : undefined),
+      activeTurnBehavior: options.behavior ?? defaultBehavior,
     });
 
     // If --no-wait, return immediately

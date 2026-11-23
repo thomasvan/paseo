@@ -11,9 +11,15 @@ const sendAgentMessage = vi.fn(
   }),
 );
 
+// The recipient's snapshot, which an agent's omitted send reads for its archive state.
+const fetchAgent = vi.fn(async (_agentId: string) => ({
+  agent: { archivedAt: null as string | null },
+}));
+
 vi.mock("../../utils/client.js", () => ({
   connectToDaemon: vi.fn(async () => ({
     sendAgentMessage,
+    fetchAgent,
     close: vi.fn(async () => undefined),
   })),
   getDaemonHost: vi.fn(() => "ws://127.0.0.1:6767"),
@@ -32,6 +38,7 @@ async function send(args: string[]): Promise<SendMessageOptions | undefined> {
 describe("paseo send active-turn behavior", () => {
   beforeEach(() => {
     sendAgentMessage.mockClear();
+    fetchAgent.mockClear();
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
 
@@ -49,6 +56,18 @@ describe("paseo send active-turn behavior", () => {
       sourceAgentId: "agent-a",
       activeTurnBehavior: "interrupt",
     });
+  });
+
+  // An archived recipient keeps the daemon's default: an urgent message to it is offered out of
+  // band first, and that offer refuses an archived agent before dispatch would unarchive it.
+  it("an agent's send with no --behavior to an archived recipient leaves activeTurnBehavior unset", async () => {
+    vi.stubEnv("PASEO_AGENT_ID", "agent-a");
+    fetchAgent.mockResolvedValueOnce({ agent: { archivedAt: "2026-11-23T00:00:00.000Z" } });
+
+    const options = await send([]);
+    expect(fetchAgent).toHaveBeenCalledWith("target-agent");
+    expect(options?.sourceAgentId).toBe("agent-a");
+    expect(options?.activeTurnBehavior).toBeUndefined();
   });
 
   it.each(["queue", "steer", "interrupt"] as const)(
