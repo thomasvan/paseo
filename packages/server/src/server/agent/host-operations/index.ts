@@ -284,7 +284,11 @@ export function createHostResolver(input: {
                   : undefined,
                 sourceAgentId: input.callerAgentId,
                 sourceAgentServerId: input.callerAgentId ? input.serverId : undefined,
-                activeTurnBehavior: args.activeTurnBehavior as AgentActiveTurnBehavior | undefined,
+                // AIROOM-PATCH(agent-send-interrupt): this route runs before the local handler, so
+                // an agent caller's omitted behaviour is decided here: interrupt, sent explicitly.
+                activeTurnBehavior:
+                  (args.activeTurnBehavior as AgentActiveTurnBehavior | undefined) ??
+                  (input.callerAgentId ? "interrupt" : undefined),
               })
               .catch((error) => {
                 if (isAmbiguousPromptFailure(error)) throw error;

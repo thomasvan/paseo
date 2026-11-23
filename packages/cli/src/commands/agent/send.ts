@@ -50,7 +50,7 @@ export function addSendOptions(cmd: Command): Command {
     .addOption(
       new Option(
         "--behavior <behavior>",
-        "Leave out unless the message cannot wait. From an agent (PASEO_AGENT_ID set): queue (default) waits for the running turn to end, steer joins it, interrupt replaces it. From a person: interrupt (default) or steer",
+        "What happens to a running turn. From an agent (PASEO_AGENT_ID set): interrupt (default) replaces it, queue waits for it to end, steer joins it. From a person: interrupt (default) or steer",
       ).choices(["queue", "steer", "interrupt"]),
     )
     .option("--no-wait", "Return immediately without waiting for completion");
@@ -223,7 +223,10 @@ export async function runSendCommand(
     const receipt = await client.sendAgentMessage(agentIdArg, promptInput, {
       images,
       sourceAgentId,
-      activeTurnBehavior: options.behavior,
+      // AIROOM-PATCH(agent-send-interrupt): an agent's send interrupts unless it asks for
+      // queue or steer, and goes out explicit, so the receiving daemon's agent default (queue)
+      // never applies. A person's omitted send stays unset, and the daemon interrupts it.
+      activeTurnBehavior: options.behavior ?? (sourceAgentId ? "interrupt" : undefined),
     });
 
     // If --no-wait, return immediately

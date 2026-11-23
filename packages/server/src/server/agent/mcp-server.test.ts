@@ -3731,10 +3731,29 @@ class HeldTurnAgentClient implements AgentClient {
 }
 
 describe("send_agent_prompt MCP tool", () => {
+  // AIROOM-PATCH(agent-send-interrupt): an agent-scoped send with no behavior interrupts the
+  // running turn (upstream queues it), so the two omitted rows expect an applied interrupt and a
+  // new turn, and an explicit "queue" row keeps the waiting case.
   it.each([
     {
       agentScoped: true,
       behavior: undefined,
+      steering: "accepted",
+      applied: "interrupt",
+      outcome: "replaced",
+      guidance: "Interrupting the running turn.",
+    },
+    {
+      agentScoped: true,
+      behavior: undefined,
+      steering: "none",
+      applied: "interrupt",
+      outcome: "replaced",
+      guidance: "Interrupting the running turn.",
+    },
+    {
+      agentScoped: true,
+      behavior: "queue",
       steering: "accepted",
       applied: "queue",
       outcome: "queued",
@@ -3742,7 +3761,7 @@ describe("send_agent_prompt MCP tool", () => {
     },
     {
       agentScoped: true,
-      behavior: undefined,
+      behavior: "queue",
       steering: "none",
       applied: "queue",
       outcome: "queued",
@@ -3882,6 +3901,8 @@ describe("send_agent_prompt MCP tool", () => {
           agentId: child.id,
           prompt: "Start work",
           notifyOnFinish: false,
+          // AIROOM-PATCH(agent-send-interrupt): omission interrupts, so this row asks for queue.
+          activeTurnBehavior: "queue",
         },
       );
       expect(response.structuredContent).toMatchObject({
@@ -3941,7 +3962,14 @@ describe("send_agent_prompt MCP tool", () => {
         if (rejected) session.rejectNextTurnStart(new Error("Start rejected"));
         const response = await mcpClient.callTool({
           name: "send_agent_prompt",
-          arguments: { agentId: child.id, prompt: "New message", notifyOnFinish: true },
+          arguments: {
+            agentId: child.id,
+            prompt: "New message",
+            notifyOnFinish: true,
+            // AIROOM-PATCH(agent-send-interrupt): omission interrupts, and this follow-up must
+            // wait for the original turn to end.
+            activeTurnBehavior: "queue",
+          },
         });
         expect(response.structuredContent).toMatchObject({
           success: true,

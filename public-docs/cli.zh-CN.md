@@ -298,12 +298,12 @@ Agent ID 可以缩写，只要 `abc` 没有歧义就可以使用。
 paseo send <id> "now run the tests"
 paseo send <id> --image screenshot.png "what's wrong here?"
 paseo send <id> --no-wait "run this task"
-paseo send <id> --behavior interrupt "stop and do this instead"
+paseo send <id> --behavior queue "when you finish, also run the linter"
 ```
 
-除非消息不能等待，否则不要设置 `--behavior`。默认行为取决于发送方：
+`--behavior` 决定接收方正在进行的轮次会怎样：
 
-- 由 Agent 发送（设置了 `PASEO_AGENT_ID`）时，默认是 `queue`。消息会等到接收方正在进行的轮次结束。`--behavior steer` 把消息加入正在进行的轮次，`--behavior interrupt` 停止该轮次，并用这条消息开始新的一轮。steer 或 interrupt 也会按顺序送达你在它之前排队的消息。
+- 由 Agent 发送（设置了 `PASEO_AGENT_ID`）时，默认是 `interrupt`：停止该轮次，并用这条消息开始新的一轮。`--behavior queue` 会等到正在进行的轮次结束；消息可以等待时选择它。`--behavior steer` 把消息加入正在进行的轮次。steer 或 interrupt 也会按顺序送达你在它之前排队的消息。
 - 由人发送时，默认是 `interrupt`。`--behavior steer` 则把消息加入正在进行的轮次。
 
 如果接收方的 Provider 无法引导，`steer` 会改为中断正在进行的轮次。使用 `--no-wait` 时，输出会说明 Agent 发送的消息发生了什么，以及如何立即送达排队中的消息。

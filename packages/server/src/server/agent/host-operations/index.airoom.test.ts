@@ -13,7 +13,7 @@ const REMOTE_SERVER = "remote-server";
 
 async function sendToRemote(input: {
   callerAgentId?: string;
-  activeTurnBehavior?: "steer" | "interrupt";
+  activeTurnBehavior?: "queue" | "steer" | "interrupt";
 }): Promise<unknown[]> {
   const sent: unknown[] = [];
   const client = {
@@ -37,6 +37,7 @@ async function sendToRemote(input: {
     serverId: LOCAL_SERVER,
     local: {} as HostOperations,
     hosts: () => hosts,
+    caller: () => null,
     ...(input.callerAgentId ? { callerAgentId: input.callerAgentId } : {}),
   });
   await resolver.use(REMOTE_SERVER, (host) =>
@@ -55,6 +56,12 @@ async function sendToRemote(input: {
 test.each([
   { name: "an agent caller, behaviour omitted", callerAgentId: "caller", expected: "interrupt" },
   {
+    name: "an agent caller asking to queue",
+    callerAgentId: "caller",
+    activeTurnBehavior: "queue" as const,
+    expected: "queue",
+  },
+  {
     name: "an agent caller asking to steer",
     callerAgentId: "caller",
     activeTurnBehavior: "steer" as const,
@@ -66,9 +73,16 @@ test.each([
     activeTurnBehavior: "interrupt" as const,
     expected: "interrupt",
   },
-  { name: "a human caller, behaviour omitted", expected: "interrupt" },
+  // A person's omitted send goes out unset; the receiving daemon interrupts it (upstream's).
+  { name: "a human caller, behaviour omitted", expected: undefined },
 ])("a remote send from $name dispatches $expected", async (row) => {
   const sent = await sendToRemote(row);
 
-  expect(sent).toEqual([expect.objectContaining({ activeTurnBehavior: row.expected })]);
+  expect(sent).toHaveLength(1);
+  expect((sent[0] as { activeTurnBehavior?: string }).activeTurnBehavior).toBe(row.expected);
+  expect(sent[0]).toMatchObject(
+    row.callerAgentId
+      ? { sourceAgentId: row.callerAgentId, sourceAgentServerId: LOCAL_SERVER }
+      : { sourceAgentId: undefined, sourceAgentServerId: undefined },
+  );
 });

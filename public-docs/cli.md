@@ -319,12 +319,12 @@ Use the recipient's agent ID from `paseo ls`, or [copy it from the agent's tab](
 paseo send <id> "now run the tests"
 paseo send <id> --image screenshot.png "what's wrong here?"
 paseo send <id> --no-wait "run this task"
-paseo send <id> --behavior interrupt "stop and do this instead"
+paseo send <id> --behavior queue "when you finish, also run the linter"
 ```
 
-Leave `--behavior` out unless the message cannot wait. The defaults depend on who sends:
+`--behavior` decides what happens to the recipient's running turn:
 
-- From an agent (`PASEO_AGENT_ID` set), the default is `queue`. The message waits until the recipient's running turn ends. `--behavior steer` adds the message to the running turn, and `--behavior interrupt` stops the turn and starts a new one with the message. A steer or interrupt also delivers the messages you queued before it, in order.
+- From an agent (`PASEO_AGENT_ID` set), the default is `interrupt`: the turn stops and a new one starts with the message. `--behavior queue` waits until the running turn ends; choose it for a message that can wait. `--behavior steer` adds the message to the running turn. A steer or interrupt also delivers the messages you queued before it, in order.
 - From a person, the default is `interrupt`. `--behavior steer` adds the message to the running turn instead.
 
 If the recipient's provider cannot steer, `steer` interrupts the running turn instead. With `--no-wait`, the output says what happened to an agent's message and how to deliver a queued message now.

@@ -1310,8 +1310,9 @@ function createToolCatalog(
   };
   const agentToAgentSendAgentPromptInputSchema = {
     ...commonSendAgentPromptInputSchema,
+    // AIROOM-PATCH(agent-send-interrupt): an agent's omitted send interrupts (see the enqueue).
     activeTurnBehavior: AgentActiveTurnBehaviorSchema.optional().describe(
-      'Leave this out unless the message cannot wait. Default "queue": the message waits until the agent\'s running turn ends. "steer": the message joins the running turn; a provider that cannot steer interrupts the turn instead. "interrupt": the running turn stops and a new turn starts with the message. A steer or interrupt carries the messages you queued before it, in order.',
+      'Default "interrupt": the running turn stops and a new turn starts with the message. "queue": the message waits until the agent\'s running turn ends; choose it for a follow-up that can wait. "steer": the message joins the running turn; a provider that cannot steer interrupts the turn instead. A steer or interrupt carries the messages you queued before it, in order.',
     ),
     notifyOnFinish: z
       .boolean()
@@ -1997,7 +1998,7 @@ function createToolCatalog(
       title: "Send agent prompt",
       description:
         scope === "agent"
-          ? "Send a message to another agent. The response returns at once. Its guidance says whether the message waits for the running turn to end, joins it, or interrupts it, and how to deliver a waiting message now. Leave activeTurnBehavior out unless the message cannot wait. The recipient reads your messages in the order you sent them. A steer the recipient has not read is lost if its turn stops or is interrupted, along with the messages it carried. Completion reports include the target’s last response by default. Paseo supplies caller identity."
+          ? "Send a message to another agent. The response returns at once. Its guidance says whether the message waits for the running turn to end, joins it, or interrupts it, and how to deliver a waiting message now. An omitted activeTurnBehavior interrupts a running turn; choose queue for a message that can wait for the turn to end. The recipient reads your messages in the order you sent them. A steer the recipient has not read is lost if its turn stops or is interrupted, along with the messages it carried. Completion reports include the target’s last response by default. Paseo supplies caller identity."
           : "Send a prompt to an agent. A running turn is interrupted unless activeTurnBehavior is steer.",
       inputSchema: sendAgentPromptInputSchema,
       outputSchema: {
@@ -2057,7 +2058,10 @@ function createToolCatalog(
                 title: resolveCallerAgent()?.config.title ?? undefined,
               },
               sessionMode,
-              activeTurnBehavior,
+              // AIROOM-PATCH(agent-send-interrupt): an agent's send interrupts a running turn
+              // unless it asks for queue or steer; delivery's own default (queue) stays upstream's
+              // for the sends the daemon makes itself.
+              activeTurnBehavior: activeTurnBehavior ?? "interrupt",
               onDispatch: confirmDispatch,
             });
           } catch (error) {

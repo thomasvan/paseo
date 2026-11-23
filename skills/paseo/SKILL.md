@@ -94,13 +94,13 @@ Agent-scoped `create_agent` defaults `notifyOnFinish` to true. Set it to `false`
 
 **`send_agent_prompt`** — `{ agentId, prompt, activeTurnBehavior? }`. Sends a follow-up to an existing agent and returns at once.
 
-Leave `activeTurnBehavior` out unless the message cannot wait. It decides what happens when the agent is mid-turn:
+`activeTurnBehavior` decides what happens when the agent is mid-turn:
 
-- `queue` (default): the message waits for the turn to end.
+- `interrupt` (default): the turn stops, and a new turn starts with the message.
+- `queue`: the message waits for the turn to end. Choose it for a follow-up that can wait.
 - `steer`: the agent reads the message at its next step and keeps working. If its provider cannot steer, the turn is interrupted instead.
-- `interrupt`: the turn stops, and a new turn starts with the message.
 
-Read `guidance` in the response. If it says your message is waiting and the message cannot wait, such as a course correction, send a short follow-up with `steer` or `interrupt`. Do not resend the message: the follow-up carries it, and a resent message is read twice.
+A `steer` or `interrupt` carries the messages you queued before it, in order. Read `guidance` in the response. If it says a queued message is waiting and the message can no longer wait, send a short follow-up with `steer` or `interrupt`. Do not resend the message: the follow-up carries it, and a resent message is read twice.
 
 A steer the agent has not read is lost if its turn stops or is interrupted, along with the messages it carried. For a message that must arrive, use `queue` or `interrupt`.
 
@@ -153,8 +153,8 @@ paseo workspace create --isolation worktree --mode checkout-branch --branch exis
 paseo workspace create --isolation worktree --mode checkout-pr --pr-number 42
 paseo run --provider codex/gpt-5.4 --mode full-access --workspace <workspace-id> "<prompt>"
 paseo run --provider codex/gpt-5.4 --mode full-access --new-workspace worktree --worktree-mode branch-off --new-branch fix-x --base origin/main "<prompt>"
-paseo send <agent-id> "<follow-up>"
-paseo send <agent-id> --behavior steer "<follow-up that cannot wait>"
+paseo send <agent-id> "<correction>"
+paseo send <agent-id> --behavior queue "<follow-up that can wait>"
 paseo ls
 paseo schedule create --cron "*/15 * * * *" "ping main build"
 paseo heartbeat create --cron "*/15 * * * *" "check the build"
