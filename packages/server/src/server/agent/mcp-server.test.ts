@@ -3965,6 +3965,7 @@ describe("send_agent_prompt MCP tool", () => {
             notifyOnFinish: false,
             ...(behavior ? { activeTurnBehavior: behavior } : {}),
           },
+          false,
         );
         expect(response.structuredContent).toMatchObject({
           deliveryStatus: "queued",
