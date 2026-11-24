@@ -21,7 +21,7 @@ import {
   type FinishSubscriptions,
 } from "./index.js";
 
-type Status = "idle" | "running" | "closed" | "error";
+type Status = "idle" | "running" | "initializing" | "closed" | "error";
 type Handler = Parameters<HostObservation["observe"]>[1];
 
 /** One child as one daemon sees it: live in memory, or only its stored record after a restart. */
@@ -97,6 +97,16 @@ class Child implements HostObservation {
   }
   cancel(message: string) {
     this.settle({ type: "turn_canceled", provider: "codex", reason: "interrupted" }, message);
+  }
+  /**
+   * A history read loads the session: its registration publishes `agent_state` initializing, and
+   * the idle state it settles in is not published, because the local observer drops idle states.
+   */
+  load() {
+    this.live = true;
+    this.status = "initializing";
+    this.emit();
+    this.status = "idle";
   }
   /** `agent_state` with a non-idle lifecycle. */
   become(status: "closed" | "error") {
@@ -342,6 +352,36 @@ test("a synthetic open on an idle child sends nothing, and the gate stays waitin
   await until(() => !second.service.hasPendingForCaller("parent"));
   await storedAwaiting(second.directory);
   await sentinel(second, 1);
+});
+
+test("a history load of an acknowledged idle child keeps the gate waiting, and a crash restart sends nothing", async () => {
+  const first = await rearmed();
+  first.child.load();
+  // Registration is serialized behind any gate write, so once this rejected registration settles,
+  // the store holds what a crash right now would leave.
+  await (await first.service.register({ ...intent, callerAgentId: "barrier" }, true)).reject();
+  const left = await stored(first.directory);
+  // The crash: no close. Recovery reads the stored idle child.
+  const second = await daemon(first.directory, new Child("idle", false));
+  await until(() => second.child.handlers.size === 1);
+  await sentinel(second, 1);
+  expect(left).toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
+  // The load holds no outcome, so it does not pin the caller either.
+  expect(first.service.hasPendingForCaller("parent")).toBe(false);
+});
+
+test("a stored child loaded to run a prompt opens the gate on the run, and its finish is delivered", async () => {
+  const first = await rearmed();
+  await first.service.close();
+  const second = await daemon(first.directory, new Child("closed", false));
+  await until(() => second.child.handlers.size === 1);
+  second.child.load();
+  second.child.start();
+  await storedOpen(second.directory);
+  second.child.finish("loaded answer");
+  await until(() => second.delivery.prompts.length === 1);
+  expect(second.delivery.prompts[0]).toContain("finished.");
+  expect(second.delivery.prompts[0]).toContain("loaded answer");
 });
 
 test("a remote turn_started with a turnId whose re-fetched snapshot reads idle opens the gate, and its finish is delivered", async () => {

@@ -129,14 +129,17 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
 - **What:** a finish subscription in `agent/finish-subscriptions/` re-arms in place after an
   acknowledged `finished` instead of being removed, behind a gate whose state its stored
   record keeps as `awaitingTurn: true`. Upstream's subscription is one-shot.
-  - **The gate** opens on a new turn, whatever started it: a running or initializing
-    snapshot, or a `turn_started` that carries a `turnId` (`internal/observation-stream.ts`,
-    the top of `observeState`). A local observe opens with a synthetic `turn_started` with no
-    `turnId` and the current snapshot, so it opens the gate only on a running child; a remote
-    host re-fetches the snapshot per event, so the real event's `turnId` opens it after a fast
-    turn. Opening writes the record without the field, once per waiting-to-open change; a
-    write that fails stays owed and is retried with the subscription's backoff, and a graceful
-    close makes one last attempt, so a restart still reads the turn.
+  - **The gate** opens on a turn the child runs, whatever started it: a running snapshot, or
+    a `turn_started` that carries a `turnId` (`internal/observation-stream.ts`, the top of
+    `observeState`). A local observe opens with a synthetic `turn_started` with no `turnId` and
+    the current snapshot, so it opens the gate only on a running child; a remote host
+    re-fetches the snapshot per event, so the real event's `turnId` opens it after a fast turn.
+    An `initializing` snapshot never opens it: a session load publishes one, a history read
+    included, and every turn after the load publishes `running` (`AgentManager` sets
+    `running` and emits state on a foreground or an autonomous turn start). Opening writes the
+    record without the field, once per waiting-to-open change; a write that fails stays owed
+    and is retried with the subscription's backoff, and a graceful close makes one last
+    attempt, so a restart still reads the turn.
   - **Re-arm** is one serialized, abort-checked `put` of the oldest captured record, with
     `awaitingTurn: true` unless a turn was observed since the delivered terminal, then removal
     of the other captured ids. The abort check stops a superseded watch's late write from
@@ -192,19 +195,18 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
   notice as `queue`, so a busy caller hears a finish when its own turn ends, or earlier as the
   rider of a later steer, interrupt or person's prompt. Both stay as upstream wrote them, and
   the patch's code needed no change for either.
-- **Known defect, carried:** a crash restart can send an acknowledged child's idle state again
-  as `finished`. A timeline fetch loads a stored child for history, its registration publishes
-  an `initializing` snapshot, the gate takes that snapshot for a turn and writes itself open,
-  and the next crash restart delivers the idle baseline. The fix is a gate that opens only on a
-  turn the child runs (a running snapshot or a `turn_started` with a `turnId`). That changes
-  the gate's design, so it goes in its own fork PR, not in a sync.
+- **History loads:** a timeline fetch that loads a stored, acknowledged child leaves its record
+  awaiting, so a crash restart afterwards sends nothing. When the gate also opened on
+  `initializing`, that load wrote the record open and the next crash restart delivered the
+  idle baseline as an empty `finished`.
 - **Tests:** `finish-subscriptions.airoom.test.ts` drives `createFinishSubscriptions` on the real
   JSON store through the real `openFinishObservation` over a child fake that publishes what
   the local observer does, including the agent-prompted cut-off across a crash and a graceful
-  stop, a repeated completion (streamed, or supplied first by the initial wait) queued behind
-  the acknowledged finish while a later turn is pending, and a rejected gate-open write
-  followed by a mid-turn close and recovery; `internal/observation-stream.airoom.test.ts` drives
-  the gate signal and the queue on the `Host` fake.
+  stop, a history load followed by a crash restart, a stored child loaded to run a prompt, a
+  repeated completion (streamed, or supplied first by the initial wait) queued behind the
+  acknowledged finish while a later turn is pending, and a rejected gate-open write followed by
+  a mid-turn close and recovery; `internal/observation-stream.airoom.test.ts` drives the gate
+  signal, an `initializing` snapshot included, and the queue on the `Host` fake.
 - **Adapted upstream rows:** fourteen upstream tests expect the one-shot behaviour, and each is
   adapted in place with a comment naming the patch. Twelve change only their store assertion,
   to one record with `awaitingTurn: true`, because the outcome they reach now re-arms:
@@ -649,9 +651,9 @@ git cat-file -p "$T:packages/server/src/server/bootstrap.ts" | grep -nE 'childAr
 ```
 
 Read the control flow around the lines that prints: the gate hook sits in `observeState`
-before the `turn_started` early return and fires on a running or initializing snapshot or a
-`turn_started` with a `turnId`, never on the synthetic open alone; the buffer keeps a queue, not
-one slot; the store schema carries `awaitingTurn`; `run` starts the gate waiting only when every
+before the `turn_started` early return and fires on a running snapshot or a `turn_started` with
+a `turnId`, never on an `initializing` snapshot or the synthetic open alone; the buffer keeps a
+queue, not one slot; the store schema carries `awaitingTurn`; `run` starts the gate waiting only when every
 captured record awaits, drops a gated terminal of a child that is not archived, re-arms on
 `finished` and a not-archived `was closed` through `serialize` with an abort check first, and
 removes on every other outcome; `hasPendingForCaller` skips `watch.awaiting`; `bootstrap.ts`

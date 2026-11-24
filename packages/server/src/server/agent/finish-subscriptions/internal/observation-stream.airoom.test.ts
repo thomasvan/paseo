@@ -82,14 +82,37 @@ test("a remote turn_started with a turnId opens the gate though its re-fetched s
   }
 });
 
-test.each(["running", "initializing"] as const)(
-  "a %s snapshot is a turn, whatever event carries it",
-  async (status) => {
+test("a running snapshot is a turn, whatever event carries it", async () => {
+  const { host, observation, turns } = await scenario();
+  try {
+    host.emit("running");
+    expect(turns).toHaveLength(1);
+    expect(observation.turnPending!()).toBe(true);
+  } finally {
+    await observation.close();
+  }
+});
+
+test.each([
+  { carrier: "its own state change", event: undefined },
+  { carrier: "the synthetic open", event: { type: "turn_started", provider: "codex" } as const },
+])(
+  "an initializing snapshot from $carrier is no turn, and the idle baseline follows none",
+  async ({ event }) => {
     const { host, observation, turns } = await scenario();
     try {
-      host.emit(status);
-      expect(turns).toHaveLength(1);
-      expect(observation.turnPending!()).toBe(true);
+      // A session being loaded, as for a history read, before it settles idle.
+      host.emit("initializing", event);
+      host.baseline.resolve({
+        status: "idle",
+        final: snapshot("idle"),
+        lastMessage: null,
+        error: null,
+      });
+      const result = await observation.next();
+      expect(result.turnObserved).toBe(false);
+      expect(observation.turnPending!()).toBe(false);
+      expect(turns).toEqual([]);
     } finally {
       await observation.close();
     }
