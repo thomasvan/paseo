@@ -1,5 +1,6 @@
 import type { AgentStreamEvent } from "../agent-sdk-types.js";
 import { parentAddressLabels } from "@getpaseo/protocol/agent-labels";
+import { withCreatorMark } from "../creator-mark.js"; // AIROOM-PATCH(wakeup-each)
 import type { AgentActiveTurnBehavior, AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -229,12 +230,19 @@ export function createHostResolver(input: {
               (caller?.provider === provider ? (caller.currentModeId ?? undefined) : undefined);
             const workspace = await client.findWorkspace(parsed.workspaceId);
             if (!workspace) throw new Error(`Workspace ${parsed.workspaceId} not found`);
-            const labels = {
-              ...parsed.labels,
-              ...(input.callerAgentId
-                ? parentAddressLabels({ agentId: input.callerAgentId, serverId: input.serverId })
-                : {}),
-            };
+            // AIROOM-PATCH(wakeup-each): the creator mark names the calling agent on this host; a
+            // mark in the requested labels is replaced.
+            const labels = withCreatorMark(
+              {
+                ...parsed.labels,
+                ...(input.callerAgentId
+                  ? parentAddressLabels({ agentId: input.callerAgentId, serverId: input.serverId })
+                  : {}),
+              },
+              input.callerAgentId
+                ? { agentId: input.callerAgentId, serverId: input.serverId }
+                : null,
+            );
             const snapshot = await client.createAgent({
               config: {
                 provider,

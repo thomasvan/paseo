@@ -735,3 +735,47 @@ test("a cancel while a re-arm write is in flight leaves no record", async () => 
   await written.promise;
   expect(await stored(d.directory)).toEqual([]);
 });
+
+/** A child on another host whose labels are `labels` and nothing else. */
+class Labelled extends Child {
+  constructor(public labels: Record<string, string>) {
+    super("running");
+  }
+  override snapshot() {
+    return { ...super.snapshot(), labels: this.labels };
+  }
+}
+
+// A watch on a child on another host re-arms when the child's creator mark names the caller on
+// the watch's own host, and is one-shot when the mark names the caller's id on the child's host:
+// with no server label, the mark means the child's host.
+test.each([
+  { mark: "the caller on this host", server: { "airoom.creator-server-id": "origin" }, heard: 2 },
+  { mark: "the caller's id on the child's host", server: {}, heard: 1 },
+])(
+  "a remote child whose creator mark names $mark: $heard notices over two turns",
+  async ({ server, heard }) => {
+    const child = new Labelled({ "airoom.creator-agent-id": "parent", ...server });
+    const d = await daemon(await home(), child);
+    await d.service.register({ ...intent, serverId: "remote" });
+    await until(() => child.handlers.size === 1 && child.waiting.length === 1);
+    child.finish("first answer");
+    await until(() => d.delivery.prompts.length === 1);
+    d.delivery.ack(0);
+    await expect.poll(async () => (await stored(d.directory)).length).toBe(heard - 1);
+    child.start();
+    child.finish("second answer");
+    if (heard === 2) {
+      await until(() => d.delivery.prompts.length === 2);
+      expect(d.delivery.prompts[1]).toContain("second answer");
+      d.delivery.ack(1);
+    }
+    // A fresh watch on a further turn is the last notice either way.
+    child.start();
+    await d.service.register({ ...intent, serverId: "remote" });
+    await until(() => child.waiting.length > 0);
+    child.finish("sentinel answer");
+    await until(() => d.delivery.prompts.length === heard + 1);
+    expect(d.delivery.prompts[heard]).toContain("sentinel answer");
+  },
+);

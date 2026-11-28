@@ -6,6 +6,7 @@ import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-clien
 import type { FinishObservationResult } from "./internal/observation-buffer.js";
 import type { AgentMessageDelivery } from "../agent-messages/index.js";
 import { getParentAddressFromLabels } from "@getpaseo/protocol/agent-labels";
+import { getCreatorAddressFromLabels } from "../creator-mark.js"; // AIROOM-PATCH(wakeup-each)
 import {
   formatFinishNotificationBody,
   finishNotificationEvents,
@@ -193,19 +194,32 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
   ): Promise<boolean> {
     if (!(await deps.callerIsActive(record.callerAgentId))) return true;
     if (!record.requireParentOwnership || !result?.final) return false;
-    return !owned(record, result);
+    return !parented(record, result);
   }
   /**
    * AIROOM-PATCH(wakeup-each): the child's parent label names the caller on this server. Upstream's
-   * `suppressed` reads it for a create watch; a re-arm reads it for every watch.
+   * `suppressed` reads it for a create watch; `owned` reads it for a re-arm.
    */
-  function owned(record: FinishSubscription, result: WaitForFinishResult): boolean {
+  function parented(record: FinishSubscription, result: WaitForFinishResult): boolean {
     if (!result.final) return false;
     const parent = getParentAddressFromLabels(
       result.final.labels,
       record.serverId ?? deps.serverId,
     );
     return parent?.agentId === record.callerAgentId && parent.serverId === deps.serverId;
+  }
+  /**
+   * AIROOM-PATCH(wakeup-each): the child is the caller's own: its parent, or the agent that created
+   * it, is the caller on this server. The creator mark names the direct creator only.
+   */
+  function owned(record: FinishSubscription, result: WaitForFinishResult): boolean {
+    if (!result.final) return false;
+    if (parented(record, result)) return true;
+    const creator = getCreatorAddressFromLabels(
+      result.final.labels,
+      record.serverId ?? deps.serverId,
+    );
+    return creator?.agentId === record.callerAgentId && creator.serverId === deps.serverId;
   }
   /** AIROOM-PATCH(wakeup-each) */
   async function childIsArchived(

@@ -28,6 +28,7 @@ import {
 } from "./intent.js";
 import type { ProviderOptions } from "@getpaseo/protocol/agent-types";
 import { foldFeatureValues, type LegacyFeatureValues } from "../option-controls.js";
+import { withCreatorMark } from "../creator-mark.js"; // AIROOM-PATCH(wakeup-each)
 
 /** How a workspace this creation makes inherits its creator's visibility. */
 interface McpWorkspaceIntent {
@@ -338,6 +339,9 @@ async function resolveMcpCreateAgent(
   });
 
   const trimmedPrompt = input.initialPrompt?.trim() ?? "";
+  // AIROOM-PATCH(wakeup-each): the creator mark names the calling agent, on the child's own host;
+  // a mark in the requested labels is replaced, and a create with no calling agent writes none.
+  const labels = withCreatorMark(intent.labels, parentAgent ? { agentId: parentAgent.id } : null);
   return {
     config: buildMcpSessionConfig({
       input,
@@ -349,7 +353,7 @@ async function resolveMcpCreateAgent(
       resolvedProviderOptions: resolvedCreateConfig.providerOptions,
     }),
     createOptions: {
-      ...(Object.keys(intent.labels).length > 0 ? { labels: intent.labels } : {}),
+      ...(Object.keys(labels).length > 0 ? { labels } : {}),
       workspaceId: intent.workspaceId,
       owner: input.owner,
       background: inheritAgentBackground(input.background, parentAgent),

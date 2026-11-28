@@ -9,6 +9,7 @@ import {
 } from "./finish-subscriptions/index.js";
 import type { AgentMessageDelivery } from "./agent-messages/index.js";
 import { createTestAgentMessages } from "../test-utils/agent-messages.js";
+import { importProviderSession } from "./import-sessions.js";
 import { type PromptDispatchDisposition } from "./agent-prompt.js";
 import { parseAgentMessage, parseAgentMessages } from "./agent-messages/index.js";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -2875,6 +2876,8 @@ describe("create_agent MCP tool", () => {
         labels: {
           [PARENT_AGENT_ID_LABEL]: "voice-agent",
           source: "voice",
+          // AIROOM-PATCH(wakeup-each): the create writes the creator mark naming the caller.
+          "airoom.creator-agent-id": "voice-agent",
         },
         workspaceId: "wks_voice",
         background: false,
@@ -3057,6 +3060,8 @@ describe("create_agent MCP tool", () => {
       {
         labels: {
           source: "handoff",
+          // AIROOM-PATCH(wakeup-each): the create writes the creator mark naming the caller.
+          "airoom.creator-agent-id": "parent-agent",
         },
         workspaceId: "wks_parent",
         background: false,
@@ -3119,6 +3124,8 @@ describe("create_agent MCP tool", () => {
       {
         labels: {
           [PARENT_AGENT_ID_LABEL]: "parent-agent",
+          // AIROOM-PATCH(wakeup-each): the create writes the creator mark naming the caller.
+          "airoom.creator-agent-id": "parent-agent",
         },
         workspaceId: "wks_parent",
         background: false,
@@ -7818,6 +7825,328 @@ describe("send_agent_prompt with notifyOnFinish false", () => {
     ]);
     await send({ notifyOnFinish: false });
     expect(serverSubscriptionRecords.get(server)!.size).toBe(0);
+  });
+});
+
+// AIROOM-PATCH(wakeup-each): a watch re-arms when its caller created the child, detached included,
+// as when it is the child's parent. One daemon: one message delivery and one set of finish
+// subscriptions behind an MCP server per agent, every agent's turn ending as soon as it starts.
+describe("finish notices for a child the caller created", () => {
+  const logger = createTestLogger();
+  const existingCwd = process.cwd();
+
+  async function fixture() {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-finish-creator-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const clients = {
+      claude: new HeldTurnAgentClient("claude", false),
+      codex: new HeldTurnAgentClient("codex", false),
+    };
+    const manager = new AgentManager({ clients, registry: storage, logger });
+    const deps = {
+      agentManager: manager,
+      agentStorage: storage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger,
+    };
+    const messages = createTestAgentMessages(deps);
+    const records = new Map<string, FinishSubscription>();
+    const subscriptions = createFinishSubscriptions({
+      store: {
+        list: async () => [...records.values()],
+        put: async (record) => {
+          records.set(record.id, record);
+        },
+        remove: async (id) => {
+          records.delete(id);
+        },
+      },
+      messages: () => messages,
+      callerIsActive: async (id) => !(await storage.get(id))?.archivedAt,
+      serverId: "self",
+      logger,
+      ...createFinishObservation({
+        ...deps,
+        waitForResume: async () => {},
+        messages: () => messages,
+        serverId: "self",
+        hosts: () => {
+          throw new Error("No hosts");
+        },
+      }),
+    });
+    subscriptionServices.push(subscriptions);
+    const tools = async (callerAgentId?: string) => {
+      const server = await createAgentMcpServerWithDependencies({
+        ...deps,
+        ...(callerAgentId ? { callerAgentId } : {}),
+        agentMessages: () => messages,
+        finishSubscriptions: () => subscriptions,
+        workspaceRegistry: {
+          get: async () => null,
+          listActive: async () => [],
+          upsert: async () => {},
+        },
+      });
+      const call = async (name: string, input: Record<string, unknown>) => {
+        const tool = registeredTool(server, name);
+        const parsed = await tool.inputSchema.safeParseAsync(input);
+        expect(parsed.success).toBe(true);
+        return tool.handler(parsed.data);
+      };
+      return {
+        create: async (input: Record<string, unknown>) =>
+          String(
+            (
+              await call("create_agent", {
+                provider: "codex/gpt-5.4",
+                initialPrompt: "Start",
+                ...input,
+              })
+            ).structuredContent.agentId,
+          ),
+        send: (agentId: string, prompt: string) => call("send_agent_prompt", { agentId, prompt }),
+        update: (agentId: string, labels: Record<string, string>) =>
+          call("update_agent", { agentId, labels }),
+      };
+    };
+    const a = await manager.createAgent({ provider: "claude", cwd: existingCwd }, undefined, {
+      workspaceId: "wks_root",
+    });
+    /** Every prompt agent `id`'s provider session received. */
+    const prompts = (id: string) =>
+      [...clients.claude.sessions, ...clients.codex.sessions].find(
+        (session) => manager.getAgent(id)?.persistence?.sessionId === session.id,
+      )?.prompts ?? [];
+    const peer = async (title: string) =>
+      (
+        await manager.createAgent({ provider: "codex", cwd: existingCwd, title }, undefined, {
+          workspaceId: "wks_root",
+        })
+      ).id;
+    /** The finish notices agent `to` received about agent `from`. */
+    const notices = (to: string, from: string) =>
+      prompts(to)
+        .flatMap((prompt) => parseAgentMessages(prompt) ?? [])
+        .map((message) => message.text)
+        .filter((text) => text.includes(`Agent ${from} (`) && text.includes("finished."));
+    /** Waits until no agent runs and no prompt count moves for a while. */
+    const quiet = async (ids: string[]) => {
+      let last = "";
+      for (let round = 0; round < 40; round++) {
+        await vi.waitFor(() =>
+          expect(ids.map((id) => manager.getAgent(id)?.lifecycle)).toEqual(ids.map(() => "idle")),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const now = JSON.stringify(ids.map((id) => prompts(id).length));
+        if (now === last) return;
+        last = now;
+      }
+      throw new Error("the agents never went quiet");
+    };
+    return {
+      a: a.id,
+      peer,
+      manager,
+      storage,
+      tools,
+      prompts,
+      notices,
+      quiet,
+      cleanup: () => removeAgentStateDir(manager, storage, workdir),
+    };
+  }
+
+  it("a detached child and its creator prompting each other: the creator hears every finish, the child one per send, and the notices stop", async () => {
+    const f = await fixture();
+    try {
+      const a = await f.tools(f.a);
+      const b = await a.create({ title: "Lead", detached: true });
+      const bTools = await f.tools(b);
+      const operator = await f.tools();
+      expect(f.manager.getAgent(b)?.labels["paseo.parent-agent-id"]).toBeUndefined();
+      await f.quiet([f.a, b]);
+      for (let round = 0; round < 3; round++) {
+        await bTools.send(f.a, `b asks a ${round}`);
+        await f.quiet([f.a, b]);
+        await a.send(b, `a asks b ${round}`);
+        await f.quiet([f.a, b]);
+      }
+      // Every turn of b is heard by a, and b hears a's finish once per send it made.
+      expect(f.prompts(b)).toHaveLength(7);
+      expect(f.notices(f.a, b)).toHaveLength(7);
+      expect(f.notices(b, f.a)).toHaveLength(3);
+      // After the sends end, a turn of a sends b nothing, and a turn of b reaches a once.
+      await operator.send(f.a, "a alone");
+      await f.quiet([f.a, b]);
+      await operator.send(b, "b alone");
+      await f.quiet([f.a, b]);
+      expect(f.notices(f.a, b)).toHaveLength(8);
+      expect(f.notices(b, f.a)).toHaveLength(3);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("a watch on the child of the caller's child is one-shot, while one on its own child re-arms", async () => {
+    const f = await fixture();
+    try {
+      const a = await f.tools(f.a);
+      const operator = await f.tools();
+      const b = await a.create({ title: "Lead", detached: true });
+      await f.quiet([f.a, b]);
+      const bTools = await f.tools(b);
+      // A requested mark naming a is replaced by the mark naming b, its creator.
+      const c = await bTools.create({
+        title: "Worker",
+        detached: true,
+        notifyOnFinish: false,
+        labels: { "airoom.creator-agent-id": f.a, "airoom.creator-server-id": "elsewhere" },
+      });
+      expect(f.manager.getAgent(c)?.labels).toMatchObject({ "airoom.creator-agent-id": b });
+      expect(f.manager.getAgent(c)?.labels).not.toHaveProperty("airoom.creator-server-id");
+      await f.quiet([f.a, b, c]);
+      for (const child of [b, c]) {
+        await a.send(child, "work");
+        await f.quiet([f.a, b, c]);
+        await operator.send(child, "more work");
+        await f.quiet([f.a, b, c]);
+      }
+      expect(f.notices(f.a, b)).toHaveLength(3);
+      expect(f.notices(f.a, c)).toHaveLength(1);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it.each(["loaded", "stored"] as const)(
+    "a label edit, a reparent, a detach and another agent's send leave the creator owning its %s child",
+    async (state) => {
+      const f = await fixture();
+      try {
+        const a = await f.tools(f.a);
+        const operator = await f.tools();
+        const b = await a.create({ title: "Worker" });
+        const x = await f.peer("Other");
+        await f.quiet([f.a, b, x]);
+        const labels = async () => (await f.storage.get(b))?.labels;
+        expect(await labels()).toMatchObject({ "paseo.parent-agent-id": f.a });
+        if (state === "stored") await f.manager.closeAgent(b);
+        const xTools = await f.tools(x);
+        await xTools.update(b, {
+          "paseo.parent-agent-id": x,
+          "airoom.creator-agent-id": x,
+          "airoom.creator-server-id": "elsewhere",
+        });
+        await f.manager.detachAgent(b);
+        expect(await labels()).toMatchObject({ "airoom.creator-agent-id": f.a });
+        expect(await labels()).not.toHaveProperty("airoom.creator-server-id");
+        expect(await labels()).not.toHaveProperty("paseo.parent-agent-id");
+        await xTools.send(b, "from x");
+        await f.quiet([f.a, b, x]);
+        expect(await labels()).toMatchObject({ "airoom.creator-agent-id": f.a });
+        const heard = f.notices(f.a, b).length;
+        await a.send(b, "work");
+        await f.quiet([f.a, b, x]);
+        await operator.send(b, "more work");
+        await f.quiet([f.a, b, x]);
+        expect(f.notices(f.a, b)).toHaveLength(heard + 2);
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+
+  it("an import that restores the archived child, asking for another creator, leaves the creator owning it", async () => {
+    const f = await fixture();
+    try {
+      const a = await f.tools(f.a);
+      const operator = await f.tools();
+      const b = await a.create({ title: "Worker", detached: true });
+      await f.quiet([f.a, b]);
+      const sessionId = String((await f.storage.get(b))?.persistence?.sessionId);
+      await f.manager.closeAgent(b);
+      await f.manager.archiveSnapshot(b, new Date().toISOString());
+      await importProviderSession({
+        request: {
+          requestId: "import-archived-child",
+          provider: "codex",
+          providerHandleId: sessionId,
+          cwd: existingCwd,
+          labels: { "airoom.creator-agent-id": "other", "airoom.creator-server-id": "elsewhere" },
+        },
+        workspaceProvisioning: {
+          runInImportWorkspace: async (_input, operation) => ({
+            value: await operation({ workspaceId: "wks_root" } as PersistedWorkspaceRecord),
+            createdWorkspace: null,
+          }),
+        },
+        agentManager: f.manager,
+        agentStorage: f.storage,
+        logger,
+      });
+      const labels = (await f.storage.get(b))?.labels;
+      expect(labels).toMatchObject({ "airoom.creator-agent-id": f.a });
+      expect(labels).not.toHaveProperty("airoom.creator-server-id");
+      await f.quiet([f.a, b]);
+      const heard = f.notices(f.a, b).length;
+      await a.send(b, "work");
+      await f.quiet([f.a, b]);
+      await operator.send(b, "more work");
+      await f.quiet([f.a, b]);
+      expect(f.notices(f.a, b)).toHaveLength(heard + 2);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("a create routed to another host marks the caller on this host as the child's creator", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockImplementation((agentId: string) =>
+      agentId === "parent-agent"
+        ? ({ id: "parent-agent", config: {}, cwd: existingCwd, provider: "codex" } as ManagedAgent)
+        : null,
+    );
+    const created: Array<{ labels?: Record<string, string> }> = [];
+    const client = {
+      findWorkspace: async () => ({ workspaceDirectory: existingCwd }),
+      createAgent: async (input: { labels?: Record<string, string> }) => {
+        created.push(input);
+        return { id: "remote-child", provider: "codex", status: "running", cwd: existingCwd };
+      },
+    } as unknown as DaemonClient;
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      callerAgentId: "parent-agent",
+      serverId: "origin",
+      hosts: () => ({
+        directory: async () => {
+          throw new Error("not used");
+        },
+        use: async (_serverId, action) => action(client),
+      }),
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger,
+    });
+    await invokeToolWithParsedInput(
+      registeredTool(server, "create_agent"),
+      {
+        serverId: "remote",
+        workspaceId: "wks_remote",
+        provider: "codex/gpt-5.4",
+        title: "Remote worker",
+        initialPrompt: "Work",
+        notifyOnFinish: false,
+        labels: { "airoom.creator-agent-id": "someone", "airoom.creator-server-id": "remote" },
+      },
+      false,
+    );
+    expect(created).toHaveLength(1);
+    expect(created[0]!.labels).toMatchObject({
+      "airoom.creator-agent-id": "parent-agent",
+      "airoom.creator-server-id": "origin",
+    });
   });
 });
 

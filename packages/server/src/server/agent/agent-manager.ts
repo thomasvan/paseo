@@ -12,6 +12,7 @@ import {
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import { applyRecordPatch } from "../record-patch.js";
+import { withoutCreatorMark } from "./creator-mark.js"; // AIROOM-PATCH(wakeup-each)
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
@@ -2803,7 +2804,8 @@ export class AgentManager {
   private async writeLabels(agentId: string, patch: AgentLabelPatch): Promise<WriteLabelsResult> {
     const liveAgent = this.agents.get(agentId);
     if (liveAgent) {
-      liveAgent.labels = applyRecordPatch(liveAgent.labels, patch);
+      // AIROOM-PATCH(wakeup-each): no label patch moves the creator mark.
+      liveAgent.labels = applyRecordPatch(liveAgent.labels, withoutCreatorMark(patch));
       this.touchUpdatedAt(liveAgent);
       await this.persistSnapshot(liveAgent);
       this.emitState(liveAgent, { persist: false });
@@ -2828,7 +2830,10 @@ export class AgentManager {
     const nextRecord = {
       ...record,
       ...(patch.title ? { title: patch.title } : {}),
-      ...(patch.labels ? { labels: applyRecordPatch(record.labels, patch.labels) } : {}),
+      // AIROOM-PATCH(wakeup-each): no label patch moves the creator mark.
+      ...(patch.labels
+        ? { labels: applyRecordPatch(record.labels, withoutCreatorMark(patch.labels)) }
+        : {}),
       ...(patch.metadata ? { metadata: applyRecordPatch(record.metadata, patch.metadata) } : {}),
       updatedAt: this.nextStoredUpdatedAt(record),
     };
@@ -3034,7 +3039,10 @@ export class AgentManager {
     const nextRecord: StoredAgentRecord = {
       ...record,
       ...(updates?.workspaceId ? { workspaceId: updates.workspaceId } : {}),
-      ...(updates?.labels ? { labels: applyRecordPatch(record.labels, updates.labels) } : {}),
+      // AIROOM-PATCH(wakeup-each): no label patch moves the creator mark.
+      ...(updates?.labels
+        ? { labels: applyRecordPatch(record.labels, withoutCreatorMark(updates.labels)) }
+        : {}),
       archivedAt: null,
       updatedAt: new Date().toISOString(),
     };

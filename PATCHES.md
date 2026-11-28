@@ -54,7 +54,7 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 
 | Patch                                                                       | What it fixes                                                                                 | Upstream                                                                                                                                                   |
 | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a child it owns, once each, across restarts                    | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
+| [`wakeup-each`](#wakeup-each)                                               | a caller hears every finish of a child it owns or created, once each, across restarts         | issue [#6346](https://github.com/getpaseo/paseo/issues/6346) (fix described there), Discussion [#4669](https://github.com/getpaseo/paseo/discussions/4669) |
 | [`detached-arg`](#detached-arg)                                             | the advertised `create_agent` schema can ask for a detached child                             | Discussion [#4670](https://github.com/getpaseo/paseo/discussions/4670)                                                                                     |
 | [`native-tools-injection-independent`](#native-tools-injection-independent) | native Paseo tools survive MCP injection being off                                            | Discussion [#4671](https://github.com/getpaseo/paseo/discussions/4671)                                                                                     |
 | [The Codex foreground cluster](#the-codex-foreground-cluster)               | a Codex session's foreground slot is released on every path that ends its turn (five patches) | issue [#3256](https://github.com/getpaseo/paseo/issues/3256) (the fixes described there); PR [#4041](https://github.com/getpaseo/paseo/pull/4041) open     |
@@ -128,19 +128,38 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
 
 - **What:** a finish subscription in `agent/finish-subscriptions/` whose child the caller owns
   re-arms in place after an acknowledged `finished` instead of being removed, behind a gate
-  whose state its stored record keeps as `awaitingTurn: true`. Every other subscription keeps
+  whose state its stored record keeps as `awaitingTurn: true`. The caller owns a child it is
+  the parent of, or one it created itself, detached included. Every other subscription keeps
   upstream's one-shot, and a send with `notifyOnFinish: false` removes the pair's subscription.
   - **Ownership** is read at each re-arm, in `settle`, from the delivered terminal's labels
-    (`owned`, the reading upstream's `suppressed` does for a create subscription): the child's
-    parent label names the caller on this server. A send's `accept` supersedes the create
-    path's record with one that carries no `requireParentOwnership`, so a flag read at
-    registration would turn a Lead's own Worker one-shot after the first follow-up; the label
-    covers that record, a local and a remote child alike, and a later detach or reparent. The
-    re-arm is the only place a record is written back after a delivery, and every watch,
-    recovered ones included, reaches it through `run`, so the check covers a registration path
-    no search found. A child the caller created detached on this host carries no parent
-    label and is one-shot. Two root seats that prompt each other each hear one finish per send, where an
-    unconditional re-arm woke them on each other's every turn.
+    (`owned`): the child's parent label names the caller on this server (`parented`, the
+    reading upstream's `suppressed` does for a create subscription, and still the only one it
+    does), or its creator mark does. A send's `accept` supersedes the create path's record
+    with one that carries no `requireParentOwnership`, so a flag read at registration would
+    turn a Lead's own Worker one-shot after the first follow-up; the labels cover that record
+    and a local and a remote child alike. The re-arm is the only place a record is written
+    back after a delivery, and every watch, recovered ones included, reaches it through
+    `run`, so the check covers a registration path no search found. Two root seats that prompt
+    each other each hear one finish per send, where an unconditional re-arm woke them on each
+    other's every turn; a seat and the detached child it created hear, the creator every finish
+    of the child and the child one finish per send, and the notices end with the sends.
+  - **The creator mark** (`agent/creator-mark.ts`) is two labels: `airoom.creator-agent-id`,
+    and `airoom.creator-server-id` when the creator is on another host than the child (absent,
+    it means the child's host, as the parent label's server does). It names the direct creator
+    only: a child its child created is not the caller's. The create paths write it once:
+    `create.ts`'s MCP branch names the calling agent (`create_agent` on this host), the routed
+    create in `host-operations` names the calling agent and this host, and each replaces a mark
+    the requested labels carried. A create with no calling agent (the Hub, a schedule) writes
+    none. A create through the client RPC or a session import takes its labels as given: that
+    is how a routed create's mark reaches the destination, so an authorised client can write a
+    mark there, and its effect is that the named agent's watches on that child re-arm.
+    `AgentManager` drops the mark's two keys from every label patch it applies (`writeLabels`,
+    `writeStoredMetadata`, `unarchiveSnapshot`), so `update_agent`, a detach, a reparent through
+    a parent-label edit, an import's unarchive and a send leave it as written. The mark lives in
+    the labels, not in a new stored field, because the watch reads ownership from the delivered
+    snapshot and a remote child's labels already travel in it; a stored field would need a
+    protocol field and the destination's support. A detach still ends a create subscription
+    through upstream's `suppressed`; the creator's next send registers one that the mark keeps.
   - **The cancel** (`cancel`, called by `send_agent_prompt` with `notifyOnFinish: false`, and
     by the routed send with that destination's `serverId`) runs inside `serialize` before the
     prompt is enqueued. It stops every watch of the caller-child-server group, a registration
@@ -191,7 +210,8 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
 - **Why:** a caller that drives one long-lived child across many prompts has to hear every
   finish, exactly once, across restarts. A caller that only messages a seat it does not own
   asked about one reply, and re-arming that watch let two root seats wake each other on every
-  turn until one errored. No field of the agent record tells a child stopped
+  turn until one errored. A seat that created a child detached drives it as a parent does:
+  a Supervisor seats each Lead detached and needs every one of its finishes. No field of the agent record tells a child stopped
   mid-turn from one stopped idle (a restart rewrites `running` to `closed`, a graceful stop
   stores every agent `closed`, and an agent-sourced prompt never moves `lastUserMessageAt`), so
   the watch writes that mark itself. An unconditional re-arm sends a false notice on every
@@ -203,6 +223,11 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
   idle watch lingers until the child's next terminal or the next restart; a notice enqueued
   before a cancel is still delivered; a record an earlier build of this patch re-armed for a
   child the caller does not own delivers its next turn's terminal once more, then is removed.
+  A child created before the creator mark carries none, and no record says who created it, so
+  it is owned only through its parent label: one created detached, or detached since, is
+  one-shot, and its creator hears one finish per send until the child is created again. A
+  child on a host whose build predates the mark carries the mark the routed create wrote, but
+  that host's label edits can move it, and a create made on that host writes none.
   The shutdown order in
   `bootstrap.ts` (watches close before message delivery) stays upstream's: delivery throws once
   closed, and finish notices go through it.
@@ -239,12 +264,19 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
   acknowledged finish while a later turn is pending, and a rejected gate-open write followed by
   a mid-turn close and recovery, two root seats watching each other (one notice each, however
   many turns follow), a cancel while a notice awaits acknowledgement, and a cancel while a
-  re-arm write is in flight;
+  re-arm write is in flight, and a remote child whose creator mark names the caller on this
+  host (re-arms) or the caller's id on the child's host (one-shot);
   `internal/observation-stream.airoom.test.ts` drives the gate signal, an `initializing`
   snapshot included, and the queue on the `Host` fake. `every finish notifies` is the owned
   re-arm: its record carries no `requireParentOwnership`, as a send's does. `mcp-server.test.ts`,
   `send_agent_prompt with notifyOnFinish false`, drives the send tool: after a send with notify
-  on, a registration still pending dispatch, and a routed send to another host.
+  on, a registration still pending dispatch, and a routed send to another host;
+  `finish notices for a child the caller created` drives `create_agent`, `send_agent_prompt`
+  and `update_agent` on one daemon whose agents' turns end as they start: a seat and the
+  detached child it created prompting each other, a child's child (one-shot) beside the
+  caller's own child (re-arms) with a requested mark replaced, the mark kept through a label
+  edit, a reparent, a detach and another agent's send (a loaded and a stored child), the mark
+  kept through an import that restores the archived child, and the mark a routed create writes.
 - **Adapted upstream rows:** nine upstream tests expect the one-shot behaviour of a child their
   caller owns, and each is adapted in place with a comment naming the patch. Seven change only
   their store assertion, to one record with `awaitingTurn: true`, because the outcome they reach
@@ -277,6 +309,12 @@ and opens both qualified children in ordinary conversations`, prompts each child
 the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
   so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
   older record and removes the other, and that removal is the one that fails.
+
+  Three rows of `mcp-server.test.ts`' `create_agent MCP tool` assert the exact labels a caller's
+  create passes to `createAgent`, and each now expects the creator mark naming the caller too:
+  `allows caller agents to override cwd and applies caller context labels`, `creates detached
+  caller agents without a parent label` and `accepts provider features from caller agents and
+  passes them through createAgent`.
 
   Rows whose watch the caller does not own are upstream's bytes again: `finish-subscriptions.test.ts`'
   `remote finish intent protects its caller through registration, observation and delivery`
@@ -695,15 +733,17 @@ before the `turn_started` early return and fires on a running snapshot or a `tur
 a `turnId`, never on an `initializing` snapshot or the synthetic open alone; the buffer keeps a
 queue, not one slot; the store schema carries `awaitingTurn`; `run` starts the gate waiting only when every
 captured record awaits, drops a gated terminal of a child that is not archived, re-arms on
-`finished` and a not-archived `was closed` of an `owned` child through `serialize` with an abort
-check first, and removes on every other outcome; `cancel` runs inside `serialize` and
+`finished` and a not-archived `was closed` of an `owned` child (parent label or creator mark)
+through `serialize` with an abort check first, and removes on every other outcome;
+`create.ts` and the routed create write the creator mark and `agent-manager.ts`'s three label
+patches pass through `withoutCreatorMark`; `cancel` runs inside `serialize` and
 `send_agent_prompt` calls it, local and routed, for `notifyOnFinish: false`; `hasPendingForCaller` skips `watch.awaiting`; `bootstrap.ts`
 passes `childArchived` and still closes the finish subscriptions before message delivery.
 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-52 wakeup-each                             7 archived-out-of-band-declines
+67 wakeup-each                             7 archived-out-of-band-declines
 16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
  7 agent-send-interrupt                    2 interrupt-releases-foreground
  6 native-tools-injection-independent      2 force-cancel-releases-foreground
@@ -712,7 +752,7 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
                                            1 dead-run-settles
 ```
 
-106 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
+121 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
 agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
 behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
 `archived-out-of-band-declines`' seven: `offerOutOfBand` in `agent-manager.ts`, its wiring in
@@ -721,12 +761,16 @@ suite mock's line in `mcp-server.test.ts`, and its table in `connected-hosts/hos
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
-`wakeup-each`'s 52 sites: 41 in `agent/finish-subscriptions/` (its four source files, both
-fork test files and the four adapted upstream rows there), two in `tools/paseo-tools.ts` (the
-local and the routed cancel), one in `bootstrap.ts`, one in `mcp-server.test.ts` (its
-`notifyOnFinish false` group), two in `connected-hosts/hosts.e2e.test.ts` (its adapted rows), two in `daemon-e2e/daemon-restart-resume.e2e.test.ts` (the second- and
-third-start assertions of its adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one
-in `e2e/support/helpers/subagents.ts`).
+`wakeup-each`'s 67 sites: 43 in `agent/finish-subscriptions/` (its four source files, both
+fork test files and the four adapted upstream rows there), one in `agent/creator-mark.ts`, four
+in `agent-manager.ts` (the import and its three label patches), two in `create-agent/create.ts`
+and two in `host-operations/index.ts` (each an import and the mark's write), two in
+`tools/paseo-tools.ts` (the local and the routed cancel), one in `bootstrap.ts`, five in
+`mcp-server.test.ts` (its `notifyOnFinish false` group, its creator group and the three adapted
+`create_agent MCP tool` rows), two in `connected-hosts/hosts.e2e.test.ts` (its adapted rows), two
+in `daemon-e2e/daemon-restart-resume.e2e.test.ts` (the second- and third-start assertions of its
+adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one in
+`e2e/support/helpers/subagents.ts`).
 
 Then merge and verify:
 
