@@ -56,6 +56,11 @@ export interface FinishObservationSession {
   turnPending?(): boolean;
   /** AIROOM-PATCH(wakeup-each): calls `listener` on each observed turn, and now if one is pending. */
   onTurn?(listener: () => void): void;
+  /**
+   * AIROOM-PATCH(wakeup-each): the child's latest state the observation saw, once it saw one.
+   * Read where no terminal carries it, as at the follow limit.
+   */
+  state?(): Promise<WaitForFinishResult["final"]>;
 }
 export interface FinishObservation {
   open(subscription: FinishSubscription, signal: AbortSignal): Promise<FinishObservationSession>;
@@ -119,6 +124,11 @@ interface Watch {
   task?: Promise<void>;
   /** Decides a followed child's state again; see `createFollowing`. */
   recheck?(): void;
+}
+/** AIROOM-PATCH(wakeup-each): one read of the observation, and its value once it settled. */
+interface HeldRead {
+  promise: Promise<FinishObservationResult>;
+  value?: FinishObservationResult;
 }
 function key(record: FinishSubscriptionPair): string {
   return JSON.stringify([record.callerAgentId, record.childAgentId, record.serverId]);
@@ -283,6 +293,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     notice: Notice,
     permissions: Set<string>,
     signal: AbortSignal,
+    continues = false, // AIROOM-PATCH(wakeup-each): the watch re-arms after this notice.
   ): Promise<void> {
     const { reason, result } = notice;
     const requests = result?.final?.pendingPermissions ?? [];
@@ -303,6 +314,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
           lastAssistantMessage: result?.lastMessage ?? null,
           permissionRequest: request,
           pendingWork: notice.work,
+          continues, // AIROOM-PATCH(wakeup-each)
         }),
         source: {
           kind: "agent-notification",
@@ -474,7 +486,10 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     async function rearm(): Promise<void> {
       await serialize(async () => {
         if (signal.aborted) return;
-        const awaitingTurn = !(observation?.turnPending?.() ?? false);
+        // A kept read that already took a terminal after a turn holds that turn: the record stays
+        // open, so a restart before its delivery still reads it.
+        const awaitingTurn =
+          !(observation?.turnPending?.() ?? false) && reading?.value?.turnObserved !== true;
         const {
           requireParentOwnership: _captured,
           followingSince: _followed,
@@ -508,21 +523,42 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     }
     /**
      * AIROOM-PATCH(wakeup-each): a delivered `finished`, follow-limit notice or `was closed` of a
-     * child that is not archived re-arms when the child is the caller's own, read from the
-     * delivered terminal's labels; every other outcome keeps upstream's remove-and-stop.
+     * child that is not archived re-arms when the child is the caller's own, read from `child`:
+     * the delivered terminal, or the child's state at the follow limit. Every other outcome keeps
+     * upstream's remove-and-stop. Decided before delivery, so the notice can say which.
      */
-    function rearms(notice: Notice, archived: boolean): boolean {
-      if (archived) return false;
+    function rearms(
+      notice: Notice | undefined,
+      archived: boolean,
+      child = notice?.result ?? null,
+    ): boolean {
+      if (!notice || archived) return false;
       if (
         notice.reason !== "finished" &&
         notice.reason !== "was closed" &&
         notice.reason !== "is still working"
       )
         return false;
-      return owned(record, notice.result);
+      return owned(record, child);
+    }
+    /**
+     * AIROOM-PATCH(wakeup-each): the child as it is at the follow limit. The follow holds the last
+     * terminal it decided, which a watch recovered while following never saw, so the observation's
+     * latest state comes first; it waits for the observation's first state, if none came yet.
+     */
+    async function childAtLimit(notice: Notice): Promise<FinishObservationResult | null> {
+      const final = observation?.state ? await abortable(observation.state(), signal) : null;
+      if (!final) return notice.result;
+      return { status: "idle", final, lastMessage: null, error: null };
     }
     const permissions = new Set<string>();
     let observation: FinishObservationSession | undefined;
+    /**
+     * AIROOM-PATCH(wakeup-each): a read of the observation that lost `following.next`'s race to
+     * the follow limit or a recheck. It is kept for the next outcome: a fresh read beside it would
+     * leave it to take the child's next terminal unseen, once the watch re-arms.
+     */
+    let reading: HeldRead | undefined;
     /** One outcome and how far it got. Retries resume it: nothing is lost or sent twice. */
     let current:
       | {
@@ -530,7 +566,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
           decided: boolean;
           notice?: Notice;
           sent: boolean;
-          archived?: boolean; // AIROOM-PATCH(wakeup-each)
+          rearms?: boolean; // AIROOM-PATCH(wakeup-each)
         }
       | undefined;
     let remoteFailures = 0;
@@ -542,7 +578,20 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
           observation = await deps.open(record, signal);
           observation.onTurn?.(turnObserved); // AIROOM-PATCH(wakeup-each)
         }
-        const result = await following.next(abortable(observation.next(), signal), signal);
+        // AIROOM-PATCH(wakeup-each): the read a limit or a recheck won over stays the next one.
+        if (!reading) {
+          const read: HeldRead = {
+            promise: abortable(observation.next(), signal).then((value) => {
+              read.value = value;
+              return value;
+            }),
+          };
+          read.promise.catch(() => undefined);
+          reading = read;
+        }
+        const read = reading;
+        const result = await following.next(read.promise, signal);
+        if (result === read.value) reading = undefined;
         remoteFailures = 0;
         return result;
       } catch (error) {
@@ -550,6 +599,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
         if (observation?.turnPending?.()) open = true;
         await observation?.close();
         observation = undefined;
+        reading = undefined; // AIROOM-PATCH(wakeup-each)
         signal.throwIfAborted();
         if (!(error instanceof HostObservationError) || !record.serverId) throw error;
         if (error.reason === "connecting") return undefined;
@@ -572,7 +622,7 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     }
     async function decide(
       outcome: FollowOutcome,
-    ): Promise<{ notice?: Notice; archived: boolean } | "suppressed" | "gated"> {
+    ): Promise<{ notice?: Notice; rearms: boolean } | "suppressed" | "gated"> {
       // A queued follow-up cannot start until the current permission is answered.
       // Its pending registration must not hold the running turn's checkpoint.
       if (outcome === FOLLOW_LIMIT || outcome.status !== "permission" || watch.pending)
@@ -580,14 +630,21 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
       signal.throwIfAborted();
       if (await suppressed(record, outcome === FOLLOW_LIMIT ? undefined : outcome))
         return "suppressed";
-      if (outcome === FOLLOW_LIMIT)
-        return { notice: await following.decide(outcome), archived: false };
+      // AIROOM-PATCH(wakeup-each): at the limit, ownership and archive state are the child's own.
+      if (outcome === FOLLOW_LIMIT) {
+        const notice = await following.decide(outcome);
+        if (!notice) return { rearms: false };
+        const child = await childAtLimit(notice);
+        const archived = !!child && (await childIsArchived(record, child));
+        return { notice, rearms: rearms(notice, archived, child) };
+      }
       // AIROOM-PATCH(wakeup-each): an archived child needs no turn: it reads `was closed` and
       // disarms. Any other terminal the waiting gate drops is silent.
       if (await childIsArchived(record, outcome))
-        return { notice: { reason: "was closed", result: outcome, work: [] }, archived: true };
+        return { notice: { reason: "was closed", result: outcome, work: [] }, rearms: false };
       if (gatedOut(outcome)) return "gated";
-      return { notice: await following.decide(outcome), archived: false };
+      const notice = await following.decide(outcome);
+      return { notice, rearms: rearms(notice, false) };
     }
     /** Handles one outcome. Returns true once the subscription has ended. */
     async function step(): Promise<boolean> {
@@ -615,14 +672,15 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
       }
       const { notice } = current;
       if (notice && !current.sent) {
-        await deliver(record, notice, permissions, signal);
+        // AIROOM-PATCH(wakeup-each): the notice says whether the watch re-arms after it.
+        await deliver(record, notice, permissions, signal, current.rearms === true);
         signal.throwIfAborted();
         current.sent = true;
       }
       // A removal failure retries only the commit, never the already accepted callback.
       if (notice && endsSubscription(notice.reason)) {
         // AIROOM-PATCH(wakeup-each): a storage failure retries only the re-arm, as above.
-        if (!rearms(notice, current.archived === true)) return end(true);
+        if (!current.rearms) return end(true);
         await rearm();
       }
       current = undefined;

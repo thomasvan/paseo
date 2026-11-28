@@ -25,6 +25,17 @@ export function createObservationBuffer(signal: AbortSignal) {
   let pushedTurns = 0;
   let consumedTurns = 0;
   let onTurn: (() => void) | undefined;
+  // AIROOM-PATCH(wakeup-each): the child's latest state the observation saw, for a decision with no
+  // terminal to read it from, as at the follow limit of a watch recovered while following.
+  let latest: WaitForFinishResult["final"] | undefined;
+  let seen!: () => void;
+  const known = new Promise<void>((resolve) => {
+    seen = resolve;
+  });
+  function see(snapshot: WaitForFinishResult["final"]): void {
+    latest = snapshot;
+    seen();
+  }
   let failure: unknown;
   let wake: (() => void) | undefined;
   const abort = () => {
@@ -55,6 +66,7 @@ export function createObservationBuffer(signal: AbortSignal) {
   return {
     pushInitial(result: FinishObservationResult) {
       initialPending = false;
+      if (latest === undefined) see(result.final); // AIROOM-PATCH(wakeup-each)
       if (result.status === "permission" && result.final) {
         const pendingPermissions = result.final.pendingPermissions.filter(
           (request) => !resolvedBeforeInitial.has(request.id),
@@ -83,6 +95,16 @@ export function createObservationBuffer(signal: AbortSignal) {
       onTurn = listener;
       if (turns > consumedTurns) listener();
     },
+    /** AIROOM-PATCH(wakeup-each): the child's state as published; `state()` reads the latest. */
+    see,
+    async state(): Promise<WaitForFinishResult["final"]> {
+      if (!signal.aborted)
+        await Promise.race([
+          known,
+          new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
+        ]);
+      return latest ?? null;
+    },
     resolved(id: string) {
       if (initialPending) resolvedBeforeInitial.add(id);
       delivered.delete(id);
@@ -90,6 +112,7 @@ export function createObservationBuffer(signal: AbortSignal) {
     },
     fail(error: unknown) {
       failure = error;
+      seen(); // AIROOM-PATCH(wakeup-each)
       wake?.();
     },
     async next(): Promise<FinishObservationResult> {

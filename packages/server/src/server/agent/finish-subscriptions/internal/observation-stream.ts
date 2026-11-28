@@ -34,6 +34,7 @@ function observeState(
   event?: AgentStreamEvent,
   lastMessage: string | null = null,
 ): void {
+  buffer.see(snapshot); // AIROOM-PATCH(wakeup-each)
   if (!snapshot) {
     buffer.push({ status: "idle", final: null, lastMessage: null, error: null });
     return;
@@ -132,6 +133,7 @@ export async function openFinishObservation(
     // AIROOM-PATCH(wakeup-each)
     turnPending: () => buffer.turnPending(),
     onTurn: (listener) => buffer.onTurn(listener),
+    state: () => buffer.state(),
     async close() {
       controller.abort();
       buffer.dispose();

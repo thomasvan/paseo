@@ -51,6 +51,8 @@ interface FinishNotificationBodyInput {
   lastAssistantMessage: string | null;
   permissionRequest?: AgentPermissionRequest;
   pendingWork?: readonly PendingWork[];
+  /** AIROOM-PATCH(wakeup-each): the subscription re-arms after this notice instead of ending. */
+  continues?: boolean;
 }
 
 export function formatFinishNotificationBody(params: FinishNotificationBodyInput): string {
@@ -67,11 +69,15 @@ export function formatFinishNotificationBody(params: FinishNotificationBodyInput
   const statusLine = `Agent ${params.childAgentId} (${params.title}) ${params.reason}${work}.`;
   const sections = [statusLine];
   if (params.serverId) sections.push(`Server: ${params.serverId}`);
-  if (params.reason === "ended its turn but is still working")
+  // AIROOM-PATCH(wakeup-each): a limit notice whose subscription re-arms says the interim sentence.
+  if (
+    params.reason === "ended its turn but is still working" ||
+    (params.reason === "is still working" && params.continues)
+  )
     sections.push(
       "This is not its final reply. You will be notified when it finishes, errors, or needs permission.",
     );
-  if (params.reason === "is still working")
+  if (params.reason === "is still working" && !params.continues)
     sections.push(
       "This finish subscription has ended without a final reply. Check the agent with `get_agent_status`.",
     );

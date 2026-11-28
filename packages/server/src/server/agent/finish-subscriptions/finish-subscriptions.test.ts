@@ -805,18 +805,21 @@ describe("a child that ends its turn while it is still working", () => {
     await following(state);
     await until(() => state.delivery.prompts.length === 2);
     expect(state.delivery.prompts[1]).toContain("Agent child (Child) is still working");
-    expect(state.delivery.prompts[1]).toContain("This finish subscription has ended");
+    // AIROOM-PATCH(wakeup-each): an owned child's watch re-arms after the limit notice, and the
+    // notice says it will report. The re-armed record carries no `followingSince`, so the limit,
+    // long past by now, never fires on a watch that is only idle. The read the limit won over stays
+    // live as the re-armed watch's read.
+    expect(state.delivery.prompts[1]).toContain("You will be notified when it finishes");
+    expect(state.delivery.prompts[1]).not.toContain("This finish subscription has ended");
     expect(state.delivery.prompts[1]).not.toContain("finished.");
     state.delivery.acknowledgments[1]!.resolve("steered");
-    // AIROOM-PATCH(wakeup-each): an owned child's watch re-arms after the limit notice. The re-armed
-    // record carries no `followingSince`, so the limit, long past by now, never fires on a watch
-    // that is only idle.
     await expect
       .poll(async () => state.store.list())
       .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
-    await until(() => state.observation.waits.length === 3);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(state.delivery.prompts).toHaveLength(2);
+    expect(state.observation.waits).toHaveLength(2);
+    expect(state.observation.waits[1]!.signal.aborted).toBe(false);
     expect((await state.store.list())[0]).not.toHaveProperty("followingSince");
   });
 
@@ -826,6 +829,7 @@ describe("a child that ends its turn while it is still working", () => {
     await following(state, { callerAgentId: "peer", childAgentId: "child" });
     await until(() => state.delivery.prompts.length === 2);
     expect(state.delivery.prompts[1]).toContain("Agent child (Child) is still working");
+    expect(state.delivery.prompts[1]).toContain("This finish subscription has ended");
     state.delivery.acknowledgments[1]!.resolve("steered");
     await expect.poll(async () => (await state.store.list()).length).toBe(0);
   });

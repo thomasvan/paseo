@@ -143,11 +143,24 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
     any outcome of a child that is not, keeps upstream's remove-and-stop. The re-arm is one
     serialized, abort-checked `put` of the oldest captured record, without `followingSince` (so
     the limit never runs on a watch that is only idle) and with `awaitingTurn: true` unless a turn
-    was observed since the delivered terminal, then removal of the other captured ids, then a
+    was observed since the delivered terminal (a kept read, below, that took a terminal after a
+    turn counts), then removal of the other captured ids, then a
     fresh `createFollowing` over the re-armed record. The abort check stops a superseded or
     cancelled watch's late write from bringing back a record that `accept` or `cancel` removed.
-    A limit notice of a child whose last outcome this daemon never saw (a restart while
-    following, the limit already past) carries no labels, so it is one-shot.
+    Whether a notice re-arms is decided before it is sent, so a limit notice whose watch re-arms
+    carries the interim sentence upstream's `message` notice sends ("This is not its final
+    reply. You will be notified when it finishes, errors, or needs permission.") in place of
+    "This finish subscription has ended", and one whose watch ends keeps upstream's text
+    (`continues` in `internal/notification.ts`).
+  - **The limit** reads the child, not the follow's snapshot: upstream's follow holds the last
+    terminal it decided, which a watch recovered while following never saw, so at the limit
+    ownership and archive state come from the observation's latest state of the child
+    (`state()` in the buffer, fed by every snapshot the stream publishes and the initial wait;
+    it waits for the first one). And the observation read that the limit, or a recheck, wins
+    `following.next`'s race over stays the watch's next read (`reading` in `run`): a fresh read
+    beside it would leave the old one to take the child's next terminal unseen once the watch
+    re-arms, while the caller has not yet taken the limit notice. Upstream drops that read,
+    which is harmless where the limit ends the watch.
   - **Ownership** is read at each re-arm from the delivered terminal's labels (`owned`): the
     child's parent label names the caller on this server (`parented`, the reading upstream's
     `suppressed` does for a create subscription, and still the only one it does), or its creator
@@ -247,7 +260,10 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
   is missed; a crash inside the acknowledgement window repeats one notice; an archived caller's
   idle watch lingers until the child's next terminal or the next restart; a notice enqueued
   before a cancel is still delivered; a record an earlier build of this patch re-armed for a
-  child the caller does not own delivers its next turn's terminal once more, then is removed.
+  child the caller does not own delivers its next turn's terminal once more, then is removed;
+  an observation that fails before it reports any state of the child leaves the limit only the
+  follow's own snapshot, so a watch recovered while following that reaches the limit then is
+  one-shot.
   A child created before the creator mark carries none, and no record says who created it, so
   it is owned only through its parent label: one created detached, or detached since, is
   one-shot, and its creator hears one finish per send until the child is created again. A
@@ -276,7 +292,8 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
 - **Upstream at v0.18:** #10864 adds the follow above, `PendingWork`, the `message` notice and
   `followingSince`. The v0.18.1 sync merged it by taking upstream's `run`/`step` and
   `following.ts` and layering the gate, the re-arm, the queue, the store field, the cancel and
-  the `delegations` filter onto it (the plan's rules 1 to 9). The store schema carries both
+  the `delegations` filter onto it (the plan's rules 1 to 9), with the limit's reading of the
+  child, its kept read and its notice text (_The limit_, above). The store schema carries both
   fields, so a record this patch wrote at v0.17 loads as a waiting watch and the cutover sends no
   stale notice.
 - **History loads:** a timeline fetch that loads a stored, acknowledged child leaves its record
@@ -291,7 +308,10 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
   while a notice awaits acknowledgement and while a re-arm write is in flight, a remote child
   whose creator mark names the caller on this host or on the child's, a `was closed` of a
   followed child, a work change inside a turn after a re-arm, and a Lead whose only watch waits
-  on an idle Worker; `internal/observation-stream.airoom.test.ts` drives the gate signal and the
+  on an idle Worker, a finish while the follow-limit notice awaits acknowledgement, a watch
+  recovered while following a running child its caller owns and one it does not own, at the
+  limit, and the text of a limit notice whose watch re-arms and of one whose watch ends;
+  `internal/observation-stream.airoom.test.ts` drives the gate signal and the
   queue on the `Host` fake. `mcp-server.test.ts`, `send_agent_prompt with notifyOnFinish false`,
   drives the send tool; `finish notices for a child the caller created` drives `create_agent`,
   `send_agent_prompt` and `update_agent` on one daemon (the mark kept through a label edit, a
@@ -311,8 +331,10 @@ removal after dispatch acknowledgment retries only storage, preserving the accep
 with the reply of the turn that settles it` (re-armed, no `followingSince`, a third wait,
     nothing pinned) beside `a child the caller does not own is reported once and the watch ends
 when it settles`; `stops following at the follow limit and says the child is still working`
-    (re-armed without `followingSince`, and the limit, long past, sends nothing more) beside `a
-child the caller does not own stops being followed at the limit and the watch ends`.
+    (the notice says the child will be reported, re-armed without `followingSince`, the limit,
+    long past, sends nothing more, and the read the limit won over stays the watch's read) beside
+    `a child the caller does not own stops being followed at the limit and the watch ends`
+    (upstream's ended text).
   - `mcp-server.test.ts`, `tells the parent the child is still working, then reports its
 autonomous final reply`: a later autonomous turn of the parent's own child is reported once,
     beside `a child the caller does not own reports nothing for a turn after it settled`.
@@ -770,7 +792,7 @@ passes `childArchived` and still closes the finish subscriptions before message 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-80 wakeup-each                             3 replace-awaits-teardown
+97 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
 14 compact-reserves-turn                   2 interrupt-releases-foreground
  9 agent-send-interrupt                    2 force-cancel-releases-foreground
@@ -779,7 +801,7 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
                                            1 dead-run-settles
 ```
 
-143 sites under 13 names. `compact-reserves-turn`'s fourteen: seven in
+160 sites under 13 names. `compact-reserves-turn`'s fourteen: seven in
 `codex-app-server-agent.ts` (the wait's constant, its waiter list, the handler's `startsTurn`,
 the wait around `thread/compact/start`, the bounded waiter, and the flushes on a root turn's
 start and end), five in `agent-manager.ts` (the import, the reservation, the release call, and
@@ -790,9 +812,9 @@ omitted send to an archived agent), and the remote table in `connected-hosts/hos
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
-`wakeup-each`'s 80 sites: 53 in `agent/finish-subscriptions/` (32 in `index.ts`, 8 in the buffer,
-2 in the stream, 1 in the store, both fork test files' headers and 8 in the adapted upstream
-rows of `finish-subscriptions.test.ts`), one in `agent/creator-mark.ts`, four in
+`wakeup-each`'s 97 sites: 70 in `agent/finish-subscriptions/` (42 in `index.ts`, 12 in the buffer,
+3 in the stream, 1 in the store, 2 in `internal/notification.ts`, both fork test files' headers
+and 8 in the adapted upstream rows of `finish-subscriptions.test.ts`), one in `agent/creator-mark.ts`, four in
 `agent-manager.ts` (the import and its three label patches), two in `create-agent/create.ts` and
 two in `host-operations/index.ts` (each an import and the mark's write), two in
 `tools/paseo-tools.ts` (the local and the routed cancel), one in `bootstrap.ts`, eight in

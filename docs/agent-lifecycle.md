@@ -212,7 +212,8 @@ report their first turn end as `finished`.
 
 This fork (`wakeup-each` in `PATCHES.md`) keeps a settled subscription when the caller owns the child:
 the child's parent label or creator mark names the caller on this server. After `finished`, the
-limit notice, or a `was closed` of a child that is not archived, the subscription re-arms without
+limit notice (which then says the caller will still be notified), or a `was closed` of a child that
+is not archived, the subscription re-arms without
 `followingSince` and waits for the child's next turn, whoever starts it, so the caller hears every
 finish of its own child. A waiting subscription does not count as the caller's pending work. Every
 other subscription ends as above, and a send with `notifyOnFinish: false` ends the pair's
