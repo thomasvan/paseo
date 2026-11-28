@@ -13,39 +13,32 @@ upstream's current shape from its section below; do not restore an old diff.
 
 ## Current upstream sync
 
-`airoom/patches` carries upstream tag `v0.17.3` (commit
-`dd7c0499a8c311fae7b3244722a64d73cc178e4a`, tag object `4dd1b201a6da3b75d7908be308d64a7fbb49a1c8`),
-merged by its OID. The gate admitted it by the release-tag path after four literal paths joined
-the release-metadata list: `fastlane/metadata/android/en-US/changelogs/17003{1,2,3,4}.txt`. The
-paths of v0.17.1 and v0.17.2 reached `main` (`6ea095cb4`, `3e4f67d88`), so no line admits them.
-The previous sync's pinned target was `v0.15.0` (`8938fde3c713143f12eacbdd60c11fdfc0be0fb1`).
-v0.17.3 and v0.15.0 were cut from different release branches: `git merge-base HEAD <target>` was
-`82d5f6c580fccf500ed718aa8dad1be03639df7a`, older than v0.15.0, so Set A comes from the previous
-target. The merge conflicted in 32 files, 66 blocks:
+`airoom/patches` carries upstream tag `v0.18.1` (commit
+`57bdc689cc2db3b310e3588cf535137114a317d4`, tag object `d3f4161cb60f5eda671e9f7ab6063aed351d8948`),
+merged by its OID. The gate admitted it by the release-tag path after five literal paths joined
+the release-metadata list: `fastlane/metadata/android/en-US/changelogs/18001{1,2,3,4}.txt` and
+`packages/react-native-enriched-markdown/package.json`, the new workspace the 0.18.1 cut adds to
+the version pins. `git cherry` marks two commits of the tag `+`: `062fd4d5a` (both changelogs)
+and the cut `57bdc689c`, whose only new files are those five. The previous sync's pinned target
+was `v0.17.3` (`dd7c0499a8c311fae7b3244722a64d73cc178e4a`); `git merge-base HEAD <target>` was
+`ec22b8265924164c7deb749e2d3b6c9c425f6d74`. The merge conflicted in 22 files:
 
-| File                                                                                                                                                    | Resolution                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| both changelogs, `nix/npm-deps.hash`, `package-lock.json`, the root, `plugins/` and eleven workspace `package.json`                                     | upstream's blob; release bookkeeping of the two branches                                                                                         |
-| `scripts/ci-workflow.test.mjs`, `settings-host-page.spec.ts`, `toast-host.tsx`                                                                          | upstream's blob; no patch involved                                                                                                               |
-| `providers/codex-app-server-agent.ts`, seven blocks                                                                                                     | #7525's terminal cleanup as upstream wrote it, one copy of its helpers; the foreground cluster re-applied around #9931's pending-start handshake |
-| `providers/claude/agent.ts`                                                                                                                             | upstream's `observeNotificationTurn` (#10092), then the task observer, both before the stale-result return                                       |
-| `providers/pi/agent.ts`, three blocks                                                                                                                   | upstream's side (#8554, #10496); `history-purpose-provider-contract` retired, its capture observer kept as `pi-capture-rejection-observed`       |
-| `cli/.../send.ts`, `host-operations/index.ts`, `tools/paseo-tools.ts`, `mcp-server.test.ts`, `skills/paseo/SKILL.md`, the four `public-docs` send files | upstream's #10483 shape, then `agent-send-interrupt` re-applied in its own commit                                                                |
+| File                                                                                                                | Resolution                                                                                |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| both changelogs, `nix/npm-deps.hash`, `package-lock.json`, the root, `plugins/` and eleven workspace `package.json` | upstream's blob; release bookkeeping of the two cuts                                      |
+| `agent/finish-subscriptions/index.ts`, `internal/observation-buffer.ts`, `internal/json-store.ts`                   | `wakeup-each` adapted onto #10864's follow (its section, _Upstream at v0.18_)             |
+| `agent/agent-manager.ts`, one hunk                                                                                  | #10928's restore try/catch, with `wakeup-each`'s `withoutCreatorMark` on its record patch |
+| `agent/mcp-server.test.ts`                                                                                          | #10558's appended describe beside the fork's                                              |
 
-`.github/workflows/desktop-release.yml` merged cleanly and brought back v0.15.0's cherry-pick of
-#8445's signing backport, which #8450 removed upstream. It takes upstream's blob. After this sync
-`git diff <target> --` the 20 bookkeeping and CI files and `.github/` is empty. Retired by this sync: `interrupted-turn-terminals`, which upstream's #7525 replaces, and the
-release half of `history-purpose-provider-contract`, which #8554 replaces. Its unhandled-rejection
-observer stays as `pi-capture-rejection-observed`. The other eleven carry over.
-
-`mcp-protocol-version-clip` left with the v0.15.0 sync. No family needs it: on a stand-in of the agent
-MCP route, Claude 2.1.317, Codex 0.166.0 and pi 1.4.0 each initialised, listed tools and
-listed the tool with and without the clip (three runs per arm). Claude's first `server/discover`
-probe gets a 400 on the stock transport and Claude falls back on its own; Codex and pi ask for
-versions the bundled SDK supports. That sync's proof M repeats this on the merged daemon; if it
-fails, revert the commit that retired the clip. A later client that sends an unsupported
-`mcp-protocol-version` header after `initialize` shows as a seat whose Paseo tools fail to list,
-with `Unsupported protocol version` in the daemon log.
+After this sync `git diff <target> --` the 17 bookkeeping files is empty. Retired by this sync:
+`archived-out-of-band-declines`, whose _Retire when_ #10611 meets: `findOutOfBandRecipient`
+declines an archived recipient before any load. `AgentManager.offerOutOfBand` and its two
+wirings are gone; upstream's own local `offerOutOfBand` in `agent-messages/delivery.ts` is the
+only code that still carries the name. Its rows #10611 does not cover stay: the omitted local
+row and the remote table as `agent-send-interrupt`'s, and the slash-command row as a guard of
+upstream behaviour (_Where the tests live_). One behaviour returns to upstream's: an urgent slash
+command beside messages still in their quiet window, sent to a closed agent that is not
+archived, runs alone ahead of them. The other twelve carry over, `wakeup-each` adapted.
 
 `COMPAT(detachedCreate)` in `agent/create-agent/intent.ts` says "remove after 2027-01-17". A
 target past that date may delete the legacy path `detached-arg` adapts; read it first.
@@ -61,8 +54,8 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | [`pi-capture-rejection-observed`](#pi-capture-rejection-observed)           | a pi capture prompt that fails cannot crash the daemon worker                                 | not opened                                                                                                                                                 |
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
 | [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's unflagged send interrupts a running turn                                           | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
-| [`archived-out-of-band-declines`](#archived-out-of-band-declines)           | an urgent agent message to an archived agent unarchives it and starts its turn                | issue [#10598](https://github.com/getpaseo/paseo/issues/10598)                                                                                             |
 | [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
+| [`compact-reserves-turn`](#compact-reserves-turn)                           | agent messages queued behind an urgent Codex `/compact` wait for the compaction, not get lost | not opened                                                                                                                                                 |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
@@ -82,7 +75,7 @@ cases they change. Every patch test fails under at least one mutant of its patch
 together they kill every such mutant an earlier, larger set of tests killed. Each fork guard
 listed next fails instead under a mutant of the upstream behaviour it guards.
 
-Five fork tests or groups guard upstream behaviour this fork depends on and no upstream test
+Six fork tests or groups guard upstream behaviour this fork depends on and no upstream test
 guards. Each leaves when upstream adds an equivalent. (`agent-messages/delivery.airoom.test.ts`
 left with the v0.17.3 sync: #10404 deliberately orders what it asserted apart, a steer or
 interrupt carrying the messages queued before it, and upstream's `delivery.test.ts` and
@@ -115,7 +108,12 @@ replay, and close() afterward is a no-op`: an ACP history read releases its proc
   - `a watched child still reports 'finished' after send_agent_prompt`
   - `a watched child still reports 'errored' after send_agent_prompt`
 
-  A seventh test in the file, `list_providers returns providers`, also fails at `v0.14.0`
+- `mcp-server.test.ts`, `an agent's slash command to a closed agent runs out of band after the
+agent loads, and starts no turn`: an urgent command to a closed agent that is not archived
+  loads it and runs out of band. It stayed from the retired `archived-out-of-band-declines`;
+  #10611's rows send to archived agents only.
+
+  A seventh test in `mcp-parity.e2e.test.ts`, `list_providers returns providers`, also fails at `v0.14.0`
   unpatched: it times out at 30 s on the room's host. It is upstream's and left as it is.
 
 Two patch files are end-to-end suites. Upstream CI does not run `agent-mcp.e2e.test.ts` or
@@ -127,22 +125,53 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
 ## wakeup-each
 
 - **What:** a finish subscription in `agent/finish-subscriptions/` whose child the caller owns
-  re-arms in place after an acknowledged `finished` instead of being removed, behind a gate
-  whose state its stored record keeps as `awaitingTurn: true`. The caller owns a child it is
-  the parent of, or one it created itself, detached included. Every other subscription keeps
-  upstream's one-shot, and a send with `notifyOnFinish: false` removes the pair's subscription.
-  - **Ownership** is read at each re-arm, in `settle`, from the delivered terminal's labels
-    (`owned`): the child's parent label names the caller on this server (`parented`, the
-    reading upstream's `suppressed` does for a create subscription, and still the only one it
-    does), or its creator mark does. A send's `accept` supersedes the create path's record
-    with one that carries no `requireParentOwnership`, so a flag read at registration would
-    turn a Lead's own Worker one-shot after the first follow-up; the labels cover that record
-    and a local and a remote child alike. The re-arm is the only place a record is written
-    back after a delivery, and every watch, recovered ones included, reaches it through
-    `run`, so the check covers a registration path no search found. Two root seats that prompt
-    each other each hear one finish per send, where an unconditional re-arm woke them on each
-    other's every turn; a seat and the detached child it created hear, the creator every finish
-    of the child and the child one finish per send, and the notices end with the sends.
+  re-arms in place once it settles, instead of being removed, behind a gate whose state its
+  stored record keeps as `awaitingTurn: true`. The caller owns a child it is the parent of, or
+  one it created itself, detached included. Every other subscription ends as upstream's does, and
+  a send with `notifyOnFinish: false` removes the pair's subscription.
+  - **Upstream's follow stays as written** (#10864, `internal/following.ts`, untouched): the
+    first turn end with pending work sends one `message` notice ("ended its turn but is still
+    working"), writes `followingSince` before the send, and the subscription follows the child
+    silently until a turn end or a work change with nothing pending sends `finished`, or the
+    24-hour limit sends "is still working". The patch layers on what happens once that
+    subscription settles. Its follow writes go through the watch's own store wrapper in `run`
+    (`followStore`): serialized and abort-checked like every other write of the watch, so a
+    cancel or a supersession is never undone by a late follow write, and the follow write also
+    clears `awaitingTurn`, because a followed child has ended a turn.
+  - **Re-arm.** A delivered `finished`, a delivered limit notice, or a delivered `was closed`,
+    of a child that is not archived, re-arms when the child is `owned`; any other outcome, and
+    any outcome of a child that is not, keeps upstream's remove-and-stop. The re-arm is one
+    serialized, abort-checked `put` of the oldest captured record, without `followingSince` (so
+    the limit never runs on a watch that is only idle) and with `awaitingTurn: true` unless a turn
+    was observed since the delivered terminal (a kept read, below, that took a terminal after a
+    turn counts), then removal of the other captured ids, then a
+    fresh `createFollowing` over the re-armed record. The abort check stops a superseded or
+    cancelled watch's late write from bringing back a record that `accept` or `cancel` removed.
+    Whether a notice re-arms is decided before it is sent, so a limit notice whose watch re-arms
+    carries the interim sentence upstream's `message` notice sends ("This is not its final
+    reply. You will be notified when it finishes, errors, or needs permission.") in place of
+    "This finish subscription has ended", and one whose watch ends keeps upstream's text
+    (`continues` in `internal/notification.ts`).
+  - **The limit** reads the child, not the follow's snapshot: upstream's follow holds the last
+    terminal it decided, which a watch recovered while following never saw, so at the limit
+    ownership and archive state come from the observation's latest state of the child
+    (`state()` in the buffer, fed by every snapshot the stream publishes and the initial wait;
+    it waits for the first one). And the observation read that the limit, or a recheck, wins
+    `following.next`'s race over stays the watch's next read (`reading` in `run`): a fresh read
+    beside it would leave the old one to take the child's next terminal unseen once the watch
+    re-arms, while the caller has not yet taken the limit notice. Upstream drops that read,
+    which is harmless where the limit ends the watch.
+  - **Ownership** is read at each re-arm from the delivered terminal's labels (`owned`): the
+    child's parent label names the caller on this server (`parented`, the reading upstream's
+    `suppressed` does for a create subscription, and still the only one it does), or its creator
+    mark does. A send's `accept` supersedes the create path's record with one that carries no
+    `requireParentOwnership`, so a flag read at registration would turn a Lead's own Worker
+    one-shot after the first follow-up; the labels cover that record and a local and a remote
+    child alike. The re-arm is the only place a record is written back after a delivery, and
+    every watch, recovered ones included, reaches it through `run`, so the check covers a
+    registration path no search found. Two root seats that prompt each other each hear one
+    finish per send; a seat and the detached child it created hear, the creator every finish of
+    the child and the child one finish per send, and the notices end with the sends.
   - **The creator mark** (`agent/creator-mark.ts`) is two labels: `airoom.creator-agent-id`,
     and `airoom.creator-server-id` when the creator is on another host than the child (absent,
     it means the child's host, as the parent label's server does). It names the direct creator
@@ -162,166 +191,172 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
     through upstream's `suppressed`; the creator's next send registers one that the mark keeps.
   - **The cancel** (`cancel`, called by `send_agent_prompt` with `notifyOnFinish: false`, and
     by the routed send with that destination's `serverId`) runs inside `serialize` before the
-    prompt is enqueued. It stops every watch of the caller-child-server group, a registration
-    still pending dispatch included, whose later `accept` then finds nothing to revive, and
-    removes the group's stored records. A registration made after it is untouched. A notice a
-    watch already enqueued stays in the caller's queue; the aborted watch writes no re-arm or
-    gate write afterwards, because both check the abort inside `serialize`.
-    The cancel ends any watch the caller holds on that child, owned or not, a creation watch
-    included, so after a notify-off send the caller hears that child's finishes again only after
-    its next notify-on send. Because it runs before the enqueue, a notify-off send whose enqueue
-    then throws (delivery closing at shutdown, say) has already removed the earlier watch, where
-    a create or notify-on send whose dispatch fails keeps its predecessors through `reject()`;
-    cancelling at dispatch instead would let the old watch deliver the turn the notify-off send
-    itself starts.
+    prompt is enqueued. It stops every watch of the caller-child-server group, a following one
+    and a registration still pending dispatch included, whose later `accept` then finds nothing
+    to revive, and removes the group's stored records. A registration made after it is
+    untouched. A notice a watch already enqueued stays in the caller's queue; the aborted watch
+    writes no re-arm, follow or gate write afterwards, because each checks the abort inside
+    `serialize`. The cancel ends any watch the caller holds on that child, owned or not, a
+    creation watch included, so after a notify-off send the caller hears that child's finishes
+    again only after its next notify-on send. Because it runs before the enqueue, a notify-off
+    send whose enqueue then throws (delivery closing at shutdown, say) has already removed the
+    earlier watch, where a create or notify-on send whose dispatch fails keeps its predecessors
+    through `reject()`; cancelling at dispatch instead would let the old watch deliver the turn
+    the notify-off send itself starts.
   - **The gate** opens on a turn the child runs, whatever started it: a running snapshot, or
     a `turn_started` that carries a `turnId` (`internal/observation-stream.ts`, the top of
     `observeState`). A local observe opens with a synthetic `turn_started` with no `turnId` and
     the current snapshot, so it opens the gate only on a running child; a remote host
     re-fetches the snapshot per event, so the real event's `turnId` opens it after a fast turn.
     An `initializing` snapshot never opens it: a session load publishes one, a history read
-    included, and every turn after the load publishes `running` (`AgentManager` sets
-    `running` and emits state on a foreground or an autonomous turn start). Opening writes the
-    record without the field, once per waiting-to-open change; a write that fails stays owed
-    and is retried with the subscription's backoff, and a graceful close makes one last
-    attempt, so a restart still reads the turn.
-  - **Re-arm** is one serialized, abort-checked `put` of the oldest captured record, with
-    `awaitingTurn: true` unless a turn was observed since the delivered terminal, then removal
-    of the other captured ids. The abort check stops a superseded watch's late write from
-    bringing back a record that `accept` removed. After a re-arm, each queued terminal is
-    judged by its own stamp (below), never by a turn that is merely pending, because a repeat
-    of the acknowledged turn can still be queued ahead of a later turn's finish.
+    included, and every turn after the load publishes `running`. Opening writes the record
+    without the field, once per waiting-to-open change; a write that fails stays owed and is
+    retried with the subscription's backoff, and a graceful close makes one last attempt, so a
+    restart still reads the turn. After a re-arm each queued terminal is judged by its own stamp
+    (below), never by a turn that is merely pending, because a repeat of the settled turn can
+    still be queued ahead of a later turn's finish. A followed cycle is open whatever the stamps
+    say: upstream reads a work change there as the child settling.
   - **Recovery** starts the gate waiting only when every record in a caller-child-server group
     awaits, so a fresh registration is not hidden behind an older re-armed record.
-  - **Outcomes** (the room's D-Q2): an archived child sends `was closed` and disarms; while the
-    gate waits, any other terminal of a child that is not archived is silent and the watch stays
-    armed; once open, `finished` and a mid-turn `was closed` are delivered and re-arm when the
-    child is owned (one-shot otherwise), and
-    `errored`, `was canceled`, `is unavailable` and the host reasons keep upstream's
-    remove-and-stop. Archive state comes from storage through the `childArchived` dependency
-    (`bootstrap.ts`), because the live closed payload carries `archivedAt: null`; a remote child
-    is archived only when its payload says so.
+  - **Outcomes** (the room's D-Q2): an archived child sends `was closed` and disarms, with no
+    turn needed; while the gate waits, any other terminal of a child that is not archived is
+    silent and the watch stays armed. Archive state comes from storage through the
+    `childArchived` dependency (`bootstrap.ts`), because the live closed payload carries
+    `archivedAt: null`; a remote child is archived only when its payload says so.
   - **The buffer** (`internal/observation-buffer.ts`) queues terminals first in, first out, and
     stamps each with whether a turn came between it and the one before, so two finishes inside
-    one acknowledgement window both arrive and a repeated terminal is recognised.
-  - **`hasPendingForCaller`** skips a watch that awaits a turn and holds no outcome, so a
-    re-armed watch does not pin its caller, or through the family walk the caller's parent,
-    against idle-runtime cleanup.
+    one acknowledgement window both arrive and a repeated terminal is recognised. Upstream's
+    `workChanged` result (#10864's `background_work` branch in the stream) is no turn end: it
+    never takes a turn's stamp, so a turn's own finish behind it still reads as following that
+    turn; a real terminal replaces a queued work change; and a work change behind a queued real
+    terminal is dropped, as upstream's one slot drops it, because that terminal's decision reads
+    the pending work as it is then. The initial snapshot's terminal is pushed only while no real
+    terminal has streamed (`terminalSeen`), where upstream pushes it whenever its slot is empty:
+    a consumed streamed terminal then leaves the slot empty, and a re-armed watch would deliver
+    the baseline as a second finish, while a queued work change, which upstream lets block the
+    baseline, is no turn end.
+  - **Pending work** (rule 6 of the v0.18 adaptation): a watch that waits for a turn and holds
+    no outcome (`watch.awaiting`) is left out of `delegations`, so it counts neither in
+    `hasPendingForCaller` (a re-armed watch does not pin its caller, or through the family walk
+    the caller's parent, against idle-runtime cleanup) nor in `awaitsDelegates` (a Lead whose
+    only watches wait on idle Workers settles as `finished` to its own caller, not "still
+    working: agents it is waiting on"). A watch that starts waiting rechecks its caller's
+    followers (`recheckCallerOf`), as upstream does for a watch that ends without telling.
 - **Why:** a caller that drives one long-lived child across many prompts has to hear every
-  finish, exactly once, across restarts. A caller that only messages a seat it does not own
+  finish, exactly once, across restarts; upstream follows a child only within one delegation and
+  reports nothing once it has settled ("A child that has settled is not reported again,
+  including later human turns", #10864). A caller that only messages a seat it does not own
   asked about one reply, and re-arming that watch let two root seats wake each other on every
-  turn until one errored. A seat that created a child detached drives it as a parent does:
-  a Supervisor seats each Lead detached and needs every one of its finishes. No field of the agent record tells a child stopped
-  mid-turn from one stopped idle (a restart rewrites `running` to `closed`, a graceful stop
-  stores every agent `closed`, and an agent-sourced prompt never moves `lastUserMessageAt`), so
-  the watch writes that mark itself. An unconditional re-arm sends a false notice on every
-  reattach to an idle child and pins the caller for good.
+  turn until one errored. A seat that created a child detached drives it as a parent does: a
+  Supervisor seats each Lead detached and needs every one of its finishes. No field of the
+  agent record tells a child stopped mid-turn from one stopped idle (a restart rewrites
+  `running` to `closed`, a graceful stop stores every agent `closed`, and an agent-sourced
+  prompt never moves `lastUserMessageAt`), so the watch writes that mark itself. An
+  unconditional re-arm sends a false notice on every reattach to an idle child and pins the
+  caller for good.
 - **Accepted gaps:** a crash between a turn's start and the gate-open write leaves the watch
   silent and armed; a turn started by the stop-time message flush, which runs after the watches
   close, is cut off silently; a remote child that runs and finishes while this daemon is down
   is missed; a crash inside the acknowledgement window repeats one notice; an archived caller's
   idle watch lingers until the child's next terminal or the next restart; a notice enqueued
   before a cancel is still delivered; a record an earlier build of this patch re-armed for a
-  child the caller does not own delivers its next turn's terminal once more, then is removed.
+  child the caller does not own delivers its next turn's terminal once more, then is removed;
+  an observation that fails before it reports any state of the child leaves the limit only the
+  follow's own snapshot, so a watch recovered while following that reaches the limit then is
+  one-shot.
   A child created before the creator mark carries none, and no record says who created it, so
   it is owned only through its parent label: one created detached, or detached since, is
   one-shot, and its creator hears one finish per send until the child is created again. A
   child on a host whose build predates the mark carries the mark the routed create wrote, but
-  that host's label edits can move it, and a create made on that host writes none.
-  The shutdown order in
-  `bootstrap.ts` (watches close before message delivery) stays upstream's: delivery throws once
-  closed, and finish notices go through it.
-- **Re-applying:** read `index.ts`'s `run` and the buffer against the shape check under _Sync
-  procedure_. A record upstream wrote has no field and delivers its first terminal; a rollback
-  to upstream drops the field on load.
+  that host's label edits can move it, and a create made on that host writes none. The
+  shutdown order in `bootstrap.ts` (watches close before message delivery) stays upstream's:
+  delivery throws once closed, and finish notices go through it.
+- **Re-applying:** read `index.ts`'s `run` and `step`, the buffer and the store schema against
+  the shape check under _Sync procedure_. A record upstream wrote has no `awaitingTurn` and
+  delivers its first terminal; a rollback to upstream drops the field on load, and every record
+  this patch re-armed then delivers the child's stored state once.
+- **Retire when:** upstream re-arms a watch for a child its caller owns, or otherwise reports
+  every later finish of such a child to its caller. Until then each sync re-conflicts on
+  `index.ts`'s `run`, the buffer and the store schema.
 - **Upstream at v0.15:** `83ed52669` (#8127) resumes a child that was running at shutdown with
   "Resume working." instead of storing it `closed`, and #8619 makes that opt-in
-  (`agents.resumeOnStartup`, default off). The patch's code needed no change for either.
-  - **Recovery off (the default):** a stop still closes the finish subscriptions before the
-    message flush and then the providers; a start repairs `running` records to `closed` and
-    sends nothing. The mid-turn rule above is what tells a caller its child was cut off.
-  - **Recovery on:** a running, unarchived, unowned child is resumed with a continuation
-    prompt. The observer waits for that dispatch (`waitForResume` in
-    `internal/observation.ts`, a file the patch does not own, wired in `bootstrap.ts` beside
-    `childArchived`), so the caller hears no premature `was closed`. A running snapshot opens
-    the gate, and the resumed finish is delivered and re-arms, so the store keeps one record
-    with `awaitingTurn: true` where upstream's is empty.
+  (`agents.resumeOnStartup`, default off). With recovery off, a start repairs `running` records
+  to `closed` and sends nothing; the mid-turn rule above tells a caller its child was cut off.
+  With recovery on, the observer waits for the resume's dispatch (`waitForResume` in
+  `internal/observation.ts`, wired in `bootstrap.ts` beside `childArchived`), a running snapshot
+  opens the gate, and the resumed finish is delivered and re-arms, so the store keeps one record
+  with `awaitingTurn: true` where upstream's is empty.
 - **Upstream at v0.17:** #9757 makes the observer wait for a queued follow-up's dispatch before
   it reads a terminal, and lets a permission checkpoint through while that follow-up is still
-  pending (`run`'s `pending.status !== "permission" || watch.pending`). #10483 enqueues every
-  notice as `queue`, so a busy caller hears a finish when its own turn ends, or earlier as the
-  rider of a later steer, interrupt or person's prompt. Both stay as upstream wrote them, and
-  the patch's code needed no change for either.
+  pending. #10483 enqueues every notice as `queue`. Both stay as upstream wrote them.
+- **Upstream at v0.18:** #10864 adds the follow above, `PendingWork`, the `message` notice and
+  `followingSince`. The v0.18.1 sync merged it by taking upstream's `run`/`step` and
+  `following.ts` and layering the gate, the re-arm, the queue, the store field, the cancel and
+  the `delegations` filter onto it (the plan's rules 1 to 9), with the limit's reading of the
+  child, its kept read and its notice text (_The limit_, above). The store schema carries both
+  fields, so a record this patch wrote at v0.17 loads as a waiting watch and the cutover sends no
+  stale notice.
 - **History loads:** a timeline fetch that loads a stored, acknowledged child leaves its record
-  awaiting, so a crash restart afterwards sends nothing. When the gate also opened on
-  `initializing`, that load wrote the record open and the next crash restart delivered the
-  idle baseline as an empty `finished`.
+  awaiting, so a crash restart afterwards sends nothing.
 - **Tests:** `finish-subscriptions.airoom.test.ts` drives `createFinishSubscriptions` on the real
   JSON store through the real `openFinishObservation` over a child fake that publishes what
-  the local observer does, including the agent-prompted cut-off across a crash and a graceful
-  stop, a history load followed by a crash restart, a stored child loaded to run a prompt, a
-  repeated completion (streamed, or supplied first by the initial wait) queued behind the
-  acknowledged finish while a later turn is pending, and a rejected gate-open write followed by
-  a mid-turn close and recovery, two root seats watching each other (one notice each, however
-  many turns follow), a cancel while a notice awaits acknowledgement, and a cancel while a
-  re-arm write is in flight, and a remote child whose creator mark names the caller on this
-  host (re-arms) or the caller's id on the child's host (one-shot);
-  `internal/observation-stream.airoom.test.ts` drives the gate signal, an `initializing`
-  snapshot included, and the queue on the `Host` fake. `every finish notifies` is the owned
-  re-arm: its record carries no `requireParentOwnership`, as a send's does. `mcp-server.test.ts`,
-  `send_agent_prompt with notifyOnFinish false`, drives the send tool: after a send with notify
-  on, a registration still pending dispatch, and a routed send to another host;
-  `finish notices for a child the caller created` drives `create_agent`, `send_agent_prompt`
-  and `update_agent` on one daemon whose agents' turns end as they start: a seat and the
-  detached child it created prompting each other, a child's child (one-shot) beside the
-  caller's own child (re-arms) with a requested mark replaced, the mark kept through a label
-  edit, a reparent, a detach and another agent's send (a loaded and a stored child), the mark
-  kept through an import that restores the archived child, and the mark a routed create writes.
-- **Adapted upstream rows:** nine upstream tests expect the one-shot behaviour of a child their
-  caller owns, and each is adapted in place with a comment naming the patch. Seven change only
-  their store assertion, to one record with `awaitingTurn: true`, because the outcome they reach
-  now re-arms:
-  - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived
-    (D-Q2's mid-turn rule; the fake's child is stored `closed` with no archive stamp and labelled
-    with the caller as parent): `retains intent until parent dispatch acknowledgment, then
-restart sends nothing`, `restart coalesces predecessor and queued candidate into one settled
-notification` and `dispatch failure retains intent and retries the ordinary finish
-notification`.
-  - `connected-hosts/hosts.e2e.test.ts`, after a remote `finished` of a child the caller created
-    there: `durable remote finish intent survives origin restart and unavailable-host recovery`
-    and `remote finish observation survives a permission checkpoint until resumed completion`.
-    Their restart, availability, permission and wait assertions stay as upstream wrote them.
-  - `daemon-e2e/daemon-restart-resume.e2e.test.ts`, with recovery on, after a recovered finish:
-    `durable finish subscriptions recover a running child after restart (abrupt=false)` and
-    `(abrupt=true)`. The store holds one re-armed record with `awaitingTurn: true` after the
-    second start and still after the third, where upstream's is empty. The one-notice, no
-    premature `was closed`, launch-config and idle-child assertions stay.
+  the local observer does: every finish of an owned child, the agent-prompted cut-off across a
+  crash and a graceful stop, a history load followed by a crash restart, a stored child loaded
+  to run a prompt, a repeated completion queued behind the acknowledged finish while a later
+  turn is pending, two finishes inside one acknowledgement window (K9), a rejected gate-open
+  write followed by a mid-turn close and recovery, two root seats watching each other, a cancel
+  while a notice awaits acknowledgement and while a re-arm write is in flight, a remote child
+  whose creator mark names the caller on this host or on the child's, a `was closed` of a
+  followed child, a work change inside a turn after a re-arm, and a Lead whose only watch waits
+  on an idle Worker, a finish while the follow-limit notice awaits acknowledgement, a watch
+  recovered while following a running child its caller owns and one it does not own, at the
+  limit, and the text of a limit notice whose watch re-arms and of one whose watch ends;
+  `internal/observation-stream.airoom.test.ts` drives the gate signal and the
+  queue on the `Host` fake. `mcp-server.test.ts`, `send_agent_prompt with notifyOnFinish false`,
+  drives the send tool; `finish notices for a child the caller created` drives `create_agent`,
+  `send_agent_prompt` and `update_agent` on one daemon (the mark kept through a label edit, a
+  reparent, a detach, another agent's send and an import's unarchive, and the mark a routed
+  create writes).
+- **Adapted upstream rows:** each row that expects the one-shot behaviour of a child its caller
+  owns is adapted in place with a comment naming the patch, and each #10864 row adapted for the
+  re-arm has an unowned control beside it that keeps upstream's silence:
+  - `finish-subscriptions.test.ts`, after a `was closed` of a child that is not archived: `retains
+intent until parent dispatch acknowledgment, then restart sends nothing`, `restart coalesces
+predecessor and queued candidate into one settled notification`, `dispatch failure retains
+intent and retries the ordinary finish notification` (one record, awaiting a turn); `failed
+removal after dispatch acknowledgment retries only storage, preserving the accepted outcome`
+    (a predecessor and a queued candidate recovered as one group, so the re-arm's removal is the
+    one that fails).
+  - `finish-subscriptions.test.ts`, #10864's describe: `reports one interim notice, then finished
+with the reply of the turn that settles it` (re-armed, no `followingSince`, a third wait,
+    nothing pinned) beside `a child the caller does not own is reported once and the watch ends
+when it settles`; `stops following at the follow limit and says the child is still working`
+    (the notice says the child will be reported, re-armed without `followingSince`, the limit,
+    long past, sends nothing more, and the read the limit won over stays the watch's read) beside
+    `a child the caller does not own stops being followed at the limit and the watch ends`
+    (upstream's ended text).
+  - `mcp-server.test.ts`, `tells the parent the child is still working, then reports its
+autonomous final reply`: a later autonomous turn of the parent's own child is reported once,
+    beside `a child the caller does not own reports nothing for a turn after it settled`.
+  - `connected-hosts/hosts.e2e.test.ts`: `durable remote finish intent survives origin restart and
+unavailable-host recovery` and `remote finish observation survives a permission checkpoint
+until resumed completion` (one re-armed record after a remote `finished` of a child the caller
+    created there).
+  - `daemon-e2e/daemon-restart-resume.e2e.test.ts`: `durable finish subscriptions recover a
+running child after restart (abrupt=false)` and `(abrupt=true)` (one re-armed record after the
+    second and third start).
+  - The browser spec `subagent-origin-pane.spec.ts`, `MCP delegates to self and B and opens both
+qualified children in ordinary conversations`, prompts each child twice, so the parent hears
+    two finishes per child, and the fleet helper's `expectCompletion`
+    (`e2e/support/helpers/subagents.ts`) takes the exact count.
+  - Three rows of `mcp-server.test.ts`' `create_agent MCP tool` expect the creator mark naming
+    the caller among the labels a caller's create passes to `createAgent`.
 
-  The eighth, the browser spec `subagent-origin-pane.spec.ts`, `MCP delegates to self and B
-and opens both qualified children in ordinary conversations`, prompts each child twice (its
-  MCP initial prompt, then a prompt from the UI), so the parent now hears two finishes per
-  child: its two `Agent finished` button checks expect two each, and the fleet helper's
-  `expectCompletion` (`e2e/support/helpers/subagents.ts`, called only by this test) takes the
-  exact count instead of a fixed one. With `rearms` limited to `was closed` (a `finished`
-  disarms), the spec fails at `expectCompletion(fleet.local, 2)`: expected 2, received 1.
-
-  The ninth, `failed removal after dispatch acknowledgment retries only storage, preserving
-the accepted outcome`, follows a `finished` too, and a re-arm of one record removes nothing,
-  so it now recovers a predecessor and a queued candidate as one group: the re-arm keeps the
-  older record and removes the other, and that removal is the one that fails.
-
-  Three rows of `mcp-server.test.ts`' `create_agent MCP tool` assert the exact labels a caller's
-  create passes to `createAgent`, and each now expects the creator mark naming the caller too:
-  `allows caller agents to override cwd and applies caller context labels`, `creates detached
-  caller agents without a parent label` and `accepts provider features from caller agents and
-  passes them through createAgent`.
-
-  Rows whose watch the caller does not own are upstream's bytes again: `finish-subscriptions.test.ts`'
-  `remote finish intent protects its caller through registration, observation and delivery`
-  (its child's label names a parent on the remote host), both rows of `mcp-server.test.ts`'
-  `reports %s permission requests and final completion`, and both rows of `hosts.e2e.test.ts`'
-  `remote prompt to a closed agent (archived=%s) reports its new turn instead of stale
-closure` (each a send to a child with no parent).
+  Rows whose watch the caller does not own are upstream's bytes: `finish-subscriptions.test.ts`'
+  `remote finish intent protects its caller through registration, observation and delivery`,
+  both rows of `mcp-server.test.ts`' `reports %s permission requests and final completion`, and
+  both rows of `hosts.e2e.test.ts`' `remote prompt to a closed agent (archived=%s) reports its
+new turn instead of stale closure`.
 
 ## detached-arg
 
@@ -452,8 +487,9 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   `agent-manager.test.ts`'s escaped envelope is a deliberate legacy input and stays.
 - **Tests:** `agent-message-raw-body.airoom.test.ts` drives `formatAgentMessage`,
   `parseAgentMessage` and `prepareAgentMessage` through the `agent-messages/index.ts` barrel,
-  the same rows as the upstream PR's `agent-prompt.test.ts`, and a row that keeps a
-  change-request update fully escaped and round-trips it.
+  the same rows as the upstream PR's `agent-prompt.test.ts`, a raw-body row for #10864's
+  `event="message"` notice, and a row that keeps a change-request update fully escaped and
+  round-trips it.
 
 ## agent-send-interrupt
 
@@ -471,8 +507,9 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
     (`host-operations/index.ts`), which fills `interrupt` for an identified caller. That call
     is routed before the local handler, so the local default never reaches it.
 
-  An archived recipient gets the same `interrupt`: `archived-out-of-band-declines` makes the
-  receiving daemon unarchive it and start its turn.
+  An archived recipient gets the same `interrupt`: the receiving daemon's out-of-band offer
+  declines an archived recipient (#10611, from v0.17.4), and dispatch unarchives it and starts
+  its turn.
 
 - **Why:** a correction that waits for the turn to end can arrive after the work it corrects,
   and a steered one can be ignored by a turn that goes on to finish its original task.
@@ -493,11 +530,11 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   sends no field, and an older one sends `steer`, which the daemon reads as `queue`. An
   unflagged send to a compacting Claude seat interrupts, and Claude's interrupt cancels the
   compaction; upstream's `steer` would have waited for it.
-- **Rollout requirement:** a connected destination daemon must carry
-  `archived-out-of-band-declines`. The `serverId` route sends an agent's omitted behaviour as an
-  explicit `interrupt`, and a destination without that patch (stock v0.17.3, issue
-  [#10598](https://github.com/getpaseo/paseo/issues/10598)) acknowledges an urgent send to an
-  archived agent and never starts its turn.
+- **Rollout requirement:** a connected destination daemon must be at v0.17.4 or later, the
+  first tag carrying #10611 (`git tag --contains 309a44c48`). The `serverId` route sends an
+  agent's omitted behaviour as an explicit `interrupt`, and an older destination (stock
+  v0.17.3, issue [#10598](https://github.com/getpaseo/paseo/issues/10598)) acknowledges an
+  urgent send to an archived agent and never starts its turn.
 - **Tests:** the agent-scoped rows of upstream's `send_agent_prompt` behaviour matrix in
   `mcp-server.test.ts` (the two omitted rows expect an applied interrupt and a new turn, with
   an explicit `queue` row for waiting); the same file's idle-guidance row and queued-dispatch
@@ -505,59 +542,14 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   `host-operations/index.airoom.test.ts` (omitted, each explicit value, the source identities,
   and a person's omitted send unset); and the CLI's `send.airoom.test.ts` through
   `createCli().parseAsync` (omitted agent send, each explicit value, a person's omitted send
-  unset). An omitted send to an archived agent is the omitted row of
-  `archived-out-of-band-declines`' tables.
+  unset). An omitted send to an archived agent is the omitted row of `mcp-server.test.ts`'
+  `an agent-scoped $behavior send to an archived agent unarchives it and starts its turn`, and
+  the remote route's three rows are `hosts.e2e.test.ts`' `remote %s agent send to an archived
+agent starts its turn`, both kept from the retired `archived-out-of-band-declines`.
   `daemon-e2e/agent-message-behaviors.test.ts` stays upstream's and checks the scope: a raw
   RPC omission still queues. `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md`, `public-docs/mcp.md`, their `zh-CN` copies,
   `docs/agent-lifecycle.md` and `docs/glossary.md` state the default.
-
-## archived-out-of-band-declines
-
-- **What:** the agent-message queue offers a message out of band through
-  `AgentManager.offerOutOfBand` (`agent-manager.ts`), wired in `websocket-server.ts` and the
-  tests' `test-utils/agent-messages.ts`. It returns `false`, before any load or read, unless the
-  agent is a live interactive session, and the message goes on to normal dispatch. A live
-  interactive agent gets upstream's `tryRunOutOfBand`, which the patch leaves as upstream's.
-- **Why:** an urgent agent message (`interrupt` or `steer`) is offered out of band before it
-  is dispatched (`agent-messages/delivery.ts` `advance` → `offerOutOfBand`). Upstream's offer
-  loads the recipient; an archived one loads as a history session, and
-  `ensureInteractiveSessionUnlocked` throws `Agent is archived`. That fails the message before
-  `deliver` reaches `sendPreparedPromptToAgent`, the only place that unarchives the recipient.
-  The sender already holds a queued receipt, and no turn starts. After the decline, dispatch
-  unarchives the agent and starts its turn, as it does upstream for a `queue` message to an idle
-  archived agent. `agent-send-interrupt` sends every omitted agent send as `interrupt`, so
-  without this patch no unflagged agent send could wake an archived agent.
-- **What it leaves alone:** `delivery.ts` and `tryRunOutOfBand` are upstream's. So is
-  `startAgentRun`'s own out-of-band check, which every prompt entrypoint reaches after its load:
-  a command a declined message carries still runs out of band there, on the agent dispatch just
-  loaded. A person's send (the app, the CLI without `PASEO_AGENT_ID`, a top-level MCP call) goes
-  through `sendPromptToAgent` and never reaches the queue's offer.
-- **What changes for a closed agent that is not archived:** a slash command sent alone ends as
-  upstream: run out of band after dispatch loads the agent, no turn. A slash command that
-  releases messages still waiting in their quiet window differs. Upstream's offer loads the
-  agent and runs the command alone, ahead of them; here the declined command goes with them in
-  one prompt, so the provider gets it as text and starts a turn.
-- **Known limit, upstream's:** an archive or close that lands while dispatch loads the agent
-  still fails the message, for every behaviour. Pi shows it: an archive closes the resumed
-  session while its history replay waits for entry capture, and the load throws `Pi session
-closed` (`agent-prompt.ts` `sendPreparedPromptToAgent` → `ensureAgentLoaded`). Stock v0.17.3
-  fails a `queue` send, which no offer touches, the same way.
-- **Retire when:** upstream's out-of-band offer stops failing a message for an archived
-  recipient: `tryRunOutOfBand` declines or unarchives it, or `delivery.ts`'s `offerOutOfBand`
-  hands such a message to `deliver`. Delete `AgentManager.offerOutOfBand`, point both wirings back at
-  `tryRunOutOfBand`, drop the suite mock's line, and keep the tables if upstream's own tests do
-  not cover an archived recipient.
-- **Tests:** `mcp-server.test.ts`, `an agent-scoped $behavior send to an archived agent unarchives
-it and starts its turn` (omitted, `interrupt`, `steer`), on the agent-scoped MCP route, which
-  also asserts that only an interactive resume ran; the same file's `an agent's slash command to
-a closed agent runs out of band after the agent loads, and starts no turn`, whose outcome
-  matches stock v0.17.3's; and `connected-hosts/hosts.e2e.test.ts`, `remote %s agent send to an
-archived agent starts its turn` (the same three), on the `serverId` route. Each waits at most
-  10 s, then asserts on the outcome, so a lost message fails by assertion, not by the test
-  timeout. Upstream's `remote prompt to a closed agent (archived=true)…` row also needs the patch,
-  and fails only by its timeout without it. The suite's mocked manager in `mcp-server.test.ts`
-  carries `offerOutOfBand`.
 
 ## interrupted-turn-tasks
 
@@ -587,6 +579,52 @@ archived agent starts its turn` (the same three), on the `serverId` route. Each 
   background subagents, or upstream stops passing `perTaskStopAffordance`.
 - **Tests:** `providers/claude/agent.interrupted-turn-tasks.airoom.test.ts` drives a real
   `ClaudeAgentSession` against a scripted SDK query.
+
+## compact-reserves-turn
+
+- **What:** an out-of-band command whose handler says `startsTurn` counts as a run from the
+  moment the manager accepts it (`tryRunOutOfBand` in `agent-manager.ts`), and Codex's `/compact`
+  says it (`providers/codex-app-server-agent.ts`). The manager tracks an autonomous run with no
+  turn id and marks the agent `running` before the caller hears of the acceptance. Codex's
+  handler resolves only once Codex announced a root turn (`turn/started`, or `turn/completed`
+  for one never announced), or the compaction failed to start, or after
+  `COMPACT_TURN_ANNOUNCEMENT_WAIT_MS` (10 s). The optional `startsTurn` sits on the handler type
+  in `agent-sdk-types.ts`; `wrapSessionProvider` forwards the handler object as it is.
+- **Why:** a caller sends a Codex agent messages as `queue`, then `/compact` as `interrupt`.
+  Delivery runs the command out of band and then offers the waiting batch idle-only. Codex runs
+  a compaction as a turn and refuses a `turn/start` during it (`activeTurnNotSteerable`, turn
+  kind `compact`), but announces that turn only after answering `thread/compact/start`, so
+  upstream's manager reads the agent idle in between and starts the batch into the refusal.
+  `deliver` hands a batch back only for a busy error, and this one reaches `fail`: every message
+  is lost. It hits a closed agent, which the command loads, and an idle open one alike.
+- **Why not reclassify the refusal:** a provider error thrown from `startTurn` does not reach
+  `deliver` as itself. `ForegroundPromptStart` rejects the dispatch's `started` with a new
+  `Error` carrying only the message (`agent-run-state.ts`), so a provider-thrown
+  `AgentTurnBusyError` reads as a failure. The manager also records the prompt rejected and a
+  failed turn on the way. The reservation keeps the batch from being started at all.
+- **The wake-up:** none of the patch's own on the success path. The announced turn takes over
+  the reserved run (`trackAutonomousRun` returns it), and the turn's end settles it and emits
+  the agent's idle state, as for any turn an agent starts on its own. Delivery's `subscribe`
+  hears that state, and its 2 s retry polls while the batch waits. When no turn was announced,
+  the handler's end releases the reservation after draining the session's events and emits
+  the idle state itself.
+- **Known limits:** a Codex that announces nothing within 10 s is read idle again, and a batch
+  started before the late announcement is refused and lost, as upstream. Codex's handler holds
+  the agent's foreground lane while it waits, so a Stop sent during the wait runs after it, at
+  most 10 s later. No reservation is taken when the agent already has a run: the batch waits
+  for that run. Only Codex's `/compact` sets `startsTurn`; pi's and omp's out-of-band commands
+  are unchanged.
+- **Tests:** `providers/codex-app-server-agent.test.ts`, `agent messages queued behind an
+out-of-band Codex compaction`: the real Codex session against the fake app-server, through
+  `AgentManager` and the test delivery wiring (`test-utils/agent-messages.ts`). The fake
+  refuses `turn/start` while compacting and announces the compaction's turn 50 ms after
+  answering. Two rows, a closed and an idle open agent, send two `queue` messages and an
+  `interrupt` `/compact`, and assert both kept while it runs, then one `turn/start` carrying
+  both in order after it ends. A third row has Codex refuse the compaction and asserts the
+  batch delivered once.
+- **Retire when:** upstream keeps a waiting batch that a running compaction refuses: it counts
+  the compaction as a run from the command's acceptance, or retries a `turn/start` the
+  compaction refused once the compaction ends.
 
 ## Sync procedure
 
@@ -646,6 +684,13 @@ upstream_gate() {
         fastlane/metadata/android/en-US/changelogs/170032.txt) ;;
         fastlane/metadata/android/en-US/changelogs/170033.txt) ;;
         fastlane/metadata/android/en-US/changelogs/170034.txt) ;;
+        # Added for v0.18.1: the four Android changelogs of the 0.18.1 cut, and the new workspace
+        # the cut adds to the version pins.
+        fastlane/metadata/android/en-US/changelogs/180011.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/180012.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/180013.txt) ;;
+        fastlane/metadata/android/en-US/changelogs/180014.txt) ;;
+        packages/react-native-enriched-markdown/package.json) ;;
         packages/app/package.json | packages/cli/package.json | packages/client/package.json) ;;
         packages/desktop/package.json | packages/expo-two-way-audio/package.json) ;;
         packages/highlight/package.json | packages/plugin/package.json) ;;
@@ -665,10 +710,10 @@ upstream_gate "$(git rev-parse upstream/main)" "$UPSTREAM_OID" "${UPSTREAM_TAG:-
 BASE=$(git merge-base HEAD "$UPSTREAM_OID")
 
 # PREVIOUS_TARGET is the pinned target of the previous sync, named under "Current upstream
-# sync" (v0.17.3 for the next one). Set A diffs from it, not from BASE: a tag cut from another
+# sync" (v0.18.1 for the next one). Set A diffs from it, not from BASE: a tag cut from another
 # release branch than the last target makes BASE older than that target, and the diff then
 # carries the previous release branch's own commits, files no patch owns.
-PREVIOUS_TARGET=dd7c0499a8c311fae7b3244722a64d73cc178e4a
+PREVIOUS_TARGET=57bdc689cc2db3b310e3588cf535137114a317d4
 
 # Set A: the files the fork changed, which is exactly what the patches own.
 git diff --name-only "$PREVIOUS_TARGET" HEAD -- packages/ | sort > /tmp/set-a.txt
@@ -687,8 +732,8 @@ release commits, so a tag is often not an ancestor of `main`. A tag is admitted 
 peels to `UPSTREAM_OID`, `base..UPSTREAM_OID` holds no merge commit, and every commit
 `git cherry` marks `+` (no patch-equivalent on `main`) touches only two path classes: the
 release metadata, as literal paths (both changelogs, the Android changelogs of v0.14.0,
-v0.15.0 and v0.17.3, `nix/npm-deps.hash`, the root `package.json` and `package-lock.json`,
-`plugins/package.json` and each workspace `package.json`), and anything under `.github/workflows/`, none of which ships in the daemon
+v0.15.0, v0.17.3 and v0.18.1, `nix/npm-deps.hash`, the root `package.json` and
+`package-lock.json`, `plugins/package.json` and each workspace `package.json`), and anything under `.github/workflows/`, none of which ships in the daemon
 build. Otherwise it refuses, naming the commit and path it stopped on. A later `main` that
 rewrites a cherry-pick's patch turns that commit `+`, and it is refused unless its paths are
 on the list.
@@ -723,7 +768,7 @@ git grep -oh "AIROOM-PATCH([a-z-]*)" "$T" -- packages/ | sort | uniq -c | sort -
 F=packages/server/src/server/agent/finish-subscriptions
 for f in index.ts internal/observation-stream.ts internal/observation-buffer.ts internal/json-store.ts; do
   echo "== $f"
-  git cat-file -p "$T:$F/$f" | grep -nE 'AIROOM-PATCH\(wakeup-each\)|awaitingTurn|turnObserved|turnPending|turn_started|terminals\.|childArchived|watch\.awaiting|serialize\(|signal\.aborted\) return|owned\(|cancel'
+  git cat-file -p "$T:$F/$f" | grep -nE 'AIROOM-PATCH\(wakeup-each\)|awaitingTurn|followingSince|followStore|turnObserved|turnPending|turn_started|terminals\.|workChanged|childArchived|watch\.awaiting|serialize\(|signal\.aborted\) return|owned\(|rearms\(|cancel'
 done
 git cat-file -p "$T:packages/server/src/server/bootstrap.ts" | grep -nE 'childArchived|finishSubscriptions\.close|agentMessages\.close'
 ```
@@ -731,44 +776,52 @@ git cat-file -p "$T:packages/server/src/server/bootstrap.ts" | grep -nE 'childAr
 Read the control flow around the lines that prints: the gate hook sits in `observeState`
 before the `turn_started` early return and fires on a running snapshot or a `turn_started` with
 a `turnId`, never on an `initializing` snapshot or the synthetic open alone; the buffer keeps a
-queue, not one slot; the store schema carries `awaitingTurn`; `run` starts the gate waiting only when every
-captured record awaits, drops a gated terminal of a child that is not archived, re-arms on
-`finished` and a not-archived `was closed` of an `owned` child (parent label or creator mark)
-through `serialize` with an abort check first, and removes on every other outcome;
+queue, not one slot, and a `workChanged` entry never takes a turn's stamp; the store schema
+carries `awaitingTurn` beside upstream's `followingSince`; `run` starts the gate waiting only
+when every captured record awaits, drops a gated terminal of a child that is not archived
+unless the cycle follows, passes `following` a serialized, abort-checked store, re-arms on a
+delivered `finished`, limit notice or not-archived `was closed` of an `owned` child (parent
+label or creator mark) through `serialize` with an abort check first, clearing
+`followingSince` and starting a fresh follow, and removes on every other outcome;
+`delegations` skips `watch.awaiting`;
 `create.ts` and the routed create write the creator mark and `agent-manager.ts`'s three label
 patches pass through `withoutCreatorMark`; `cancel` runs inside `serialize` and
-`send_agent_prompt` calls it, local and routed, for `notifyOnFinish: false`; `hasPendingForCaller` skips `watch.awaiting`; `bootstrap.ts`
+`send_agent_prompt` calls it, local and routed, for `notifyOnFinish: false`; `bootstrap.ts`
 passes `childArchived` and still closes the finish subscriptions before message delivery.
 
 The marker manifest on this branch, which the gate must reproduce unless a patch changed:
 
 ```
-67 wakeup-each                             7 archived-out-of-band-declines
+97 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
- 7 agent-send-interrupt                    2 interrupt-releases-foreground
- 6 native-tools-injection-independent      2 force-cancel-releases-foreground
- 5 agent-message-raw-body                  2 detached-arg
- 3 replace-awaits-teardown                 1 dispose-releases-foreground
+14 compact-reserves-turn                   2 interrupt-releases-foreground
+ 9 agent-send-interrupt                    2 force-cancel-releases-foreground
+ 6 native-tools-injection-independent      2 detached-arg
+ 5 agent-message-raw-body                  1 dispose-releases-foreground
                                            1 dead-run-settles
 ```
 
-121 sites under 13 names. `agent-send-interrupt`'s seven: the CLI sender, the remote sender, the
-agent schema and the agent enqueue in `paseo-tools.ts`, and three in `mcp-server.test.ts` (the
-behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture).
-`archived-out-of-band-declines`' seven: `offerOutOfBand` in `agent-manager.ts`, its wiring in
-`websocket-server.ts` and `test-utils/agent-messages.ts`, its table, its slash-command row and the
-suite mock's line in `mcp-server.test.ts`, and its table in `connected-hosts/hosts.e2e.test.ts`.
+160 sites under 13 names. `compact-reserves-turn`'s fourteen: seven in
+`codex-app-server-agent.ts` (the wait's constant, its waiter list, the handler's `startsTurn`,
+the wait around `thread/compact/start`, the bounded waiter, and the flushes on a root turn's
+start and end), five in `agent-manager.ts` (the import, the reservation, the release call, and
+the two methods), the handler type in `agent-sdk-types.ts`, and the test group's header. `agent-send-interrupt`'s nine: the CLI sender, the remote sender, the
+agent schema and the agent enqueue in `paseo-tools.ts`, four in `mcp-server.test.ts` (the
+behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture, and the
+omitted send to an archived agent), and the remote table in `connected-hosts/hosts.e2e.test.ts`.
 `pi-capture-rejection-observed`'s two: the `catch` in `pi/agent.ts` and its row in
 `pi/agent.test.ts`.
 
-`wakeup-each`'s 67 sites: 43 in `agent/finish-subscriptions/` (its four source files, both
-fork test files and the four adapted upstream rows there), one in `agent/creator-mark.ts`, four
-in `agent-manager.ts` (the import and its three label patches), two in `create-agent/create.ts`
-and two in `host-operations/index.ts` (each an import and the mark's write), two in
-`tools/paseo-tools.ts` (the local and the routed cancel), one in `bootstrap.ts`, five in
-`mcp-server.test.ts` (its `notifyOnFinish false` group, its creator group and the three adapted
-`create_agent MCP tool` rows), two in `connected-hosts/hosts.e2e.test.ts` (its adapted rows), two
-in `daemon-e2e/daemon-restart-resume.e2e.test.ts` (the second- and third-start assertions of its
+`wakeup-each`'s 97 sites: 70 in `agent/finish-subscriptions/` (42 in `index.ts`, 12 in the buffer,
+3 in the stream, 1 in the store, 2 in `internal/notification.ts`, both fork test files' headers
+and 8 in the adapted upstream rows of `finish-subscriptions.test.ts`), one in `agent/creator-mark.ts`, four in
+`agent-manager.ts` (the import and its three label patches), two in `create-agent/create.ts` and
+two in `host-operations/index.ts` (each an import and the mark's write), two in
+`tools/paseo-tools.ts` (the local and the routed cancel), one in `bootstrap.ts`, eight in
+`mcp-server.test.ts` (its `notifyOnFinish false` group, its creator group, the three adapted
+`create_agent MCP tool` rows, and the adapted #10864 row with its unowned control and fixture
+line), two in `connected-hosts/hosts.e2e.test.ts` (its adapted rows), two in
+`daemon-e2e/daemon-restart-resume.e2e.test.ts` (the second- and third-start assertions of its
 adapted rows) and three in the app's browser e2e (two in `subagent-origin-pane.spec.ts`, one in
 `e2e/support/helpers/subagents.ts`).
 

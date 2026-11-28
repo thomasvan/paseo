@@ -18,30 +18,39 @@ function isTerminal(snapshot: AgentSnapshotPayload, event?: AgentStreamEvent): b
     (event?.type === "turn_completed" || event?.type === "turn_canceled")
   );
 }
+// AIROOM-PATCH(wakeup-each): a turn the child runs opens the gate, whatever started it: a running
+// snapshot, or a `turn_started` that carries a `turnId`. A local observe opens with a synthetic
+// `turn_started` that carries no `turnId` and the current snapshot, so it opens the gate only
+// when the child is really running. A remote host re-fetches the snapshot, which can read idle
+// after a fast turn, so the real event's `turnId` opens it on its own. An `initializing`
+// snapshot is a session being loaded, as for a history read, and is no turn: a turn that
+// follows the load publishes a running snapshot of its own.
+function opensTurn(snapshot: AgentSnapshotPayload, event?: AgentStreamEvent): boolean {
+  return snapshot.status === "running" || (event?.type === "turn_started" && !!event.turnId);
+}
 function observeState(
   buffer: ReturnType<typeof createObservationBuffer>,
   snapshot: AgentSnapshotPayload | null,
   event?: AgentStreamEvent,
   lastMessage: string | null = null,
 ): void {
+  buffer.see(snapshot); // AIROOM-PATCH(wakeup-each)
   if (!snapshot) {
     buffer.push({ status: "idle", final: null, lastMessage: null, error: null });
     return;
   }
-  // AIROOM-PATCH(wakeup-each): a turn the child runs opens the gate, whatever started it: a running
-  // snapshot, or a `turn_started` that carries a `turnId`. A local observe opens with a synthetic
-  // `turn_started` that carries no `turnId` and the current snapshot, so it opens the gate only
-  // when the child is really running. A remote host re-fetches the snapshot, which can read idle
-  // after a fast turn, so the real event's `turnId` opens it on its own. An `initializing`
-  // snapshot is a session being loaded, as for a history read, and is no turn: a turn that
-  // follows the load publishes a running snapshot of its own.
-  if (snapshot.status === "running" || (event?.type === "turn_started" && event.turnId))
-    buffer.turn();
+  if (opensTurn(snapshot, event)) buffer.turn();
   if (event?.type === "permission_resolved") {
     buffer.resolved(event.requestId);
     return;
   }
   if (event?.type === "turn_started") return;
+  if (event?.type === "background_work") {
+    // An idle child's work can settle without another turn.
+    if (snapshot.status === "idle")
+      buffer.push({ status: "idle", final: snapshot, lastMessage, error: null, workChanged: true });
+    return;
+  }
   if (event?.type === "permission_requested") {
     buffer.push({
       status: "permission",
@@ -124,6 +133,7 @@ export async function openFinishObservation(
     // AIROOM-PATCH(wakeup-each)
     turnPending: () => buffer.turnPending(),
     onTurn: (listener) => buffer.onTurn(listener),
+    state: () => buffer.state(),
     async close() {
       controller.abort();
       buffer.dispose();

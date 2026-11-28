@@ -102,6 +102,7 @@ import { createTestLogger } from "../../../test-utils/test-logger.js";
 import { asInternals as castInternals, createStub } from "../../test-utils/class-mocks.js";
 import { AgentManager } from "../agent-manager.js";
 import { AgentStorage } from "../agent-storage.js";
+import { createTestAgentMessages } from "../../test-utils/agent-messages.js";
 import { buildProviderRegistry } from "../provider-registry.js";
 
 interface CollaborationModeRecord {
@@ -1606,6 +1607,31 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test.each(["thread/start", "thread/resume"] as const)(
+    "%s appends plugin instructions to the developer instructions configured in Codex",
+    async (method) => {
+      const appServer = createFakeCodexAppServer({
+        "config/read": () => ({ config: { developer_instructions: "Configured role" } }),
+      });
+      const provider = createProviderWithFakeAppServer(appServer);
+      const config = { pluginAppendSystemPrompt: ["Plugin instructions"] };
+      const session =
+        method === "thread/start"
+          ? await provider.createSession(createConfig(config))
+          : await provider.resumeSession({ sessionId: "saved-thread" }, config);
+      try {
+        await session.startTurn("hello");
+        await appServer.waitForTurnStart();
+        expect(
+          appServer.requests().find((request) => request.method === method)?.params,
+        ).toMatchObject({ developerInstructions: "Configured role\n\nPlugin instructions" });
+        appServer.assertNoErrors();
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   test("reopen injects current instructions once, including an explicit empty snapshot", async () => {
     const handlers = {
       initialize: () => ({ userAgent: "codex/0.165.0" }),
@@ -2602,6 +2628,60 @@ describe("Codex app-server provider", () => {
     await session.close();
     appServer.assertNoErrors();
   });
+
+  test.each(["interactive", "history"] as const)(
+    "spawns a wrapped %s resume through the launch wrap",
+    async (purpose) => {
+      const spawned: Array<{ command: string; args: string[]; wrap?: readonly string[] }> = [];
+      let resumes = 0;
+      // History reads the archived thread; an interactive resume unarchives it and resumes again.
+      const appServer = createFakeCodexAppServer({
+        "thread/loaded/list": () => ({ data: [] }),
+        "thread/resume": () =>
+          resumes++ === 0
+            ? Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id")))
+            : { thread: { id: "archived-thread-id" } },
+        "thread/unarchive": () => ({ thread: { id: "archived-thread-id" } }),
+        "thread/read": () => ({ thread: { turns: [] } }),
+      });
+      const provider = new CodexAppServerAgentClient(createTestLogger(), undefined, {
+        appServerProcess: {
+          resolvePrefix: async () => ({
+            command: "/opt/codex/bin/codex",
+            args: ["--profile", "x"],
+          }),
+          spawn: ({ command, args, options }) => {
+            spawned.push({ command, args, wrap: options.wrap });
+            return appServer.child;
+          },
+        },
+      });
+      const internals = castInternals<{
+        goalsEnabledPromise: Promise<boolean> | null;
+        autoReviewEnabledPromise: Promise<boolean> | null;
+      }>(provider);
+      internals.goalsEnabledPromise = Promise.resolve(false);
+      internals.autoReviewEnabledPromise = Promise.resolve(false);
+
+      const session = await provider.resumeSession(
+        archivedThreadHandle(),
+        undefined,
+        { wrap: ["/opt/sandbox/bin/run", "--profile", "a b"] },
+        { purpose },
+      );
+
+      expect(spawned.length).toBeGreaterThan(0);
+      for (const input of spawned) {
+        expect(input).toEqual({
+          command: "/opt/codex/bin/codex",
+          args: ["--profile", "x", "app-server"],
+          wrap: ["/opt/sandbox/bin/run", "--profile", "a b"],
+        });
+      }
+      await session.close();
+      appServer.assertNoErrors();
+    },
+  );
 
   test("unarchives Codex when an active Paseo agent resumes an archived thread", async () => {
     const threadRequests: string[] = [];
@@ -9200,5 +9280,191 @@ describe("legacy empty additions", () => {
       "diff --git a/empty.txt b/empty.txt\n--- /dev/null\n+++ b/empty.txt",
     );
     expect(item.detail.unifiedDiff).toContain("diff --git a/second.txt b/second.txt");
+  });
+});
+
+// AIROOM-PATCH(compact-reserves-turn): a batch an agent queued behind its urgent `/compact` waits
+// out the Codex compaction and then goes once, in order. Codex refuses `turn/start` while a
+// compaction runs, and announces the compaction's turn only after it answered the request.
+describe("agent messages queued behind an out-of-band Codex compaction", () => {
+  const sender = { kind: "agent-message" as const, agentId: "sender" };
+
+  async function createCompactingCodex(options: { compactFails?: boolean } = {}) {
+    const appServers: FakeCodexAppServer[] = [];
+    let compacting = false;
+    const provider = new CodexAppServerAgentClient(createTestLogger(), undefined, {
+      appServerProcess: createFakeCodexAppServerProcess(() => {
+        const appServer = createFakeCodexAppServer({
+          "thread/compact/start": () => {
+            if (options.compactFails) {
+              return { __jsonRpcError: { code: -32603, message: "compaction unavailable" } };
+            }
+            compacting = true;
+            setTimeout(() => {
+              appServer.startsTurn({ threadId: "saved-thread", turnId: "compact-turn" });
+              appServer.startsCompaction({ threadId: "saved-thread", itemId: "compact-item" });
+            }, 50);
+            return {};
+          },
+          "turn/start": () =>
+            compacting
+              ? {
+                  __jsonRpcError: {
+                    code: -32600,
+                    message: "cannot steer a compact turn",
+                    data: { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "compact" } } },
+                  },
+                }
+              : {},
+        });
+        appServers.push(appServer);
+        return appServer.child;
+      }),
+    });
+    const internals = castInternals<{
+      goalsEnabledPromise: Promise<boolean> | null;
+      autoReviewEnabledPromise: Promise<boolean> | null;
+    }>(provider);
+    internals.goalsEnabledPromise = Promise.resolve(false);
+    internals.autoReviewEnabledPromise = Promise.resolve(false);
+    const client: AgentClient = {
+      provider: "codex",
+      capabilities: provider.capabilities,
+      isAvailable: async () => true,
+      fetchCatalog: async () => ({ models: [], modes: [] }),
+      createSession: async () => {
+        throw new Error("Unexpected create");
+      },
+      resumeSession: (...args) => provider.resumeSession(...args),
+    };
+    const dir = await mkdtemp(path.join(tmpdir(), "codex-compact-queue-"));
+    const logger = createTestLogger();
+    const storage = new AgentStorage(dir, logger);
+    const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+    const messages = createTestAgentMessages({
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+      schedule: (_delay, callback) => {
+        const timer = setTimeout(callback, 10);
+        return () => clearTimeout(timer);
+      },
+    });
+    const agentId = "00000000-0000-4000-8000-000000000013";
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved-thread" },
+      createConfig({ cwd: process.cwd() }),
+      agentId,
+    );
+    await storage.flush();
+    const latest = () => appServers[appServers.length - 1]!;
+    const turnStarts = () =>
+      appServers.flatMap((server) =>
+        server.requests().filter((request) => request.method === "turn/start"),
+      );
+    return {
+      manager,
+      messages,
+      agentId,
+      latest,
+      turnStarts,
+      finishCompaction() {
+        compacting = false;
+        latest().completesCompaction({ threadId: "saved-thread", itemId: "compact-item" });
+        latest().completeTurn({ threadId: "saved-thread" });
+      },
+      async close() {
+        await messages.close();
+        if (manager.getAgent(agentId)) await manager.closeAgent(agentId);
+        await storage.flush();
+        rmSync(dir, { recursive: true, force: true });
+        for (const server of appServers) server.assertNoErrors();
+      },
+    };
+  }
+
+  function sendTwoThenCompact(codex: Awaited<ReturnType<typeof createCompactingCodex>>) {
+    const outcomes: string[] = [];
+    const receipts = ["first queued message", "second queued message"].map((prompt) => {
+      const receipt = codex.messages.enqueue({
+        recipientId: codex.agentId,
+        source: sender,
+        prompt,
+      });
+      receipt.dispatched.then(
+        (disposition) => outcomes.push(`${prompt}: ${disposition}`),
+        (error: unknown) => outcomes.push(`${prompt}: failed ${String(error)}`),
+      );
+      return receipt;
+    });
+    const compact = codex.messages.enqueue({
+      recipientId: codex.agentId,
+      source: sender,
+      prompt: "/compact",
+      activeTurnBehavior: "interrupt",
+    });
+    return { outcomes, receipts, compact };
+  }
+
+  async function expectDeliveredOnceInOrder(
+    codex: Awaited<ReturnType<typeof createCompactingCodex>>,
+    outcomes: string[],
+  ): Promise<void> {
+    await vi.waitFor(() =>
+      expect(outcomes).toEqual([
+        "first queued message: turn_started",
+        "second queued message: turn_started",
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const starts = codex.turnStarts();
+    expect(starts).toHaveLength(1);
+    const input = JSON.stringify(starts[0]!.params);
+    expect(input.indexOf("first queued message")).toBeGreaterThan(-1);
+    expect(input.indexOf("second queued message")).toBeGreaterThan(
+      input.indexOf("first queued message"),
+    );
+    expect(input).not.toContain("/compact");
+    // The batch's own turn ends, so the agent closes idle.
+    codex.latest().startsTurn({ threadId: "saved-thread", turnId: "batch-turn" });
+    codex.latest().completeTurn({ threadId: "saved-thread" });
+    await vi.waitFor(() => expect(codex.manager.getAgent(codex.agentId)?.lifecycle).toBe("idle"));
+  }
+
+  test.each(["closed", "idle open"])(
+    "keeps the batch until the compaction ends, then delivers it once (%s agent)",
+    async (state) => {
+      const codex = await createCompactingCodex();
+      try {
+        if (state === "closed") {
+          await codex.manager.closeAgent(codex.agentId);
+          expect(codex.manager.getAgent(codex.agentId)).toBeNull();
+        }
+        const { outcomes, compact } = sendTwoThenCompact(codex);
+        await expect(compact.dispatched).resolves.toBe("out_of_band");
+        await codex.latest().waitForRequest("thread/compact/start");
+        // Past the announcement: the compaction's turn is the agent's run.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(outcomes).toEqual([]);
+        expect(codex.manager.getAgent(codex.agentId)?.lifecycle).toBe("running");
+        expect(codex.turnStarts()).toEqual([]);
+
+        codex.finishCompaction();
+        await expectDeliveredOnceInOrder(codex, outcomes);
+      } finally {
+        await codex.close();
+      }
+    },
+  );
+
+  test("delivers the batch when Codex refuses to start the compaction", async () => {
+    const codex = await createCompactingCodex({ compactFails: true });
+    try {
+      const { outcomes, compact } = sendTwoThenCompact(codex);
+      await expect(compact.dispatched).resolves.toBe("out_of_band");
+      await expectDeliveredOnceInOrder(codex, outcomes);
+    } finally {
+      await codex.close();
+    }
   });
 });

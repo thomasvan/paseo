@@ -19,6 +19,7 @@ import {
   type FinishSubscription,
   type FinishSubscriptionStore,
   type FinishSubscriptions,
+  type PendingWork,
 } from "./index.js";
 
 type Status = "idle" | "running" | "initializing" | "closed" | "error";
@@ -161,19 +162,27 @@ async function daemon(
   child: Child,
   wrap: (store: FinishSubscriptionStore) => FinishSubscriptionStore = (store) => store,
   retryDelayMs = 1,
+  followLimitMs?: number,
 ) {
   const delivery = new Delivery();
-  const state = { callerActive: true, childArchived: false };
+  const state = {
+    callerActive: true,
+    childArchived: false,
+    /** The child's pending work, as the local host reports it at each turn end. */
+    work: [] as PendingWork[],
+  };
   const service = createFinishSubscriptions({
     store: wrap(createJsonFinishSubscriptionStore(directory)),
     messages: () => delivery,
     open: (record, signal) =>
       openFinishObservation({ use: async (_server, action) => action(child) }, record, signal),
+    pendingWork: () => state.work,
     callerIsActive: async () => state.callerActive,
     childArchived: async () => state.childArchived,
     serverId: "origin",
     logger: createTestLogger(),
     retryDelayMs,
+    ...(followLimitMs === undefined ? {} : { followLimitMs }),
   });
   services.push(service);
   await service.start();
@@ -649,6 +658,7 @@ test("two root seats watching each other each hear the other's finish once, howe
         record,
         signal,
       ),
+    pendingWork: () => [],
     callerIsActive: async () => true,
     childArchived: async () => false,
     serverId: "origin",
@@ -779,3 +789,209 @@ test.each([
     expect(d.delivery.prompts[heard]).toContain("sentinel answer");
   },
 );
+
+// Rule 2 of the v0.18 adaptation: upstream's follow ends on a `was closed`; a close of a followed
+// child the caller owns, not archived, is delivered and re-arms without `followingSince`.
+test("a close of a followed child that is not archived is delivered and re-arms", async () => {
+  const d = await daemon(await home(), new Child("running"));
+  await d.service.register(intent);
+  await until(() => d.child.handlers.size === 1);
+  d.state.work = ["background work"];
+  d.child.finish("interim answer");
+  await until(() => d.delivery.prompts.length === 1);
+  expect(d.delivery.prompts[0]).toContain("ended its turn but is still working");
+  d.delivery.ack(0);
+  await expect
+    .poll(async () => stored(d.directory))
+    .toEqual([expect.objectContaining({ ...intent, followingSince: expect.any(String) })]);
+  d.child.become("closed");
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("Agent child (Child) was closed.");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  expect((await stored(d.directory))[0]).not.toHaveProperty("followingSince");
+  d.state.work = [];
+  await sentinel(d, 3);
+});
+
+/** Registers `watch` on a running child that ends its turn with background work pending. */
+async function followed(d: Daemon, watch: { callerAgentId: string; childAgentId: string }) {
+  await d.service.register(watch);
+  await until(() => d.child.handlers.size === 1);
+  d.state.work = ["background work"];
+  d.child.finish("interim answer");
+  await until(() => d.delivery.prompts.length === 1);
+  expect(d.delivery.prompts[0]).toContain("ended its turn but is still working");
+  d.delivery.ack(0);
+}
+
+// The read the follow limit won over stays the watch's next read, so a finish that lands while
+// the limit notice awaits acknowledgement is the re-armed watch's first outcome.
+test("a finish while the follow-limit notice awaits acknowledgement is delivered once, after it", async () => {
+  const d = await daemon(await home(), new Child("running"), undefined, 1, 50);
+  await followed(d, intent);
+  d.state.work = ["turn"];
+  d.child.start();
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain(
+    "Agent child (Child) is still working: a turn in progress.",
+  );
+  d.state.work = [];
+  d.child.finish("second answer");
+  await pause(100);
+  expect(d.delivery.prompts).toHaveLength(2);
+  d.delivery.ack(1);
+  await until(() => d.delivery.prompts.length === 3);
+  expect(d.delivery.prompts[2]).toContain("Agent child (Child) finished.");
+  expect(d.delivery.prompts[2]).toContain("second answer");
+  // Until that finish is acknowledged the record stays open, so a restart still reads it.
+  await storedOpen(d.directory);
+  d.delivery.ack(2);
+  await storedAwaiting(d.directory);
+  await sentinel(d, 4);
+});
+
+// A watch recovered while following holds no terminal of the child, so at the follow limit its
+// ownership is read from the child's state as the observation sees it.
+test.each([
+  { relation: "owns", callerAgentId: "parent", rearms: true },
+  { relation: "does not own", callerAgentId: "peer", rearms: false },
+])(
+  "a watch recovered while following a running child its caller $relation, at the follow limit",
+  async ({ callerAgentId, rearms }) => {
+    const directory = await home();
+    const record = {
+      id: "recovered",
+      callerAgentId,
+      childAgentId: "child",
+      followingSince: "2026-01-01T00:00:00.000Z",
+    };
+    await writeFile(join(directory, "finish-subscriptions.json"), JSON.stringify([record]));
+    const d = await daemon(directory, new Child("running"), undefined, 1, 50);
+    await until(() => d.delivery.prompts.length === 1);
+    expect(d.delivery.prompts[0]).toMatch(/^Agent child \(child\) is still working\./);
+    d.delivery.ack(0);
+    // The child is mid-turn, so the re-armed record is stored with its gate open.
+    await expect
+      .poll(async () => stored(directory))
+      .toEqual(rearms ? [{ id: "recovered", callerAgentId, childAgentId: "child" }] : []);
+    d.child.finish("resumed answer");
+    if (rearms) {
+      await until(() => d.delivery.prompts.length === 2);
+      expect(d.delivery.prompts[1]).toContain("finished.");
+      expect(d.delivery.prompts[1]).toContain("resumed answer");
+    } else {
+      await pause(200);
+      expect(d.delivery.prompts).toHaveLength(1);
+    }
+  },
+);
+
+test.each([
+  {
+    watch: "re-arms",
+    callerAgentId: "parent",
+    closing:
+      "This is not its final reply. You will be notified when it finishes, errors, or needs permission.",
+  },
+  {
+    watch: "ends",
+    callerAgentId: "peer",
+    closing:
+      "This finish subscription has ended without a final reply. Check the agent with `get_agent_status`.",
+  },
+])(
+  "a follow-limit notice whose watch $watch says so in a paragraph of its own",
+  async ({ callerAgentId, closing }) => {
+    const d = await daemon(await home(), new Child("running"), undefined, 1, 50);
+    await followed(d, { callerAgentId, childAgentId: "child" });
+    await until(() => d.delivery.prompts.length === 2);
+    expect(d.delivery.prompts[1]).toBe(
+      [
+        "Agent child (Child) is still working: background work that will wake it.",
+        "Server: origin",
+        closing,
+        "<agent-response>\ninterim answer\n</agent-response>",
+      ].join("\n\n"),
+    );
+  },
+);
+
+// Rule 5: a work change of an idle child, published inside an observed turn before the turn's own
+// completion, takes no turn stamp, so the turn's finish still follows an observed turn.
+test("a work change inside a turn after a re-arm leaves that turn's finish delivered", async () => {
+  const d = await rearmed();
+  d.child.start();
+  d.child.status = "idle";
+  d.child.emit({ type: "background_work", provider: "codex", items: [] });
+  d.child.finish("second answer");
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("second answer");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  await sentinel(d, 3);
+});
+
+/** An agent on this host with its own id and labels. */
+class Agent extends Child {
+  constructor(
+    public id: string,
+    status: Status,
+    public labels: Record<string, string> = {},
+  ) {
+    super(status);
+  }
+  override snapshot() {
+    return { ...super.snapshot(), id: this.id, title: this.id, labels: this.labels };
+  }
+}
+
+// Rule 6: a re-armed watch waiting on an idle Worker is no delegation of its Lead, so the Lead's
+// own turn end reads `finished` to the Lead's caller, not "still working: agents it is waiting on".
+test("a Lead whose only watch waits on an idle Worker settles as finished", async () => {
+  const directory = await home();
+  const agents = {
+    lead: new Agent("lead", "running"),
+    worker: new Agent("worker", "running", { "paseo.parent-agent-id": "lead" }),
+  };
+  const delivery = new Delivery();
+  const service = createFinishSubscriptions({
+    store: createJsonFinishSubscriptionStore(directory),
+    messages: () => delivery,
+    open: (record, signal) =>
+      openFinishObservation(
+        { use: async (_server, action) => action(agents[record.childAgentId as "lead"]) },
+        record,
+        signal,
+      ),
+    pendingWork: () => [],
+    callerIsActive: async () => true,
+    childArchived: async () => false,
+    serverId: "origin",
+    logger: createTestLogger(),
+    retryDelayMs: 1,
+  });
+  services.push(service);
+  await service.start();
+  await service.register({ callerAgentId: "lead", childAgentId: "worker" });
+  await until(() => agents.worker.handlers.size === 1);
+  agents.worker.finish("worker answer");
+  await until(() => delivery.prompts.length === 1);
+  delivery.ack(0);
+  await expect
+    .poll(async () => stored(directory))
+    .toEqual([
+      expect.objectContaining({
+        callerAgentId: "lead",
+        childAgentId: "worker",
+        awaitingTurn: true,
+      }),
+    ]);
+  await until(() => !service.hasPendingForCaller("lead"));
+  await service.register({ callerAgentId: "supervisor", childAgentId: "lead" });
+  await until(() => agents.lead.handlers.size === 1);
+  agents.lead.finish("lead answer");
+  await until(() => delivery.prompts.length === 2);
+  expect(delivery.prompts[1]).toContain("Agent lead (lead) finished.");
+  expect(delivery.prompts[1]).toContain("lead answer");
+});

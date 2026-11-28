@@ -2729,10 +2729,11 @@ test.each([false, true])(
   },
 );
 
-// AIROOM-PATCH(archived-out-of-band-declines): an urgent agent message to an archived remote agent
-// unarchives it and starts its turn. The receiving daemon offers it out of band first, and that
-// offer declines instead of failing the message. The wait is bounded, so a lost message fails on
-// the assertion, not on the test timeout.
+// AIROOM-PATCH(agent-send-interrupt): an urgent agent message to an archived remote agent, the
+// omitted behaviour included (sent as `interrupt` on the `serverId` route), unarchives it and starts
+// its turn: the receiving daemon's out-of-band offer declines an archived recipient (#10611)
+// instead of failing the message. No upstream row covers the remote route. The wait is bounded, so
+// a lost message fails on the assertion, not on the test timeout.
 test.each([undefined, "interrupt", "steer"] as const)(
   "remote %s agent send to an archived agent starts its turn",
   { timeout: 30000 },

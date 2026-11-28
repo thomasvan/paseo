@@ -2,6 +2,8 @@ import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-clien
 
 export type FinishObservationResult = WaitForFinishResult & {
   reason?: "was canceled" | "host unreachable" | "host removed";
+  /** The idle child's background work changed without a turn ending. */
+  workChanged?: true;
   /** AIROOM-PATCH(wakeup-each): a turn was observed after the previous terminal and before this one. */
   turnObserved?: boolean;
 };
@@ -14,13 +16,26 @@ export function createObservationBuffer(signal: AbortSignal) {
   let initialPending = true;
   // AIROOM-PATCH(wakeup-each): a first-in-first-out queue, not one slot, so a finish that lands
   // while an earlier one awaits acknowledgement is kept. Each entry carries the turn count at
-  // its push, which places every observed turn between two terminals.
+  // its push, which places every observed turn between two terminals. A work change is no turn
+  // end: it never takes a turn's stamp, a real terminal replaces a queued one, and it is dropped
+  // behind a queued real terminal, whose decision reads the work as it is then.
   const terminals: Array<{ result: FinishObservationResult; turns: number }> = [];
   let terminalSeen = false;
   let turns = 0;
   let pushedTurns = 0;
   let consumedTurns = 0;
   let onTurn: (() => void) | undefined;
+  // AIROOM-PATCH(wakeup-each): the child's latest state the observation saw, for a decision with no
+  // terminal to read it from, as at the follow limit of a watch recovered while following.
+  let latest: WaitForFinishResult["final"] | undefined;
+  let seen!: () => void;
+  const known = new Promise<void>((resolve) => {
+    seen = resolve;
+  });
+  function see(snapshot: WaitForFinishResult["final"]): void {
+    latest = snapshot;
+    seen();
+  }
   let failure: unknown;
   let wake: (() => void) | undefined;
   const abort = () => {
@@ -35,15 +50,23 @@ export function createObservationBuffer(signal: AbortSignal) {
         if (!delivered.has(request.id)) permissions.set(request.id, result);
     } else {
       // AIROOM-PATCH(wakeup-each)
-      terminals.push({ result: { ...result, turnObserved: turns > pushedTurns }, turns });
-      pushedTurns = turns;
-      terminalSeen = true;
+      const last = terminals.at(-1);
+      if (last?.result.workChanged) terminals.pop();
+      if (result.workChanged) {
+        if (!terminals.length)
+          terminals.push({ result: { ...result, turnObserved: false }, turns: pushedTurns });
+      } else {
+        terminals.push({ result: { ...result, turnObserved: turns > pushedTurns }, turns });
+        pushedTurns = turns;
+        terminalSeen = true;
+      }
     }
     wake?.();
   }
   return {
     pushInitial(result: FinishObservationResult) {
       initialPending = false;
+      if (latest === undefined) see(result.final); // AIROOM-PATCH(wakeup-each)
       if (result.status === "permission" && result.final) {
         const pendingPermissions = result.final.pendingPermissions.filter(
           (request) => !resolvedBeforeInitial.has(request.id),
@@ -72,6 +95,16 @@ export function createObservationBuffer(signal: AbortSignal) {
       onTurn = listener;
       if (turns > consumedTurns) listener();
     },
+    /** AIROOM-PATCH(wakeup-each): the child's state as published; `state()` reads the latest. */
+    see,
+    async state(): Promise<WaitForFinishResult["final"]> {
+      if (!signal.aborted)
+        await Promise.race([
+          known,
+          new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
+        ]);
+      return latest ?? null;
+    },
     resolved(id: string) {
       if (initialPending) resolvedBeforeInitial.add(id);
       delivered.delete(id);
@@ -79,6 +112,7 @@ export function createObservationBuffer(signal: AbortSignal) {
     },
     fail(error: unknown) {
       failure = error;
+      seen(); // AIROOM-PATCH(wakeup-each)
       wake?.();
     },
     async next(): Promise<FinishObservationResult> {

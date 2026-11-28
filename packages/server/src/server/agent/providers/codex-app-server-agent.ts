@@ -57,7 +57,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
-import { composeAgentSystemPrompt } from "../system-prompt.js";
+import { composeAgentSystemPrompt, composeSystemPromptParts } from "../system-prompt.js";
 import { CodexInstructionSnapshot } from "./codex/instruction-snapshot.js";
 import { CodexAsyncQuestions, codexAsyncQuestionToTimeline } from "./codex/async-questions.js";
 import {
@@ -92,6 +92,7 @@ import {
   type CodexServiceTier,
 } from "./codex-feature-definitions.js";
 import {
+  CODEX_MCP_STARTUP_STATUS_METHOD,
   CodexAppServerClient,
   CodexAppServerRpcError,
   parseCodexThreadForkResponse,
@@ -178,6 +179,12 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
 // record milliseconds before this provider clears activeForegroundTurnId, and
 // refusing immediately loses the incoming prompt and marks the agent errored.
 const FOREGROUND_TEARDOWN_WAIT_MS = 10_000;
+
+// AIROOM-PATCH(compact-reserves-turn): how long `/compact` waits, after Codex
+// accepted `thread/compact/start`, for Codex to announce the compaction's turn.
+// The manager counts the agent running until then, and the wait holds the
+// agent's foreground lane, so a Stop waits behind it at most this long.
+const COMPACT_TURN_ANNOUNCEMENT_WAIT_MS = 10_000;
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
@@ -2953,6 +2960,32 @@ function isCodexDeltaNotification(
   );
 }
 
+const CodexMcpStartupStatusSchema = z.object({
+  name: z.string(),
+  threadId: z.string().nullish(),
+  status: z.enum(["starting", "ready", "failed", "cancelled"]),
+  error: z.string().nullish(),
+  failureReason: z.string().nullish(),
+});
+
+function summarizeCodexMcpStartupError(
+  error: string | null | undefined,
+  failureReason: string | null | undefined,
+): string {
+  if (failureReason === "reauthenticationRequired") {
+    return "Reauthentication required";
+  }
+  // Codex includes the remote response body in this error. Keep only the HTTP status.
+  const httpStatus = error?.match(/\bunexpected server response: HTTP ([45]\d{2}):/)?.[1];
+  if (httpStatus) {
+    return `HTTP ${httpStatus}`;
+  }
+  if (error?.includes("handshaking with MCP server failed")) {
+    return "MCP handshake failed";
+  }
+  return "Startup error details omitted";
+}
+
 const CodexNotificationSchema = z.union([
   z
     .object({ method: z.literal("thread/started"), params: ThreadStartedNotificationSchema })
@@ -3778,6 +3811,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private resolvedWorkspaceWrite: NonNullable<
     CodexProviderOptions["sandbox_workspace_write"]
   > | null = null;
+  private configuredDeveloperInstructions: string | undefined;
   private resolvedSandboxPolicy: Record<string, unknown> | null = null;
   private currentThreadId: string | null = null;
   // Codex writes a new thread's rollout at its first turn. Until then the thread exists only
@@ -3808,6 +3842,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   // clears, so an incoming startTurn can
   // wait out a teardown instead of refusing a milliseconds-wide race.
   private foregroundTurnClearWaiters: Array<() => void> = [];
+  // AIROOM-PATCH(compact-reserves-turn): resolved when Codex announces or ends
+  // a turn of the root thread, after its event was emitted.
+  private rootTurnAnnouncementWaiters: Array<() => void> = [];
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
   /** The tier the options ask for; `serviceTier` is what the current model can honor. */
@@ -4047,7 +4084,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.speedModels =
         CodexModelListResponseSchema.parse(await client.request("model/list", {})).data ?? [];
       this.normalizeSpeed();
-      await this.loadResolvedWorkspaceWrite();
+      await this.loadResolvedConfig();
       await this.loadCollaborationModes();
       await this.loadSkills();
 
@@ -4078,7 +4115,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  private async loadResolvedWorkspaceWrite(): Promise<void> {
+  private async loadResolvedConfig(): Promise<void> {
     if (!this.client) return;
     try {
       const response = toObjectRecord(
@@ -4086,9 +4123,23 @@ export class CodexAppServerAgentSession implements AgentSession {
       );
       const config = toObjectRecord(response?.config);
       this.resolvedWorkspaceWrite = readSandboxWorkspaceWrite(config?.sandbox_workspace_write);
+      this.configuredDeveloperInstructions =
+        typeof config?.developer_instructions === "string"
+          ? config.developer_instructions
+          : undefined;
     } catch (error) {
-      this.logger.debug({ error }, "Failed to read resolved Codex workspace-write config");
+      this.logger.debug({ error }, "Failed to read resolved Codex config");
     }
+  }
+
+  /**
+   * Codex uses a thread's developerInstructions in place of the developer_instructions in its
+   * config, so Paseo's instructions carry the configured ones ahead of them.
+   */
+  private threadDeveloperInstructions(): string | undefined {
+    const paseoInstructions = composeAgentSystemPrompt(this.config);
+    if (!paseoInstructions) return undefined;
+    return composeSystemPromptParts(this.configuredDeveloperInstructions, paseoInstructions);
   }
 
   private rememberResolvedSandboxPolicy(response: unknown): void {
@@ -4547,7 +4598,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       // the unnamespaced key emitted by earlier Paseo versions.
       params.modelProvider = this.deps.customCodexConfig.model_provider;
     }
-    const developerInstructions = composeAgentSystemPrompt(this.config);
+    const developerInstructions = this.threadDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4849,6 +4900,33 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (this.foregroundTurnClearWaiters.length === 0) return;
     const waiters = this.foregroundTurnClearWaiters;
     this.foregroundTurnClearWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  // AIROOM-PATCH(compact-reserves-turn): bounded, so a Codex that never
+  // announces the turn cannot hold the agent running.
+  private waitForRootTurnAnnouncement(timeoutMs: number): {
+    promise: Promise<void>;
+    cancel(): void;
+  } {
+    let waiter!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => waiter(), timeoutMs);
+      waiter = () => {
+        clearTimeout(timer);
+        this.rootTurnAnnouncementWaiters = this.rootTurnAnnouncementWaiters.filter(
+          (entry) => entry !== waiter,
+        );
+        resolve();
+      };
+      this.rootTurnAnnouncementWaiters.push(waiter);
+    });
+    return { promise, cancel: () => waiter() };
+  }
+
+  private flushRootTurnAnnouncementWaiters(): void {
+    const waiters = this.rootTurnAnnouncementWaiters;
+    this.rootTurnAnnouncementWaiters = [];
     for (const resolve of waiters) resolve();
   }
 
@@ -5557,7 +5635,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       model: this.config.model ?? null,
       serviceTier: this.serviceTier,
       config: this.buildCodexInnerConfig(),
-      developerInstructions: composeAgentSystemPrompt(this.config),
+      developerInstructions: this.threadDeveloperInstructions(),
       userMessageTurns: this.codexUserMessageTurns(),
       threadRollbackAvailable: this.threadRollbackAvailable,
       setThreadId: async (threadId) => {
@@ -5989,15 +6067,19 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
   }
 
-  tryHandleOutOfBand(
-    prompt: AgentPromptInput,
-  ): { run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void> } | null {
+  tryHandleOutOfBand(prompt: AgentPromptInput): {
+    run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void>;
+    startsTurn?: boolean;
+  } | null {
     if (typeof prompt !== "string") return null;
     const parsed = this.parseSlashCommandInput(prompt);
     if (!parsed) return null;
 
     if (parsed.commandName === "compact") {
       return {
+        // AIROOM-PATCH(compact-reserves-turn): a compaction is a Codex turn, and
+        // Codex refuses a `turn/start` while it runs.
+        startsTurn: true,
         run: async ({ emit }) => {
           const error = await this.executeCompactCommand();
           if (error) {
@@ -6038,14 +6120,19 @@ export class CodexAppServerAgentSession implements AgentSession {
         throw new Error("Codex thread is not available");
       }
       this.pendingManualCompactionStarts += 1;
+      // AIROOM-PATCH(compact-reserves-turn): Codex announces the compaction's turn
+      // after it answers the request, so the wait starts before the request.
+      const announced = this.waitForRootTurnAnnouncement(COMPACT_TURN_ANNOUNCEMENT_WAIT_MS);
       try {
         await this.client.request("thread/compact/start", {
           threadId: this.currentThreadId,
         });
       } catch (error) {
+        announced.cancel();
         this.pendingManualCompactionStarts = Math.max(0, this.pendingManualCompactionStarts - 1);
         throw error;
       }
+      await announced.promise;
       return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
@@ -6211,7 +6298,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const approvalPolicy = this.hasWorkflowModeOverride ? preset.approvalPolicy : undefined;
     const sandbox = this.hasWorkflowModeOverride ? preset.sandbox : undefined;
     const innerConfig = this.buildCodexInnerConfig();
-    const developerInstructions = composeAgentSystemPrompt(this.config);
+    const developerInstructions = this.threadDeveloperInstructions();
     const params: Record<string, unknown> = {
       model,
       cwd: this.config.cwd ?? null,
@@ -6307,6 +6394,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private async processNotification(method: string, params: unknown): Promise<void> {
+    if (method === CODEX_MCP_STARTUP_STATUS_METHOD) {
+      this.logMcpStartupStatus(params);
+      return;
+    }
     const notificationParams = toObjectRecord(params);
     if (method === "serverRequest/resolved" && typeof notificationParams?.requestId === "number") {
       const requestId = this.mcpElicitationPermissionIds.get(notificationParams.requestId);
@@ -7078,6 +7169,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     this.resetTurnTrackingState();
     this.emitEvent({ type: "turn_started", provider: CODEX_PROVIDER });
+    // AIROOM-PATCH(compact-reserves-turn): the manager now tracks the turn.
+    this.flushRootTurnAnnouncementWaiters();
   }
 
   // Codex has written the rollout by the time it announces a thread's turn, including a
@@ -7139,6 +7232,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.pendingForegroundTurnIdentification = null;
     this.pendingSubAgentNotificationsByThreadId.clear();
     this.resetTurnTrackingState();
+    // AIROOM-PATCH(compact-reserves-turn): a turn that ends unannounced ends the wait.
+    this.flushRootTurnAnnouncementWaiters();
   }
 
   private handleTurnErrorNotification(
@@ -7845,6 +7940,30 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.emitEvent({ type: "timeline", provider: CODEX_PROVIDER, item });
   }
 
+  private logMcpStartupStatus(params: unknown): void {
+    const parsed = CodexMcpStartupStatusSchema.safeParse(params);
+    if (!parsed.success) {
+      this.logger.trace("Invalid Codex MCP server startup status");
+      return;
+    }
+    const { name, threadId, status, error, failureReason } = parsed.data;
+    const context = {
+      agentId: this.agentId,
+      provider: CODEX_PROVIDER,
+      sessionId: threadId ?? this.currentThreadId,
+      serverName: name,
+      status,
+    };
+    if (status === "failed") {
+      this.logger.warn(
+        { ...context, error: summarizeCodexMcpStartupError(error, failureReason) },
+        "Codex MCP server startup failed",
+      );
+      return;
+    }
+    this.logger.debug(context, "Codex MCP server startup status updated");
+  }
+
   private warnUnknownNotificationMethod(method: string, params: unknown): void {
     if (this.warnedUnknownNotificationMethods.has(method)) {
       return;
@@ -8359,6 +8478,7 @@ export class CodexAppServerAgentClient implements AgentClient {
     environment: Record<string, string>;
     goalsEnabled?: boolean;
     agentId?: string;
+    wrap?: AgentLaunchContext["wrap"];
   }): Promise<() => ChildProcessWithoutNullStreams> {
     const processPort = this.deps.appServerProcess ?? defaultCodexAppServerProcess;
     const launchPrefix = await processPort.resolvePrefix({ runtimeSettings: this.runtimeSettings });
@@ -8372,14 +8492,17 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: options.agentId,
           provider: CODEX_PROVIDER,
           launchPrefix,
+          wrap: options.wrap,
           goalsEnabled: options.goalsEnabled === true,
         },
         "provider.codex.spawn",
       );
+      // Every spawn from this closure, including reconnects and startup retries, carries the wrap.
       const child = processPort.spawn({
         command: launchPrefix.command,
         args,
         options: {
+          wrap: options.wrap,
           detached: process.platform !== "win32",
           stdio: ["pipe", "pipe", "pipe"],
           baseEnv: options.environment,
@@ -8426,6 +8549,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       environment,
       goalsEnabled,
       agentId: launchContext?.agentId,
+      wrap: launchContext?.wrap,
     });
     const session = new CodexAppServerAgentSession(
       sessionConfig,
@@ -8463,6 +8587,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       environment,
       goalsEnabled,
       agentId: launchContext?.agentId,
+      wrap: launchContext?.wrap,
     });
     const session = new CodexAppServerAgentSession(
       merged,
