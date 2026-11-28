@@ -814,6 +814,14 @@ export interface AgentSession {
    */
   tryHandleOutOfBand?(prompt: AgentPromptInput): {
     run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void>;
+    /**
+     * AIROOM-PATCH(compact-reserves-turn): the command starts a provider turn of
+     * its own, such as a Codex compaction. The manager counts the agent running
+     * from acceptance, so a queued prompt waits for that turn instead of being
+     * refused by it. `run` resolves once the provider announced the turn, or
+     * failed to start it.
+     */
+    startsTurn?: boolean;
   } | null;
 
   /**

@@ -109,6 +109,8 @@ import {
   type ForegroundPromptStart,
   type ForegroundTurnWaiter,
   type PendingForegroundRun,
+  // AIROOM-PATCH(compact-reserves-turn)
+  type TrackedAgentRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
 import { parseAgentMessage, projectAgentMessages } from "./agent-messages/index.js";
@@ -3348,6 +3350,8 @@ export class AgentManager {
       return false;
     }
     onAccepted?.();
+    // AIROOM-PATCH(compact-reserves-turn): held before the caller hears of acceptance.
+    const reserved = handler.startsTurn ? this.reserveOutOfBandTurn(agent) : null;
     this.touchUpdatedAt(agent);
     if (options?.clientMessageId) {
       this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted");
@@ -3379,8 +3383,44 @@ export class AgentManager {
           item: { type: "assistant_message", text: `[Error] ${text}` },
         });
       }
+      // AIROOM-PATCH(compact-reserves-turn)
+      if (reserved) await this.releaseOutOfBandTurn(agent, reserved);
     });
     return true;
+  }
+
+  /**
+   * AIROOM-PATCH(compact-reserves-turn): an out-of-band command that starts a
+   * provider turn counts as a run from acceptance. The provider announces that
+   * turn only after it accepted the command, and a prompt started in between is
+   * refused by the provider and lost. When the turn is announced, the reserved
+   * run becomes that turn's run, and the turn's end settles it, as for any turn
+   * the agent starts on its own.
+   */
+  private reserveOutOfBandTurn(agent: ActiveManagedAgent): TrackedAgentRun | null {
+    if (this.hasInFlightRun(agent.id)) return null;
+    const run = this.runs.trackAutonomousRun(agent.id, null);
+    agent.lifecycle = "running";
+    this.emitState(agent);
+    return run;
+  }
+
+  /**
+   * AIROOM-PATCH(compact-reserves-turn): a command whose turn was never announced
+   * releases its reservation, and the agent's settled state wakes what waits.
+   */
+  private async releaseOutOfBandTurn(
+    agent: ActiveManagedAgent,
+    run: TrackedAgentRun,
+  ): Promise<void> {
+    await this.drainSessionEvents(agent.id);
+    if (this.runs.getRun(agent.id) !== run || agent.activeTurnId) return;
+    this.runs.settleTerminalRun(agent.id, undefined);
+    if (agent.lifecycle === "running" && !agent.activeForegroundTurnId) {
+      (agent as ActiveManagedAgent).lifecycle = "idle";
+    }
+    this.touchUpdatedAt(agent);
+    this.emitState(agent);
   }
 
   private async findOutOfBandRecipient(agentId: string): Promise<ActiveManagedAgent | null> {

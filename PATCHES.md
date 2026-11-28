@@ -55,10 +55,11 @@ target past that date may delete the legacy path `detached-arg` adapts; read it 
 | [`agent-message-raw-body`](#agent-message-raw-body)                         | the receiving model gets an agent sender's bytes, not their XML-escaped form                  | PR [#7523](https://github.com/getpaseo/paseo/pull/7523), issue [#7520](https://github.com/getpaseo/paseo/issues/7520)                                      |
 | [`agent-send-interrupt`](#agent-send-interrupt)                             | an agent's unflagged send interrupts a running turn                                           | Discussion [#7526](https://github.com/getpaseo/paseo/discussions/7526)                                                                                     |
 | [`interrupted-turn-tasks`](#interrupted-turn-tasks)                         | an interrupted Claude turn's shell commands end, its background ones included                 | PR [#7524](https://github.com/getpaseo/paseo/pull/7524), issue [#7521](https://github.com/getpaseo/paseo/issues/7521)                                      |
+| [`compact-reserves-turn`](#compact-reserves-turn)                           | agent messages queued behind an urgent Codex `/compact` wait for the compaction, not get lost | not opened                                                                                                                                                 |
 
 The Codex foreground cluster is five patches: `replace-awaits-teardown`, `dead-run-settles`,
 `interrupt-releases-foreground`, `dispose-releases-foreground` and
-`force-cancel-releases-foreground`, twelve patches in all.
+`force-cancel-releases-foreground`, thirteen patches in all.
 
 ## Where the tests live
 
@@ -557,6 +558,52 @@ agent starts its turn`, both kept from the retired `archived-out-of-band-decline
 - **Tests:** `providers/claude/agent.interrupted-turn-tasks.airoom.test.ts` drives a real
   `ClaudeAgentSession` against a scripted SDK query.
 
+## compact-reserves-turn
+
+- **What:** an out-of-band command whose handler says `startsTurn` counts as a run from the
+  moment the manager accepts it (`tryRunOutOfBand` in `agent-manager.ts`), and Codex's `/compact`
+  says it (`providers/codex-app-server-agent.ts`). The manager tracks an autonomous run with no
+  turn id and marks the agent `running` before the caller hears of the acceptance. Codex's
+  handler resolves only once Codex announced a root turn (`turn/started`, or `turn/completed`
+  for one never announced), or the compaction failed to start, or after
+  `COMPACT_TURN_ANNOUNCEMENT_WAIT_MS` (10 s). The optional `startsTurn` sits on the handler type
+  in `agent-sdk-types.ts`; `wrapSessionProvider` forwards the handler object as it is.
+- **Why:** a caller sends a Codex agent messages as `queue`, then `/compact` as `interrupt`.
+  Delivery runs the command out of band and then offers the waiting batch idle-only. Codex runs
+  a compaction as a turn and refuses a `turn/start` during it (`activeTurnNotSteerable`, turn
+  kind `compact`), but announces that turn only after answering `thread/compact/start`, so
+  upstream's manager reads the agent idle in between and starts the batch into the refusal.
+  `deliver` hands a batch back only for a busy error, and this one reaches `fail`: every message
+  is lost. It hits a closed agent, which the command loads, and an idle open one alike.
+- **Why not reclassify the refusal:** a provider error thrown from `startTurn` does not reach
+  `deliver` as itself. `ForegroundPromptStart` rejects the dispatch's `started` with a new
+  `Error` carrying only the message (`agent-run-state.ts`), so a provider-thrown
+  `AgentTurnBusyError` reads as a failure. The manager also records the prompt rejected and a
+  failed turn on the way. The reservation keeps the batch from being started at all.
+- **The wake-up:** none of the patch's own on the success path. The announced turn takes over
+  the reserved run (`trackAutonomousRun` returns it), and the turn's end settles it and emits
+  the agent's idle state, as for any turn an agent starts on its own. Delivery's `subscribe`
+  hears that state, and its 2 s retry polls while the batch waits. When no turn was announced,
+  the handler's end releases the reservation after draining the session's events and emits
+  the idle state itself.
+- **Known limits:** a Codex that announces nothing within 10 s is read idle again, and a batch
+  started before the late announcement is refused and lost, as upstream. Codex's handler holds
+  the agent's foreground lane while it waits, so a Stop sent during the wait runs after it, at
+  most 10 s later. No reservation is taken when the agent already has a run: the batch waits
+  for that run. Only Codex's `/compact` sets `startsTurn`; pi's and omp's out-of-band commands
+  are unchanged.
+- **Tests:** `providers/codex-app-server-agent.test.ts`, `agent messages queued behind an
+out-of-band Codex compaction`: the real Codex session against the fake app-server, through
+  `AgentManager` and the test delivery wiring (`test-utils/agent-messages.ts`). The fake
+  refuses `turn/start` while compacting and announces the compaction's turn 50 ms after
+  answering. Two rows, a closed and an idle open agent, send two `queue` messages and an
+  `interrupt` `/compact`, and assert both kept while it runs, then one `turn/start` carrying
+  both in order after it ends. A third row has Codex refuse the compaction and asserts the
+  batch delivered once.
+- **Retire when:** upstream keeps a waiting batch that a running compaction refuses: it counts
+  the compaction as a run from the command's acceptance, or retries a `turn/start` the
+  compaction refused once the compaction ends.
+
 ## Sync procedure
 
 Derive the patch-owned files, check what upstream changed in them, dry-run the merge, then
@@ -725,14 +772,18 @@ The marker manifest on this branch, which the gate must reproduce unless a patch
 ```
 80 wakeup-each                             3 replace-awaits-teardown
 16 interrupted-turn-tasks                  2 pi-capture-rejection-observed
- 9 agent-send-interrupt                    2 interrupt-releases-foreground
- 6 native-tools-injection-independent      2 force-cancel-releases-foreground
- 5 agent-message-raw-body                  2 detached-arg
-                                           1 dispose-releases-foreground
+14 compact-reserves-turn                   2 interrupt-releases-foreground
+ 9 agent-send-interrupt                    2 force-cancel-releases-foreground
+ 6 native-tools-injection-independent      2 detached-arg
+ 5 agent-message-raw-body                  1 dispose-releases-foreground
                                            1 dead-run-settles
 ```
 
-129 sites under 12 names. `agent-send-interrupt`'s nine: the CLI sender, the remote sender, the
+143 sites under 13 names. `compact-reserves-turn`'s fourteen: seven in
+`codex-app-server-agent.ts` (the wait's constant, its waiter list, the handler's `startsTurn`,
+the wait around `thread/compact/start`, the bounded waiter, and the flushes on a root turn's
+start and end), five in `agent-manager.ts` (the import, the reservation, the release call, and
+the two methods), the handler type in `agent-sdk-types.ts`, and the test group's header. `agent-send-interrupt`'s nine: the CLI sender, the remote sender, the
 agent schema and the agent enqueue in `paseo-tools.ts`, four in `mcp-server.test.ts` (the
 behaviour matrix, the idle-guidance row, the queued-dispatch acknowledgement fixture, and the
 omitted send to an archived agent), and the remote table in `connected-hosts/hosts.e2e.test.ts`.
