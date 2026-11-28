@@ -148,6 +148,13 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
     removes the group's stored records. A registration made after it is untouched. A notice a
     watch already enqueued stays in the caller's queue; the aborted watch writes no re-arm or
     gate write afterwards, because both check the abort inside `serialize`.
+    The cancel ends any watch the caller holds on that child, owned or not, a creation watch
+    included, so after a notify-off send the caller hears that child's finishes again only after
+    its next notify-on send. Because it runs before the enqueue, a notify-off send whose enqueue
+    then throws (delivery closing at shutdown, say) has already removed the earlier watch, where
+    a create or notify-on send whose dispatch fails keeps its predecessors through `reject()`;
+    cancelling at dispatch instead would let the old watch deliver the turn the notify-off send
+    itself starts.
   - **The gate** opens on a turn the child runs, whatever started it: a running snapshot, or
     a `turn_started` that carries a `turnId` (`internal/observation-stream.ts`, the top of
     `observeState`). A local observe opens with a synthetic `turn_started` with no `turnId` and
