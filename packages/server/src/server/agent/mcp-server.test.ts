@@ -5448,7 +5448,16 @@ describe("finish notifications for a child that ends its turn while still workin
       return { id, session };
     }
     const parentPrompts = () => parentClient.sessions[0]?.prompts ?? [];
-    return { workdir, storage, agentManager, parent, server, createChild, parentPrompts };
+    return {
+      workdir,
+      storage,
+      agentManager,
+      parent,
+      server,
+      createChild,
+      parentPrompts,
+      childClient, // AIROOM-PATCH(wakeup-each): the unowned control drives a peer's session
+    };
   }
 
   it("tells the parent the child is still working, then reports its autonomous final reply", async () => {
@@ -5482,12 +5491,46 @@ describe("finish notifications for a child that ends its turn while still workin
         source: { kind: "agent-notification", agentId: child.id, event: "finished" },
       });
 
-      // A turn after the child settled, as a person starts in the app, reports nothing.
+      // AIROOM-PATCH(wakeup-each): the parent owns this child, so the settled watch re-arms, and a
+      // turn after the child settled, as a person starts in the app, is reported once.
       child.session.startAutonomousTurn();
       child.session.finishTurn("Unrelated later work");
-      await vi.waitFor(() => expect(agentManager.getAgent(child.id)?.lifecycle).toBe("idle"));
+      await vi.waitFor(() => expect(parentPrompts()).toHaveLength(3));
+      expect(parentPrompts()[2]).toContain(`Agent ${child.id} (Builder) finished.`);
+      expect(parentPrompts()[2]).toContain("Unrelated later work");
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(parentPrompts()).toHaveLength(2);
+      expect(parentPrompts()).toHaveLength(3);
+    } finally {
+      await removeAgentStateDir(agentManager, storage, workdir);
+    }
+  });
+
+  // AIROOM-PATCH(wakeup-each): the unowned control. A child the caller neither parents nor created
+  // keeps upstream's silence once it has settled.
+  it("a child the caller does not own reports nothing for a turn after it settled", async () => {
+    const { workdir, storage, agentManager, server, parentPrompts, childClient } = await setup();
+    try {
+      const peer = await agentManager.createAgent(
+        { provider: "codex", cwd: existingCwd },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+        agentId: peer.id,
+        prompt: "Build it",
+      });
+      await vi.waitFor(() => expect(agentManager.getAgent(peer.id)?.lifecycle).toBe("running"));
+      const session = childClient.sessions.at(-1)!;
+      session.finishTurn("PEER DONE");
+      await vi.waitFor(() => expect(parentPrompts()).toHaveLength(1));
+      expect(parentPrompts()[0]).toContain(`Agent ${peer.id}`);
+      expect(parentPrompts()[0]).toContain("PEER DONE");
+
+      session.startAutonomousTurn();
+      session.finishTurn("Unrelated later work");
+      await vi.waitFor(() => expect(agentManager.getAgent(peer.id)?.lifecycle).toBe("idle"));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(parentPrompts()).toHaveLength(1);
     } finally {
       await removeAgentStateDir(agentManager, storage, workdir);
     }

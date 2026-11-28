@@ -788,3 +788,105 @@ test.each([
   },
 );
 
+// Rule 2 of the v0.18 adaptation: upstream's follow ends on a `was closed`; a close of a followed
+// child the caller owns, not archived, is delivered and re-arms without `followingSince`.
+test("a close of a followed child that is not archived is delivered and re-arms", async () => {
+  const d = await daemon(await home(), new Child("running"));
+  await d.service.register(intent);
+  await until(() => d.child.handlers.size === 1);
+  d.state.work = ["background work"];
+  d.child.finish("interim answer");
+  await until(() => d.delivery.prompts.length === 1);
+  expect(d.delivery.prompts[0]).toContain("ended its turn but is still working");
+  d.delivery.ack(0);
+  await expect
+    .poll(async () => stored(d.directory))
+    .toEqual([expect.objectContaining({ ...intent, followingSince: expect.any(String) })]);
+  d.child.become("closed");
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("Agent child (Child) was closed.");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  expect((await stored(d.directory))[0]).not.toHaveProperty("followingSince");
+  d.state.work = [];
+  await sentinel(d, 3);
+});
+
+// Rule 5: a work change of an idle child, published inside an observed turn before the turn's own
+// completion, takes no turn stamp, so the turn's finish still follows an observed turn.
+test("a work change inside a turn after a re-arm leaves that turn's finish delivered", async () => {
+  const d = await rearmed();
+  d.child.start();
+  d.child.status = "idle";
+  d.child.emit({ type: "background_work", provider: "codex", items: [] });
+  d.child.finish("second answer");
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("second answer");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  await sentinel(d, 3);
+});
+
+/** An agent on this host with its own id and labels. */
+class Agent extends Child {
+  constructor(
+    public id: string,
+    status: Status,
+    public labels: Record<string, string> = {},
+  ) {
+    super(status);
+  }
+  override snapshot() {
+    return { ...super.snapshot(), id: this.id, title: this.id, labels: this.labels };
+  }
+}
+
+// Rule 6: a re-armed watch waiting on an idle Worker is no delegation of its Lead, so the Lead's
+// own turn end reads `finished` to the Lead's caller, not "still working: agents it is waiting on".
+test("a Lead whose only watch waits on an idle Worker settles as finished", async () => {
+  const directory = await home();
+  const agents = {
+    lead: new Agent("lead", "running"),
+    worker: new Agent("worker", "running", { "paseo.parent-agent-id": "lead" }),
+  };
+  const delivery = new Delivery();
+  const service = createFinishSubscriptions({
+    store: createJsonFinishSubscriptionStore(directory),
+    messages: () => delivery,
+    open: (record, signal) =>
+      openFinishObservation(
+        { use: async (_server, action) => action(agents[record.childAgentId as "lead"]) },
+        record,
+        signal,
+      ),
+    pendingWork: () => [],
+    callerIsActive: async () => true,
+    childArchived: async () => false,
+    serverId: "origin",
+    logger: createTestLogger(),
+    retryDelayMs: 1,
+  });
+  services.push(service);
+  await service.start();
+  await service.register({ callerAgentId: "lead", childAgentId: "worker" });
+  await until(() => agents.worker.handlers.size === 1);
+  agents.worker.finish("worker answer");
+  await until(() => delivery.prompts.length === 1);
+  delivery.ack(0);
+  await expect
+    .poll(async () => stored(directory))
+    .toEqual([
+      expect.objectContaining({
+        callerAgentId: "lead",
+        childAgentId: "worker",
+        awaitingTurn: true,
+      }),
+    ]);
+  await until(() => !service.hasPendingForCaller("lead"));
+  await service.register({ callerAgentId: "supervisor", childAgentId: "lead" });
+  await until(() => agents.lead.handlers.size === 1);
+  agents.lead.finish("lead answer");
+  await until(() => delivery.prompts.length === 2);
+  expect(delivery.prompts[1]).toContain("Agent lead (lead) finished.");
+  expect(delivery.prompts[1]).toContain("lead answer");
+});

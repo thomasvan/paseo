@@ -210,6 +210,14 @@ is stored before the notice is sent, so restarts resume following without repeat
 ends after 24 hours with an "is still working" notice. Remote children and providers without the probe
 report their first turn end as `finished`.
 
+This fork (`wakeup-each` in `PATCHES.md`) keeps a settled subscription when the caller owns the child:
+the child's parent label or creator mark names the caller on this server. After `finished`, the
+limit notice, or a `was closed` of a child that is not archived, the subscription re-arms without
+`followingSince` and waits for the child's next turn, whoever starts it, so the caller hears every
+finish of its own child. A waiting subscription does not count as the caller's pending work. Every
+other subscription ends as above, and a send with `notifyOnFinish: false` ends the pair's
+subscription.
+
 Permission requests are notification checkpoints, not the end of that subscription. The caller is notified again after a permission response when the child finishes, errors, or requests another permission.
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.
 A watched child that closes before its finish event also notifies the caller so delegated work cannot disappear silently during archive or workspace teardown.

@@ -581,8 +581,8 @@ test("an undispatched follow-up does not block the running child's permission no
 });
 
 describe("a child that ends its turn while it is still working", () => {
-  async function following(state: Awaited<ReturnType<typeof scenario>>) {
-    await state.service.register(intent);
+  async function following(state: Awaited<ReturnType<typeof scenario>>, watch = intent) {
+    await state.service.register(watch);
     await until(() => state.observation.waits.length === 1);
     state.observation.work.set("child", ["background work"]);
     state.observation.waits[0]!.result.resolve(outcome("idle", "child", "Waiting for the build"));
@@ -616,10 +616,31 @@ describe("a child that ends its turn while it is still working", () => {
       source: { event: "finished" },
     });
     state.delivery.acknowledgments[1]!.resolve("steered");
-    await expect.poll(async () => (await state.store.list()).length).toBe(0);
-    // A turn a person starts after the child settled has no observer left to report it.
-    expect(state.observation.waits).toHaveLength(2);
+    // AIROOM-PATCH(wakeup-each): the child is the caller's own (its parent label names the caller),
+    // so the settled watch re-arms instead of ending: one record, waiting for the next turn, with
+    // no `followingSince`, and a third wait observes the child for a turn a person starts.
+    await expect
+      .poll(async () => state.store.list())
+      .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
+    expect((await state.store.list())[0]).not.toHaveProperty("followingSince");
+    await until(() => state.observation.waits.length === 3);
+    // A watch waiting for a turn pins nothing.
     expect(state.service.hasPendingForCaller("parent")).toBe(false);
+  });
+
+  // AIROOM-PATCH(wakeup-each): the unowned control. The child's parent label names another agent,
+  // so the settled watch ends as upstream's does.
+  test("a child the caller does not own is reported once and the watch ends when it settles", async () => {
+    const state = await scenario();
+    await following(state, { callerAgentId: "peer", childAgentId: "child" });
+    state.observation.work.set("child", []);
+    state.observation.waits[1]!.result.resolve(outcome("idle", "child", "FINAL: done"));
+    await until(() => state.delivery.prompts.length === 2);
+    expect(state.delivery.prompts[1]).toContain("Agent child (Child) finished.");
+    state.delivery.acknowledgments[1]!.resolve("steered");
+    await expect.poll(async () => (await state.store.list()).length).toBe(0);
+    expect(state.observation.waits).toHaveLength(2);
+    expect(state.service.hasPendingForCaller("peer")).toBe(false);
   });
 
   test("stays silent for turns that end while work is still pending", async () => {
@@ -786,6 +807,25 @@ describe("a child that ends its turn while it is still working", () => {
     expect(state.delivery.prompts[1]).toContain("Agent child (Child) is still working");
     expect(state.delivery.prompts[1]).toContain("This finish subscription has ended");
     expect(state.delivery.prompts[1]).not.toContain("finished.");
+    state.delivery.acknowledgments[1]!.resolve("steered");
+    // AIROOM-PATCH(wakeup-each): an owned child's watch re-arms after the limit notice. The re-armed
+    // record carries no `followingSince`, so the limit, long past by now, never fires on a watch
+    // that is only idle.
+    await expect
+      .poll(async () => state.store.list())
+      .toEqual([expect.objectContaining({ ...intent, awaitingTurn: true })]);
+    await until(() => state.observation.waits.length === 3);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(state.delivery.prompts).toHaveLength(2);
+    expect((await state.store.list())[0]).not.toHaveProperty("followingSince");
+  });
+
+  // AIROOM-PATCH(wakeup-each): the unowned control: the limit notice ends the watch.
+  test("a child the caller does not own stops being followed at the limit and the watch ends", async () => {
+    const state = await scenario(undefined, 0, 1, 50);
+    await following(state, { callerAgentId: "peer", childAgentId: "child" });
+    await until(() => state.delivery.prompts.length === 2);
+    expect(state.delivery.prompts[1]).toContain("Agent child (Child) is still working");
     state.delivery.acknowledgments[1]!.resolve("steered");
     await expect.poll(async () => (await state.store.list()).length).toBe(0);
   });
