@@ -471,8 +471,9 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
     (`host-operations/index.ts`), which fills `interrupt` for an identified caller. That call
     is routed before the local handler, so the local default never reaches it.
 
-  An archived recipient gets the same `interrupt`: `archived-out-of-band-declines` makes the
-  receiving daemon unarchive it and start its turn.
+  An archived recipient gets the same `interrupt`: the receiving daemon's out-of-band offer
+  declines an archived recipient (#10611, from v0.17.4), and dispatch unarchives it and starts
+  its turn.
 
 - **Why:** a correction that waits for the turn to end can arrive after the work it corrects,
   and a steered one can be ignored by a turn that goes on to finish its original task.
@@ -493,11 +494,11 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   sends no field, and an older one sends `steer`, which the daemon reads as `queue`. An
   unflagged send to a compacting Claude seat interrupts, and Claude's interrupt cancels the
   compaction; upstream's `steer` would have waited for it.
-- **Rollout requirement:** a connected destination daemon must carry
-  `archived-out-of-band-declines`. The `serverId` route sends an agent's omitted behaviour as an
-  explicit `interrupt`, and a destination without that patch (stock v0.17.3, issue
-  [#10598](https://github.com/getpaseo/paseo/issues/10598)) acknowledges an urgent send to an
-  archived agent and never starts its turn.
+- **Rollout requirement:** a connected destination daemon must be at v0.17.4 or later, the
+  first tag carrying #10611 (`git tag --contains 309a44c48`). The `serverId` route sends an
+  agent's omitted behaviour as an explicit `interrupt`, and an older destination (stock
+  v0.17.3, issue [#10598](https://github.com/getpaseo/paseo/issues/10598)) acknowledges an
+  urgent send to an archived agent and never starts its turn.
 - **Tests:** the agent-scoped rows of upstream's `send_agent_prompt` behaviour matrix in
   `mcp-server.test.ts` (the two omitted rows expect an applied interrupt and a new turn, with
   an explicit `queue` row for waiting); the same file's idle-guidance row and queued-dispatch
@@ -505,8 +506,10 @@ leaves no unhandled rejection when the runtime closes`. It drives a history-purp
   `host-operations/index.airoom.test.ts` (omitted, each explicit value, the source identities,
   and a person's omitted send unset); and the CLI's `send.airoom.test.ts` through
   `createCli().parseAsync` (omitted agent send, each explicit value, a person's omitted send
-  unset). An omitted send to an archived agent is the omitted row of
-  `archived-out-of-band-declines`' tables.
+  unset). An omitted send to an archived agent is the omitted row of `mcp-server.test.ts`'
+  `an agent-scoped $behavior send to an archived agent unarchives it and starts its turn`, and
+  the remote route's three rows are `hosts.e2e.test.ts`' `remote %s agent send to an archived
+  agent starts its turn`, both kept from the retired `archived-out-of-band-declines`.
   `daemon-e2e/agent-message-behaviors.test.ts` stays upstream's and checks the scope: a raw
   RPC omission still queues. `skills/paseo/SKILL.md`, `public-docs/cli.md`,
   `public-docs/orchestration-workflows.md`, `public-docs/mcp.md`, their `zh-CN` copies,
