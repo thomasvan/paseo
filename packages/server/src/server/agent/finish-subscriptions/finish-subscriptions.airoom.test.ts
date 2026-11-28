@@ -618,3 +618,120 @@ test.each([
     expect(second.delivery.prompts).toHaveLength(1);
   },
 );
+
+/** A root seat: an agent no other agent is the parent of. */
+class Seat extends Child {
+  constructor(
+    public id: string,
+    status: Status,
+  ) {
+    super(status);
+  }
+  override snapshot() {
+    return { ...super.snapshot(), id: this.id, title: this.id, labels: {} };
+  }
+}
+
+// Each root seat watches the other, as a send with notify on registers it. Neither child is the
+// caller's, so each watch delivers its first terminal and is removed: later turns send nothing,
+// and a fresh registration afterwards is the only source of the next notice.
+test("two root seats watching each other each hear the other's finish once, however many turns follow", async () => {
+  const directory = await home();
+  // Each seat is mid-turn on the other's prompt when the watch is registered.
+  const seats = { a: new Seat("a", "running"), b: new Seat("b", "running") };
+  const delivery = new Delivery();
+  const service = createFinishSubscriptions({
+    store: createJsonFinishSubscriptionStore(directory),
+    messages: () => delivery,
+    open: (record, signal) =>
+      openFinishObservation(
+        { use: async (_server, action) => action(seats[record.childAgentId as "a" | "b"]) },
+        record,
+        signal,
+      ),
+    callerIsActive: async () => true,
+    childArchived: async () => false,
+    serverId: "origin",
+    logger: createTestLogger(),
+    retryDelayMs: 1,
+  });
+  services.push(service);
+  await service.start();
+  await service.register({ callerAgentId: "b", childAgentId: "a" });
+  await service.register({ callerAgentId: "a", childAgentId: "b" });
+  await until(() => seats.a.handlers.size === 1 && seats.b.handlers.size === 1);
+  seats.a.finish("a answers b");
+  await until(() => delivery.prompts.length === 1);
+  expect(delivery.prompts[0]).toContain("Agent a (a) finished.");
+  delivery.ack(0);
+  seats.b.finish("b answers a");
+  await until(() => delivery.prompts.length === 2);
+  expect(delivery.prompts[1]).toContain("Agent b (b) finished.");
+  delivery.ack(1);
+  await expect.poll(async () => stored(directory)).toEqual([]);
+  for (let turn = 0; turn < 3; turn++) {
+    seats.a.start();
+    seats.a.finish(`a turn ${turn}`);
+    seats.b.start();
+    seats.b.finish(`b turn ${turn}`);
+  }
+  seats.a.start();
+  await service.register({ callerAgentId: "b", childAgentId: "a" });
+  await until(() => seats.a.handlers.size === 1 && seats.a.waiting.length === 1);
+  seats.a.finish("sentinel answer");
+  await until(() => delivery.prompts.length === 3);
+  expect(delivery.prompts[2]).toContain("sentinel answer");
+  delivery.ack(2);
+  await expect.poll(async () => stored(directory)).toEqual([]);
+  expect(delivery.prompts).toHaveLength(3);
+});
+
+// A cancel that lands while the watch's notice waits for the caller's dispatch leaves that notice
+// enqueued, writes no re-arm when it is acknowledged, and the child's later turns send nothing.
+test("a cancel while a notice awaits acknowledgement re-arms nothing and later finishes send nothing", async () => {
+  const d = await daemon(await home(), new Child("running"));
+  await firstFinish(d);
+  await d.service.cancel(intent);
+  expect(await stored(d.directory)).toEqual([]);
+  // The cancelled watch stops observing the child.
+  await until(() => d.child.handlers.size === 0);
+  d.delivery.ack(0);
+  d.child.start();
+  d.child.finish("after the cancel");
+  // A fresh watch on the next turn is the only source of the next notice.
+  d.child.start();
+  await d.service.register(intent);
+  await until(() => d.child.handlers.size === 1 && d.child.waiting.length === 1);
+  d.child.finish("sentinel answer");
+  await until(() => d.delivery.prompts.length === 2);
+  expect(d.delivery.prompts[1]).toContain("sentinel answer");
+  d.delivery.ack(1);
+  await storedAwaiting(d.directory);
+  expect(d.delivery.prompts).toHaveLength(2);
+});
+
+test("a cancel while a re-arm write is in flight leaves no record", async () => {
+  const release = deferred<void>();
+  const written = deferred<void>();
+  let blocked = false;
+  const d = await daemon(await home(), new Child("running"), (store) => ({
+    ...store,
+    async put(record) {
+      if (!record.awaitingTurn) return store.put(record);
+      blocked = true;
+      await release.promise;
+      await store.put(record);
+      written.resolve();
+    },
+  }));
+  await firstFinish(d);
+  d.delivery.ack(0);
+  await until(() => blocked);
+  const cancel = d.service.cancel(intent);
+  // Serialized, the cancel waits for the write and removes what it wrote.
+  await Promise.race([cancel, pause(200)]);
+  release.resolve();
+  await cancel;
+  await written.promise;
+  expect(await stored(d.directory)).toEqual([]);
+});

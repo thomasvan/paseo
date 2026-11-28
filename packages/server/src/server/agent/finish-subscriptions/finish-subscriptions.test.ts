@@ -484,11 +484,7 @@ test("remote finish intent protects its caller through registration, observation
   expect(s.service.hasPendingForCaller("parent")).toBe(true);
   s.delivery.acknowledgments[0]!.resolve("steered");
   await until(() => !s.service.hasPendingForCaller("parent"));
-  // AIROOM-PATCH(wakeup-each): a `was closed` of a child that is not archived re-arms (D-Q2): one
-  // record stays, awaiting a turn.
-  expect(await s.store.list()).toEqual([
-    expect.objectContaining({ ...intent, serverId: "remote", awaitingTurn: true }),
-  ]);
+  expect(await s.store.list()).toEqual([]);
   time = 62 * 60_000;
   expect((await cleanup.sweep()).collected).toEqual([]);
   time = 122 * 60_000;

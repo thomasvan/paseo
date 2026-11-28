@@ -47,6 +47,7 @@ function recordingFinishSubscriptions(): FinishSubscriptions {
   return {
     start: async () => {},
     hasPendingForCaller: () => false,
+    cancel: async () => {},
     close: async () => {},
     register: async (_input, pendingDispatch) => {
       mocks.steps.push(pendingDispatch ? "register pending" : "register");

@@ -2721,13 +2721,11 @@ test.each([false, true])(
       status: "idle",
       archivedAt: null,
     });
-    // AIROOM-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
-    // awaiting a turn, where upstream removes it.
     await expect
       .poll(async () =>
         JSON.parse(await readFile(join(a.paseoHome, "finish-subscriptions.json"), "utf8")),
       )
-      .toEqual([expect.objectContaining({ childAgentId: child.id, awaitingTurn: true })]);
+      .toEqual([]);
   },
 );
 

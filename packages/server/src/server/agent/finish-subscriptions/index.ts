@@ -69,8 +69,18 @@ export interface FinishSubscriptions {
     input: Omit<FinishSubscription, "id">,
     pendingDispatch?: boolean,
   ): Promise<FinishRegistration>;
+  /**
+   * AIROOM-PATCH(wakeup-each): ends every watch of this caller on this child, pending or armed,
+   * and removes its stored records. Serialized with registration, so it ends the registrations
+   * made before it and none made after. A notice already enqueued stays enqueued.
+   */
+  cancel(input: FinishSubscriptionPair): Promise<void>;
   close(): Promise<void>;
 }
+export type FinishSubscriptionPair = Pick<
+  FinishSubscription,
+  "callerAgentId" | "childAgentId" | "serverId"
+>;
 interface Watch {
   records: FinishSubscription[];
   controller: AbortController;
@@ -83,7 +93,7 @@ interface Watch {
   flushGate?(): Promise<void>;
   task?: Promise<void>;
 }
-function key(record: FinishSubscription): string {
+function key(record: FinishSubscriptionPair): string {
   return JSON.stringify([record.callerAgentId, record.childAgentId, record.serverId]);
 }
 /** AIROOM-PATCH(wakeup-each): the record as stored with the gate waiting or open. */
@@ -183,11 +193,19 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
   ): Promise<boolean> {
     if (!(await deps.callerIsActive(record.callerAgentId))) return true;
     if (!record.requireParentOwnership || !result?.final) return false;
+    return !owned(record, result);
+  }
+  /**
+   * AIROOM-PATCH(wakeup-each): the child's parent label names the caller on this server. Upstream's
+   * `suppressed` reads it for a create watch; a re-arm reads it for every watch.
+   */
+  function owned(record: FinishSubscription, result: WaitForFinishResult): boolean {
+    if (!result.final) return false;
     const parent = getParentAddressFromLabels(
       result.final.labels,
       record.serverId ?? deps.serverId,
     );
-    return parent?.agentId !== record.callerAgentId || parent.serverId !== deps.serverId;
+    return parent?.agentId === record.callerAgentId && parent.serverId === deps.serverId;
   }
   /** AIROOM-PATCH(wakeup-each) */
   async function childIsArchived(
@@ -358,8 +376,9 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
     /**
      * AIROOM-PATCH(wakeup-each): D-Q2. An archived child sends `was closed` and disarms. While the
      * gate waits, any other terminal of a child that is not archived is silent and the watch
-     * stays armed. Once open, `finished` and a mid-turn `was closed` re-arm; every other outcome
-     * keeps upstream's remove-and-stop.
+     * stays armed. Once open, `finished` and a mid-turn `was closed` re-arm when the child is the
+     * caller's own, read from the delivered terminal's labels; every other outcome, and every
+     * outcome of a child that is not the caller's, keeps upstream's remove-and-stop.
      */
     async function settle(result: FinishObservationResult): Promise<"done" | "next"> {
       const archived = await childIsArchived(record, result);
@@ -368,7 +387,8 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
         watch.awaiting = !(observation?.turnPending?.() ?? false);
         return "next";
       }
-      const rearms = !archived && (reason === "finished" || reason === "was closed");
+      const rearms =
+        !archived && (reason === "finished" || reason === "was closed") && owned(record, result);
       if (!acknowledged) acknowledged = await deliver(record, result, reason, permissions, signal);
       if (!acknowledged) return "next";
       if (!rearms) {
@@ -518,6 +538,21 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
         else registering.delete(input.callerAgentId);
       });
     },
+    // AIROOM-PATCH(wakeup-each): behind every registration made before it, so a pending one ends
+    // too and its later `accept` finds nothing to revive; an in-flight re-arm or gate write checks
+    // the abort inside `serialize` and writes nothing after this.
+    cancel: (input) =>
+      serialize(async () => {
+        if (closed) throw new Error("Finish subscriptions are closed");
+        const pair = key({
+          ...input,
+          serverId: input.serverId === deps.serverId ? undefined : input.serverId,
+        });
+        const group = watches.get(pair);
+        for (const watch of group ?? []) stop(watch, group!);
+        for (const record of await deps.store.list())
+          if (key(record) === pair) await deps.store.remove(record.id);
+      }),
     async close() {
       closed = true;
       await mutations;

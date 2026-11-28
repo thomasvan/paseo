@@ -11,6 +11,7 @@ import type { AgentMessageDelivery } from "./agent-messages/index.js";
 import { createTestAgentMessages } from "../test-utils/agent-messages.js";
 import { type PromptDispatchDisposition } from "./agent-prompt.js";
 import { parseAgentMessage, parseAgentMessages } from "./agent-messages/index.js";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -7631,15 +7632,7 @@ describe("local durable finish subscription MCP wiring", () => {
         await vi.waitFor(() => expect(prompts()).toContain("finished."));
         expect(prompts()).toContain("Permission work complete");
         expect(permissionIds()).toEqual(["first", "second"]);
-        // AIROOM-PATCH(wakeup-each): a finish re-arms the subscription in place: one record stays,
-        // awaiting a turn.
-        const gates: unknown[] = [];
-        await vi.waitFor(() => {
-          gates.length = 0;
-          for (const record of serverSubscriptionRecords.get(server)!.values())
-            gates.push(record.awaitingTurn);
-          expect(gates).toEqual([true]);
-        });
+        await vi.waitFor(() => expect(serverSubscriptionRecords.get(server)!.size).toBe(0));
       } finally {
         await mcp?.close();
         await removeAgentStateDir(manager, storage, workdir);
@@ -7685,6 +7678,146 @@ describe("local durable finish subscription MCP wiring", () => {
       await mcp?.close();
       await removeAgentStateDir(manager, storage, workdir);
     }
+  });
+});
+
+// AIROOM-PATCH(wakeup-each): a send with `notifyOnFinish: false` ends the caller's watch on that
+// child before its prompt is enqueued: every registration made before it, a pending one included,
+// and none made after. The last send with notify on is then the only source of a notice.
+describe("send_agent_prompt with notifyOnFinish false", () => {
+  const logger = createTestLogger();
+  const existingCwd = process.cwd();
+
+  async function fixture() {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-finish-cancel-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const parentClient = new HeldTurnAgentClient("claude", false);
+    const childClient = new HeldTurnAgentClient("codex", true);
+    const manager = new AgentManager({
+      clients: { claude: parentClient, codex: childClient },
+      registry: storage,
+      logger,
+    });
+    const parent = await manager.createAgent({ provider: "claude", cwd: existingCwd }, undefined, {
+      workspaceId: "wks_parent",
+    });
+    const child = await manager.createAgent(
+      { provider: "codex", cwd: existingCwd, title: "Peer" },
+      undefined,
+      { workspaceId: "wks_parent" },
+    );
+    const server = await createAgentMcpServer({
+      agentManager: manager,
+      agentStorage: storage,
+      callerAgentId: parent.id,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger,
+    });
+    const tool = registeredTool(server, "send_agent_prompt");
+    const session = () => childClient.sessions[0]!;
+    const notices = () =>
+      parentClient.sessions[0]!.prompts.flatMap((prompt) => parseAgentMessages(prompt) ?? [])
+        .map((message) => message.text)
+        .filter((text) => text.includes(`Agent ${child.id}`));
+    return {
+      records: () => serverSubscriptionRecords.get(server)!,
+      send: (input: Record<string, unknown>, awaitDispatch = true) =>
+        invokeToolWithParsedInput(tool, { agentId: child.id, ...input }, awaitDispatch),
+      /** Ends the child's turn for its `count`th prompt. */
+      finish: async (count: number, text: string) => {
+        await vi.waitFor(() => expect(session().prompts).toHaveLength(count));
+        await vi.waitFor(() => session().finishTurn(text));
+      },
+      /** A send with notify on to the idle child, then its finish: the last notice expected. */
+      sentinel: async () => {
+        await vi.waitFor(() => expect(manager.getAgent(child.id)?.lifecycle).toBe("idle"));
+        const count = session().prompts.length + 1;
+        await invokeToolWithParsedInput(tool, { agentId: child.id, prompt: "Sentinel" });
+        await vi.waitFor(() => expect(session().prompts).toHaveLength(count));
+        await vi.waitFor(() => session().finishTurn("sentinel done"));
+        await vi.waitFor(() => expect(notices().join("\n")).toContain("sentinel done"));
+      },
+      notices,
+      cleanup: () => removeAgentStateDir(manager, storage, workdir),
+    };
+  }
+
+  it("after a send with notify on, leaves no record, and the child's finish sends no notice", async () => {
+    const f = await fixture();
+    try {
+      await f.send({ prompt: "First" });
+      expect(f.records().size).toBe(1);
+      await f.send({ prompt: "Second", notifyOnFinish: false, activeTurnBehavior: "queue" }, false);
+      expect(f.records().size).toBe(0);
+      await f.finish(1, "first done");
+      await f.finish(2, "second done");
+      await f.sentinel();
+      expect(f.notices()).toHaveLength(1);
+      expect(f.notices()[0]).toContain("sentinel done");
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("ends a registration still pending dispatch, whose later dispatch revives nothing", async () => {
+    const f = await fixture();
+    try {
+      await f.send({ prompt: "Busy", notifyOnFinish: false });
+      await f.send({ prompt: "Queued", activeTurnBehavior: "queue" }, false);
+      expect(f.records().size).toBe(1);
+      await f.send({ prompt: "Cancel", notifyOnFinish: false, activeTurnBehavior: "queue" }, false);
+      expect(f.records().size).toBe(0);
+      // The two queued prompts dispatch together on the busy turn's end, and that turn ends
+      // unwatched.
+      await f.finish(1, "busy done");
+      await f.finish(2, "queued done");
+      expect(f.records().size).toBe(0);
+      await f.sentinel();
+      expect(f.notices()).toHaveLength(1);
+      expect(f.notices()[0]).toContain("sentinel done");
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("to another host, removes the caller's watch for that child on that host", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockImplementation((agentId: string) =>
+      agentId === "parent-agent"
+        ? ({ id: "parent-agent", config: {}, cwd: existingCwd, provider: "codex" } as ManagedAgent)
+        : null,
+    );
+    const client = {
+      fetchAgent: async (agentId: string) => ({ agent: { id: agentId, status: "running" } }),
+      sendMessage: async () => ({ deliveryStatus: "queued" as const, messageId: "remote" }),
+    } as unknown as DaemonClient;
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      callerAgentId: "parent-agent",
+      serverId: "origin",
+      hosts: () => ({
+        directory: async () => {
+          throw new Error("not used");
+        },
+        use: async (_serverId, action) => action(client),
+      }),
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger,
+    });
+    const tool = registeredTool(server, "send_agent_prompt");
+    const send = (input: Record<string, unknown>) =>
+      invokeToolWithParsedInput(
+        tool,
+        { serverId: "remote", agentId: "remote-child", prompt: "Work", ...input },
+        false,
+      );
+    await send({});
+    expect([...serverSubscriptionRecords.get(server)!.values()]).toEqual([
+      expect.objectContaining({ childAgentId: "remote-child", serverId: "remote" }),
+    ]);
+    await send({ notifyOnFinish: false });
+    expect(serverSubscriptionRecords.get(server)!.size).toBe(0);
   });
 });
 

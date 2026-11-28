@@ -683,13 +683,15 @@ function createToolCatalog(
     destination: string | undefined,
     input: Record<string, unknown>,
   ): Promise<FinishRegistration | undefined> {
-    if (
-      name !== "send_agent_prompt" ||
-      destination === options.serverId ||
-      !callerAgentId ||
-      input.notifyOnFinish === false
-    )
+    if (name !== "send_agent_prompt" || destination === options.serverId || !callerAgentId)
       return undefined;
+    // AIROOM-PATCH(wakeup-each): a send that asks for no notice ends this pair's watch first.
+    if (input.notifyOnFinish === false) {
+      await options
+        .finishSubscriptions?.()
+        .cancel({ childAgentId: input.agentId as string, callerAgentId, serverId: destination });
+      return undefined;
+    }
     return finishSubscriptions().register(
       { childAgentId: input.agentId as string, callerAgentId, serverId: destination },
       true,
@@ -2032,6 +2034,9 @@ function createToolCatalog(
                 .register({ childAgentId: agentId, callerAgentId }, true);
             })()
           : undefined;
+      // AIROOM-PATCH(wakeup-each): a send that asks for no notice ends this pair's watch first.
+      if (callerAgentId && !notifying)
+        await options.finishSubscriptions?.().cancel({ childAgentId: agentId, callerAgentId });
       function confirmDispatch(_disposition: PromptDispatchDisposition): void {
         notification?.accept();
       }
