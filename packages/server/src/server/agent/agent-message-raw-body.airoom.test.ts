@@ -19,15 +19,25 @@ function envelopeBody(envelope: string): string {
 }
 
 test.each([
-  { source: AGENT_SENDER },
+  { sender: "agent-message", source: AGENT_SENDER },
   {
+    sender: "agent-notification finished",
     source: {
       kind: "agent-notification" as const,
       agentId: "child-agent",
       event: "finished" as const,
     },
   },
-])("an agent envelope gives the receiving model the sender's bytes: $source.kind", ({ source }) => {
+  // #10864's still-working notice, `event="message"`, carries the child's interim reply.
+  {
+    sender: "agent-notification message",
+    source: {
+      kind: "agent-notification" as const,
+      agentId: "child-agent",
+      event: "message" as const,
+    },
+  },
+])("an agent envelope gives the receiving model the sender's bytes: $sender", ({ source }) => {
   const envelope = formatAgentMessage({ id: "m1", source, text: SHELL_COMMAND });
 
   expect(envelope).toContain(' body="raw">');
