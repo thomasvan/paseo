@@ -288,8 +288,6 @@ function buildAgentManagerSpies() {
     hasPendingPermissions: () => false,
     steerOrReplaceActiveTurn: async () => ({ status: "inactive" as const }),
     tryRunOutOfBand: vi.fn().mockReturnValue(false),
-    // AIROOM-PATCH(archived-out-of-band-declines): the queue offers through this.
-    offerOutOfBand: vi.fn().mockReturnValue(false),
     subscribe: vi.fn().mockReturnValue(() => {}),
     onStop: () => () => {},
     streamAgent: vi.fn(
@@ -4205,16 +4203,11 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
-  // AIROOM-PATCH(archived-out-of-band-declines): an urgent message to an archived agent is offered
-  // out of band first. That offer declines, so normal dispatch unarchives the agent and starts its
-  // turn; upstream's offer threw `Agent is archived` and the message never reached dispatch. The
-  // offer declines before it loads the agent, so no history runtime starts.
-  it.each([
-    // agent-send-interrupt fills `interrupt` for an agent's omitted behaviour.
-    { behavior: undefined, applied: "interrupt" },
-    { behavior: "interrupt", applied: "interrupt" },
-    { behavior: "steer", applied: "steer" },
-  ] as const)(
+  // AIROOM-PATCH(agent-send-interrupt): an agent's omitted behaviour is an urgent `interrupt`, which
+  // the queue offers out of band first. #10611's `findOutOfBandRecipient` declines an archived
+  // recipient before any load, so normal dispatch unarchives the agent and starts its turn, and no
+  // history runtime starts. Upstream's rows above cover the explicit `interrupt` and `steer`.
+  it.each([{ behavior: undefined, applied: "interrupt" }] as const)(
     "an agent-scoped $behavior send to an archived agent unarchives it and starts its turn",
     async ({ behavior, applied }) => {
       const workdir = await mkdtemp(join(tmpdir(), "mcp-send-archived-"));
@@ -4280,7 +4273,7 @@ describe("send_agent_prompt MCP tool", () => {
         expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
         expect(client.sessions.at(-1)!.prompts).toHaveLength(1);
         expect(JSON.stringify(client.sessions.at(-1)!.prompts[0])).toContain("Start work");
-        // The offer declines before any load: only the interactive resume ran.
+        // The decline comes before any load: only the interactive resume ran.
         expect(resume.mock.calls.map((call) => call[3]?.purpose)).toEqual(["interactive"]);
       } finally {
         vi.restoreAllMocks();
@@ -8707,10 +8700,9 @@ describe("finish notices for a child the caller created", () => {
   });
 });
 
-// AIROOM-PATCH(archived-out-of-band-declines): an agent's slash command to a closed agent that is
-// not archived. The queue's offer declines it with the agent still unloaded, and dispatch's own
-// out-of-band check runs it once the agent is loaded, so it ends as on upstream: run out of band,
-// no turn.
+// An agent's slash command to a closed agent that is not archived runs out of band once the agent
+// loads, and starts no turn. No upstream test covers a closed, non-archived recipient of an urgent
+// command (#10611's rows send to archived ones); see "Where the tests live" in PATCHES.md.
 describe("an agent's slash command to a closed agent", () => {
   const logger = createTestLogger();
 
@@ -8734,21 +8726,6 @@ describe("an agent's slash command to a closed agent", () => {
       await manager.closeAgent(child.id);
       expect(manager.getAgent(child.id)).toBeNull();
       expect((await storage.get(child.id))?.archivedAt).toBeFalsy();
-      const queueOffers: { accepted: boolean; loadedAfter: boolean }[] = [];
-      const queueOffer = manager.offerOutOfBand.bind(manager);
-      vi.spyOn(manager, "offerOutOfBand").mockImplementation(async (id, ...rest) => {
-        const accepted = await queueOffer(id, ...rest);
-        if (id === child.id)
-          queueOffers.push({ accepted, loadedAfter: manager.getAgent(child.id) !== null });
-        return accepted;
-      });
-      const offers: boolean[] = [];
-      const offer = manager.tryRunOutOfBand.bind(manager);
-      vi.spyOn(manager, "tryRunOutOfBand").mockImplementation(async (id, ...rest) => {
-        const accepted = await offer(id, ...rest);
-        if (id === child.id) offers.push(accepted);
-        return accepted;
-      });
       const server = await createAgentMcpServer({
         agentManager: manager,
         agentStorage: storage,
@@ -8788,9 +8765,6 @@ describe("an agent's slash command to a closed agent", () => {
         activeTurnBehavior: "interrupt",
       });
       expect(dispatch).toBe("dispatched");
-      // The queue's offer declined and loaded nothing; dispatch then accepted it, once loaded.
-      expect(queueOffers).toEqual([{ accepted: false, loadedAfter: false }]);
-      expect(offers).toEqual([true]);
       expect(session.compactRequests).toEqual([{ customInstructions: "keep the plan" }]);
       expect(session.prompts.filter((p) => p.message.includes("compact"))).toEqual([]);
       expect(manager.getAgent(child.id)?.lifecycle).toBe("idle");

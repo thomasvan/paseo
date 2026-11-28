@@ -771,9 +771,8 @@ export class VoiceAssistantWebSocketServer {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.agentMessages = createAgentMessageDelivery({
-      // AIROOM-PATCH(archived-out-of-band-declines): declines unloaded for an agent not live.
       tryRunOutOfBand: (request, onAccepted) =>
-        agentManager.offerOutOfBand(
+        agentManager.tryRunOutOfBand(
           request.recipientId,
           request.prompt,
           { clientMessageId: request.messageIds[0] },

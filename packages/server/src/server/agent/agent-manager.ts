@@ -3323,16 +3323,6 @@ export class AgentManager {
     };
   }
 
-  // AIROOM-PATCH(archived-out-of-band-declines): the message queue's offer declines, before any
-  // load, for an agent that is not live and interactive. Normal dispatch then loads it, unarchives
-  // an archived one, and runs a command out of band there; upstream's load here threw first.
-  offerOutOfBand(...args: Parameters<AgentManager["tryRunOutOfBand"]>): Promise<boolean> {
-    const live = this.agents.get(args[0]);
-    if (!live || this.historySessions.has(live.session) || this.collectingRuntimes.has(args[0]))
-      return Promise.resolve(false);
-    return this.tryRunOutOfBand(...args);
-  }
-
   /**
    * Try to run a prompt out-of-band — i.e. without allocating a foreground turn
    * and without canceling any active turn. Returns true when the session
