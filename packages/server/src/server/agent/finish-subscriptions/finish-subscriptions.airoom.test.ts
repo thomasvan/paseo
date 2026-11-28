@@ -19,6 +19,7 @@ import {
   type FinishSubscription,
   type FinishSubscriptionStore,
   type FinishSubscriptions,
+  type PendingWork,
 } from "./index.js";
 
 type Status = "idle" | "running" | "initializing" | "closed" | "error";
@@ -163,12 +164,18 @@ async function daemon(
   retryDelayMs = 1,
 ) {
   const delivery = new Delivery();
-  const state = { callerActive: true, childArchived: false };
+  const state = {
+    callerActive: true,
+    childArchived: false,
+    /** The child's pending work, as the local host reports it at each turn end. */
+    work: [] as PendingWork[],
+  };
   const service = createFinishSubscriptions({
     store: wrap(createJsonFinishSubscriptionStore(directory)),
     messages: () => delivery,
     open: (record, signal) =>
       openFinishObservation({ use: async (_server, action) => action(child) }, record, signal),
+    pendingWork: () => state.work,
     callerIsActive: async () => state.callerActive,
     childArchived: async () => state.childArchived,
     serverId: "origin",
@@ -649,6 +656,7 @@ test("two root seats watching each other each hear the other's finish once, howe
         record,
         signal,
       ),
+    pendingWork: () => [],
     callerIsActive: async () => true,
     childArchived: async () => false,
     serverId: "origin",
@@ -779,3 +787,4 @@ test.each([
     expect(d.delivery.prompts[heard]).toContain("sentinel answer");
   },
 );
+

@@ -2,6 +2,8 @@ import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-clien
 
 export type FinishObservationResult = WaitForFinishResult & {
   reason?: "was canceled" | "host unreachable" | "host removed";
+  /** The idle child's background work changed without a turn ending. */
+  workChanged?: true;
   /** AIROOM-PATCH(wakeup-each): a turn was observed after the previous terminal and before this one. */
   turnObserved?: boolean;
 };
@@ -14,7 +16,9 @@ export function createObservationBuffer(signal: AbortSignal) {
   let initialPending = true;
   // AIROOM-PATCH(wakeup-each): a first-in-first-out queue, not one slot, so a finish that lands
   // while an earlier one awaits acknowledgement is kept. Each entry carries the turn count at
-  // its push, which places every observed turn between two terminals.
+  // its push, which places every observed turn between two terminals. A work change is no turn
+  // end: it never takes a turn's stamp, a real terminal replaces a queued one, and it is dropped
+  // behind a queued real terminal, whose decision reads the work as it is then.
   const terminals: Array<{ result: FinishObservationResult; turns: number }> = [];
   let terminalSeen = false;
   let turns = 0;
@@ -35,9 +39,16 @@ export function createObservationBuffer(signal: AbortSignal) {
         if (!delivered.has(request.id)) permissions.set(request.id, result);
     } else {
       // AIROOM-PATCH(wakeup-each)
-      terminals.push({ result: { ...result, turnObserved: turns > pushedTurns }, turns });
-      pushedTurns = turns;
-      terminalSeen = true;
+      const last = terminals.at(-1);
+      if (last?.result.workChanged) terminals.pop();
+      if (result.workChanged) {
+        if (!terminals.length)
+          terminals.push({ result: { ...result, turnObserved: false }, turns: pushedTurns });
+      } else {
+        terminals.push({ result: { ...result, turnObserved: turns > pushedTurns }, turns });
+        pushedTurns = turns;
+        terminalSeen = true;
+      }
     }
     wake?.();
   }
