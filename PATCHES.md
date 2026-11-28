@@ -216,7 +216,11 @@ assertions and fork rows, and a sync runs it by hand too. See `Sync procedure`.
     never takes a turn's stamp, so a turn's own finish behind it still reads as following that
     turn; a real terminal replaces a queued work change; and a work change behind a queued real
     terminal is dropped, as upstream's one slot drops it, because that terminal's decision reads
-    the pending work as it is then.
+    the pending work as it is then. The initial snapshot's terminal is pushed only while no real
+    terminal has streamed (`terminalSeen`), where upstream pushes it whenever its slot is empty:
+    a consumed streamed terminal then leaves the slot empty, and a re-armed watch would deliver
+    the baseline as a second finish, while a queued work change, which upstream lets block the
+    baseline, is no turn end.
   - **Pending work** (rule 6 of the v0.18 adaptation): a watch that waits for a turn and holds
     no outcome (`watch.awaiting`) is left out of `delegations`, so it counts neither in
     `hasPendingForCaller` (a re-armed watch does not pin its caller, or through the family walk
